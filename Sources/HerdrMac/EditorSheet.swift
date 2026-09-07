@@ -1,0 +1,125 @@
+import SwiftUI
+
+struct EditorSheet: View {
+    let sheet: AppSheet
+    @ObservedObject var store: SessionStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var label = ""
+    @State private var cwd = NSHomeDirectory()
+    @State private var kind = "claude"
+    @State private var socket = ""
+    @State private var executable = ""
+    @FocusState private var fieldFocused: Bool
+    private var title: String {
+        switch sheet {
+        case .space: return "Create a space"
+        case .tab: return "Create a tab"
+        case .rename(let target): return "Rename \(target.singular)"
+        case .agent: return "Start an agent"
+        case .settings: return "Settings"
+        }
+    }
+    private var valid: Bool {
+        switch sheet {
+        case .settings: return !socket.trimmingCharacters(in: .whitespaces).isEmpty && !executable.isEmpty
+        case .space: return !label.trimmingCharacters(in: .whitespaces).isEmpty && FileManager.default.fileExists(atPath: (cwd as NSString).expandingTildeInPath)
+        case .agent: return label.range(of: #"^[a-z][a-z0-9_-]{0,31}$"#, options: .regularExpression) != nil
+        default: return !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text(title).font(.system(size: 21, weight: .semibold))
+            switch sheet {
+            case .settings: settingsFields
+            case .agent: agentFields
+            default:
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Name").font(.caption).foregroundStyle(.secondary)
+                    TextField("Name", text: $label).textFieldStyle(.roundedBorder).focused($fieldFocused)
+                }
+                if case .space = sheet {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("Project folder").font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            TextField("Folder", text: $cwd).textFieldStyle(.roundedBorder)
+                            Button("Choose…") { chooseFolder() }
+                        }
+                        Text("Each space keeps its own tabs, terminals, and agents.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            HStack {
+                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(buttonTitle) { submit() }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).disabled(!valid)
+            }
+        }
+        .padding(28).frame(width: 480)
+        .onAppear {
+            if case .rename(let target) = sheet { label = target.label }
+            if case .tab = sheet { label = "Terminal" }
+            if case .agent = sheet { label = "agent-\(Int.random(in: 100...999))" }
+            cwd = store.currentPane?.directory.isEmpty == false ? store.currentPane!.directory : NSHomeDirectory()
+            socket = store.socketPath; executable = store.executable
+            fieldFocused = true
+        }
+    }
+    private var buttonTitle: String {
+        switch sheet { case .settings: return "Save and reconnect"; case .rename: return "Rename"; case .agent: return "Start agent"; default: return "Create" }
+    }
+    private var agentFields: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("The agent starts in this pane’s existing shell and working directory.").font(.callout).foregroundStyle(.secondary)
+            Picker("Agent", selection: $kind) {
+                Text("Claude Code").tag("claude")
+                Text("Codex").tag("codex")
+                Text("OpenCode").tag("opencode")
+                Text("Gemini CLI").tag("gemini")
+                Text("Pi").tag("pi")
+                Text("Cursor").tag("cursor")
+            }
+            TextField("Agent name", text: $label).textFieldStyle(.roundedBorder).focused($fieldFocused)
+            Text("Use a unique lowercase name. Install the selected agent CLI first; the pane must be at an available shell prompt.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private var settingsFields: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Group {
+                Text("HERDR CONNECTION").font(.system(size: 10, weight: .semibold)).tracking(1.2).foregroundStyle(.secondary)
+                TextField("herdr executable", text: $executable).textFieldStyle(.roundedBorder)
+                TextField("API socket path", text: $socket).textFieldStyle(.roundedBorder)
+                Text("Named sessions: ~/.config/herdr/sessions/<name>/herdr.sock").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+            }
+            Divider()
+            Picker("Appearance", selection: $store.appearance) {
+                Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark")
+            }.pickerStyle(.segmented)
+            HStack {
+                Text("Terminal text").font(.callout)
+                Slider(value: $store.fontSize, in: 10...22, step: 1)
+                Text("\(Int(store.fontSize)) pt").font(.system(size: 11, design: .monospaced)).frame(width: 38)
+            }
+            Text("Quitting detaches the client. Your herdr sessions continue running.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url { cwd = url.path; if label.isEmpty { label = url.lastPathComponent } }
+    }
+    private func submit() {
+        let name = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch sheet {
+        case .space: store.createSpace(label: name, cwd: (cwd as NSString).expandingTildeInPath)
+        case .tab: store.createTab(label: name)
+        case .rename(let target): store.rename(target, label: name)
+        case .agent(let paneID): store.startAgent(paneID: paneID, kind: kind, name: name)
+        case .settings:
+            store.socketPath = socket.trimmingCharacters(in: .whitespacesAndNewlines)
+            store.executable = executable.trimmingCharacters(in: .whitespacesAndNewlines)
+            store.reconnect()
+        }
+        dismiss()
+    }
+}
