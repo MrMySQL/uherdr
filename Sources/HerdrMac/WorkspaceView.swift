@@ -218,15 +218,22 @@ struct SidebarView: View {
                         Text("AGENT ACTIVITY").font(.system(size: 9, weight: .semibold)).tracking(1.5).foregroundStyle(.tertiary).padding(.horizontal, 10).padding(.bottom, 6)
                         ForEach(store.agents.filter { search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search) }) { agent in
                             Button { store.revealAgent(agent) } label: {
-                                HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: "sparkles").foregroundStyle(mint).frame(width: 20)
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Text(agent.displayName).font(.system(size: 12, weight: .semibold))
-                                        Text(store.workspaces.first { $0.id == agent.workspaceID }?.label ?? "Space").font(.caption).foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "sparkles").foregroundStyle(mint)
+                                        Text(agent.displayName).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                        Spacer(minLength: 0)
+                                    }.frame(height: 18)
+                                    HStack(spacing: 6) {
+                                        Text(store.workspaces.first { $0.id == agent.workspaceID }?.label ?? "Space")
+                                            .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                        Spacer(minLength: 0)
                                         StatusBadge(status: agent.agentStatus)
+                                            .fixedSize()
                                     }
-                                    Spacer(minLength: 0)
-                                }.padding(11).frame(maxWidth: .infinity, alignment: .leading)
+                                }.padding(.horizontal, 8).padding(.vertical, 6)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
                                     .background(store.selectedPane == agent.paneID ? mint.opacity(0.12) : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
                             }.buttonStyle(.plain)
                         }
