@@ -28,7 +28,7 @@ The app uses your default local herdr socket. Set an explicit socket and the her
 - Sidebar: switch between Spaces and Agents; select a space or jump to an agent. Command-1 through Command-9 select the first nine spaces in sidebar order. Hold Command to reveal shortcut badges on the space cards. Search filtering does not renumber shortcuts.
 - Tabs: create with Command-T and rename the current tab with Command-Shift-R. Control-1 through Control-9 select the first nine tabs in the current space. Control-Tab selects the next tab, and Control-Shift-Tab selects the previous tab, wrapping at either end. Command-Shift-] and Command-Shift-[ also cycle tabs. Rename and close from the context menu.
 - Panes: Command-D splits side by side; Command-Shift-D stacks panes; Command-Return toggles zoom for the focused pane. Drag the divider to resize. Use the pane header to focus, zoom, rename, start an agent, or close.
-- Terminal: normal keyboard input, native text selection, Command-C/Command-V, and mouse-wheel scrolling.
+- Terminal: normal keyboard input, Shift-Enter for a new line in Claude Code and Codex, native text selection, Command-C/Command-V, and mouse-wheel scrolling.
 - Command-N creates a space. Command-comma opens Settings.
 
 Closing a pane, tab, or space terminates its processes and therefore asks for confirmation. Terminal ownership conflicts are shown on the affected pane; Take Control explicitly replaces the previous writable controller.
@@ -52,6 +52,7 @@ The build script creates an ad-hoc-signed app for local use. Distribution to oth
 ```sh
 swift run HerdrCoreTests  # Protocol, layout, selection, and error handling
 ./scripts/test-hotkeys.sh # Command-key hint lifecycle
+bash scripts/test-terminal-keyboard.sh # Terminal Enter and Shift-Enter encoding
 ./scripts/test.sh         # Also starts and cleans up an isolated herdr server
 ```
 

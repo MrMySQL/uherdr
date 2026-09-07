@@ -187,9 +187,14 @@ struct TerminalSurface: NSViewRepresentable {
             view.window?.makeFirstResponder(view)
         }
         func installEvents() {
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown]) { [weak self] event in
-                guard let self, let view = self.view, event.window === view.window,
-                      view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return event }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .keyDown]) { [weak self] event in
+                guard let self, let view = self.view, event.window === view.window else { return event }
+                if event.type == .keyDown {
+                    guard view.window?.firstResponder === view,
+                          let terminal = view as? HerdrTerminalView else { return event }
+                    return terminal.handleShiftEnter(event) ? nil : event
+                }
+                guard view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return event }
                 if event.type == .leftMouseDown { self.store?.focusPane(self.paneID); return event }
                 self.scrollRemainder += Double(event.scrollingDeltaY) / (event.hasPreciseScrollingDeltas ? 15 : 1)
                 let whole = self.scrollRemainder.rounded(.towardZero)
@@ -220,6 +225,20 @@ struct TerminalSurface: NSViewRepresentable {
 @MainActor
 final class HerdrTerminalView: TerminalView {
     var onAttach: (() -> Void)?
+
+    func handleShiftEnter(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.shift, .control, .option, .command])
+        if (event.keyCode == 36 || event.keyCode == 76), modifiers == .shift,
+           !hasMarkedText(), getTerminal().keyboardEnhancementFlags.isEmpty {
+            // Legacy terminal input collapses Shift-Enter to Return. Preserve the
+            // modifier with CSI-u so Claude Code and Codex can insert a newline.
+            selectNone()
+            send(txt: "\u{1b}[13;2u")
+            return true
+        }
+        return false
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil { DispatchQueue.main.async { [weak self] in self?.onAttach?() } }
