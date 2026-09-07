@@ -33,3 +33,11 @@ Third-party agent credentials and real provider calls were not exercised. Agents
 - Expanded saved tilde socket paths on initial launch.
 - Removed pipe readability handlers on EOF.
 - Rebuilt app bundles from clean output so read-only dependency resources do not break repeated packaging.
+
+## Workspace shortcuts
+
+- Added native Command-1 through Command-9 menu shortcuts using the complete workspace order.
+- Workspace cards reveal their matching shortcut while Command is held; hints keep their numbering during sidebar search.
+- `scripts/test-hotkeys.sh` passed for holding/releasing Command, combined modifiers, app deactivation, inactive state, and observer cleanup.
+- Verified Command-1, Command-2, and Command-3 in the packaged app against three disposable workspaces, including terminal focus and a filtered sidebar.
+- The release build and existing 10 core tests passed. The hold-state transitions were checked directly against the AppKit observer; UI automation verified the workspace-switching actions.

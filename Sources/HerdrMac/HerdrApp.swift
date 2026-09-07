@@ -30,6 +30,15 @@ struct HerdrApp: App {
                 }.keyboardShortcut("w", modifiers: [.command, .shift]).disabled(store.selectedPane == nil)
             }
             CommandMenu("Navigate") {
+                ForEach(Array(store.workspaces.prefix(9).enumerated()), id: \.element.id) { index, space in
+                    Button("Switch to \(space.label)") {
+                        store.sidebarMode = "spaces"
+                        store.selectSpace(space)
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                    .disabled(!store.connected || store.sheet != nil || store.pendingClose != nil)
+                }
+                Divider()
                 Button("Next Tab") { moveTab(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
                 Button("Previous Tab") { moveTab(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
                 Divider()

@@ -161,6 +161,7 @@ struct WorkspaceView: View {
 struct SidebarView: View {
     @ObservedObject var store: SessionStore
     @State private var search = ""
+    @StateObject private var commandKey = CommandKeyMonitor()
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 9) {
@@ -217,6 +218,8 @@ struct SidebarView: View {
                     .font(.system(size: 12)).padding(15)
             }.buttonStyle(.plain).disabled(!store.connected || store.busy)
         }
+        .onAppear { commandKey.start() }
+        .onDisappear { commandKey.stop() }
     }
 
     private func spaceRow(_ space: Workspace) -> some View {
@@ -229,6 +232,16 @@ struct SidebarView: View {
                     Text(space.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
                     Spacer(minLength: 0)
                     if space.agentStatus == .working || space.agentStatus == .blocked || space.agentStatus == .done { StatusDot(status: space.agentStatus) }
+                    if let index = store.workspaces.firstIndex(where: { $0.id == space.id }), index < 9 {
+                        Text("⌘\(index + 1)")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(mint)
+                            .frame(width: 30, height: 18)
+                            .background(mint.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                            .opacity(commandKey.isHeld ? 1 : 0)
+                            .accessibilityLabel("Command \(index + 1)")
+                            .accessibilityHidden(!commandKey.isHeld)
+                    }
                 }
                 HStack(spacing: 6) {
                     Text("\(space.tabCount) tabs")
