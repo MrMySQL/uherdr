@@ -23,12 +23,20 @@ struct HerdrApp: App {
                 Button("Split Side by Side") { store.split(.right) }.keyboardShortcut("d").disabled(store.selectedPane == nil || !store.connected)
                 Button("Split Top and Bottom") { store.split(.down) }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(store.selectedPane == nil || !store.connected)
                 Divider()
-                Button("Zoom Pane") { if let id = store.selectedPane { store.zoom(id) } }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(store.selectedPane == nil)
+                Button("Zoom Pane") { if let id = store.selectedPane { store.zoom(id) } }
+                    .keyboardShortcut(KeyEquivalent(AppHotkeys.togglePaneZoom.key), modifiers: AppHotkeys.togglePaneZoom.eventModifiers)
+                    .disabled(!canUseCurrentPane)
                 Button("Start Agent…") { if let id = store.selectedPane { store.sheet = .agent(id) } }.disabled(store.selectedPane == nil)
                 Divider()
                 Button("Close Pane…") {
                     if let pane = store.currentPane { store.pendingClose = ResourceTarget(kind: "pane", id: pane.id, label: pane.displayTitle) }
                 }.keyboardShortcut("w", modifiers: [.command, .shift]).disabled(store.selectedPane == nil)
+            }
+            CommandMenu("Tab") {
+                Button("Rename Current Tab…") {
+                    if let tab = store.currentTab { store.sheet = .rename(ResourceTarget(kind: "tab", id: tab.id, label: tab.label)) }
+                }.keyboardShortcut(KeyEquivalent(AppHotkeys.renameCurrentTab.key), modifiers: AppHotkeys.renameCurrentTab.eventModifiers)
+                    .disabled(!canUseCurrentTab)
             }
             CommandMenu("Navigate") {
                 ForEach(Array(store.workspaces.prefix(9).enumerated()), id: \.element.id) { index, space in
@@ -63,6 +71,12 @@ struct HerdrApp: App {
             }
         }
     }
+    private var canUseCurrentPane: Bool {
+        store.connected && store.selectedPane != nil && store.sheet == nil && store.pendingClose == nil
+    }
+    private var canUseCurrentTab: Bool {
+        store.connected && store.currentTab != nil && store.sheet == nil && store.pendingClose == nil
+    }
     private var canNavigateTabs: Bool {
         store.connected && !store.visibleTabs.isEmpty && store.sheet == nil && store.pendingClose == nil && store.operationError == nil
     }
@@ -77,6 +91,15 @@ struct HerdrApp: App {
         guard !panes.isEmpty else { return }
         let index = panes.firstIndex { $0.id == store.selectedPane } ?? 0
         store.focusPane(panes[(index + 1) % panes.count].id)
+    }
+}
+
+private extension AppHotkey {
+    var eventModifiers: EventModifiers {
+        var result: EventModifiers = []
+        if modifiers.contains(.command) { result.insert(.command) }
+        if modifiers.contains(.shift) { result.insert(.shift) }
+        return result
     }
 }
 
