@@ -10,6 +10,7 @@ struct HerdrApp: App {
             WorkspaceView(store: store)
         }
         .defaultSize(width: 1280, height: 820)
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Space…") { store.sheet = .space }.keyboardShortcut("n").disabled(!store.connected)

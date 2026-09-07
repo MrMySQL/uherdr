@@ -10,6 +10,7 @@ struct WorkspaceView: View {
         NavigationSplitView(columnVisibility: $sidebarVisibility) {
             SidebarView(store: store)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 360)
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             VStack(spacing: 0) {
                 if store.connected {
@@ -43,19 +44,34 @@ struct WorkspaceView: View {
             .background(Color(nsColor: .windowBackgroundColor))
             .navigationTitle(store.currentSpace?.label ?? "Herdr")
             .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    if store.busy { ProgressView().controlSize(.small) }
-                    Button { store.sheet = .agent(store.selectedPane ?? "") } label: { Label("Start agent", systemImage: "sparkles") }
-                        .disabled(store.selectedPane == nil || !store.connected || store.busy)
+                ToolbarItem(placement: .primaryAction) {
+                    HStack(spacing: 2) {
+                        if store.busy { ProgressView().controlSize(.mini) }
+                        compactToolbarButton("Start agent", systemImage: "sparkles") {
+                            store.sheet = .agent(store.selectedPane ?? "")
+                        }
                         .help("Start a coding agent in the selected pane")
-                    Divider()
-                    Button { store.split(.right) } label: { Label("Split side by side", systemImage: "rectangle.split.2x1") }
-                        .disabled(store.selectedPane == nil || !store.connected || store.busy)
+                        compactToolbarButton("Split side by side", systemImage: "rectangle.split.2x1") {
+                            store.split(.right)
+                        }
                         .help("Split side by side (⌘D)")
-                    Button { store.split(.down) } label: { Label("Split top and bottom", systemImage: "rectangle.split.1x2") }
-                        .disabled(store.selectedPane == nil || !store.connected || store.busy)
+                        compactToolbarButton("Split top and bottom", systemImage: "rectangle.split.1x2") {
+                            store.split(.down)
+                        }
                         .help("Split top and bottom (⇧⌘D)")
+                    }
+                    .disabled(store.selectedPane == nil || !store.connected || store.busy)
                 }
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                compactToolbarButton("Toggle sidebar", systemImage: "sidebar.left") {
+                    withAnimation {
+                        sidebarVisibility = sidebarVisibility == .detailOnly ? .all : .detailOnly
+                    }
+                }
+                .help("Show or hide sidebar")
             }
         }
         .tint(mint)
@@ -79,21 +95,32 @@ struct WorkspaceView: View {
         .task { store.start() }
     }
 
+    private func compactToolbarButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11))
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
     private var tabStrip: some View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
                     ForEach(store.visibleTabs) { tab in
                         Button { store.selectTab(tab) } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "terminal").font(.system(size: 11))
+                            HStack(spacing: 6) {
+                                Image(systemName: "terminal").font(.system(size: 10))
                                 Text(tab.label).lineLimit(1)
                                 if tab.agentStatus != .unknown && tab.agentStatus != .idle { StatusDot(status: tab.agentStatus) }
                                 Text("\(tab.paneCount)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                             }
-                            .font(.system(size: 12, weight: store.selectedTab == tab.id ? .semibold : .regular))
-                            .padding(.horizontal, 13).padding(.vertical, 9)
-                            .background(store.selectedTab == tab.id ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+                            .font(.system(size: 11, weight: store.selectedTab == tab.id ? .semibold : .regular))
+                            .padding(.horizontal, 10).frame(height: 26)
+                            .background(store.selectedTab == tab.id ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
                             .overlay(alignment: .bottom) { if store.selectedTab == tab.id { Capsule().fill(mint).frame(height: 2).padding(.horizontal, 12) } }
                         }
                         .buttonStyle(.plain)
@@ -102,13 +129,13 @@ struct WorkspaceView: View {
                             Button("Close tab…", role: .destructive) { store.pendingClose = ResourceTarget(kind: "tab", id: tab.id, label: tab.label) }
                         }
                     }
-                    Button { store.sheet = .tab } label: { Image(systemName: "plus").frame(width: 30, height: 30) }
+                    Button { store.sheet = .tab } label: { Image(systemName: "plus").font(.system(size: 11)).frame(width: 26, height: 26) }
                         .buttonStyle(.plain).help("New tab (⌘T)").disabled(store.busy)
-                }.padding(6)
+                }.padding(.horizontal, 6).padding(.vertical, 3)
             }
             Text("\(store.visiblePanes.count) \(store.visiblePanes.count == 1 ? "pane" : "panes")")
                 .font(.system(size: 11)).foregroundStyle(.tertiary).padding(.horizontal, 14)
-        }
+        }.frame(height: 32)
     }
 
     private var statusBar: some View {
@@ -215,7 +242,9 @@ struct SidebarView: View {
             Divider()
             Button { store.sheet = .space } label: {
                 HStack { Image(systemName: "plus"); Text("New space"); Spacer(); Text("⌘N").foregroundStyle(.tertiary) }
-                    .font(.system(size: 12)).padding(15)
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 12).frame(height: 28)
+                    .contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(!store.connected || store.busy)
         }
         .onAppear { commandKey.start() }
@@ -226,8 +255,8 @@ struct SidebarView: View {
         let selected = store.selectedSpace == space.id
         let spaceAgents = store.agents.filter { $0.workspaceID == space.id }
         return Button { store.selectSpace(space) } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
                     Image(systemName: selected ? "folder.fill" : "folder").foregroundStyle(selected ? mint : .secondary)
                     Text(space.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
                     Spacer(minLength: 0)
@@ -251,7 +280,8 @@ struct SidebarView: View {
                     if !spaceAgents.isEmpty { Image(systemName: "sparkles"); Text("\(spaceAgents.count)") }
                 }.font(.system(size: 10)).foregroundStyle(.secondary)
             }
-            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(selected ? mint.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
             .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? mint.opacity(0.25) : Color.clear) }
         }
