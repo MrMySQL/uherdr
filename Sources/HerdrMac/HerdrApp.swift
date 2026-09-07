@@ -39,14 +39,31 @@ struct HerdrApp: App {
                     .disabled(!store.connected || store.sheet != nil || store.pendingClose != nil)
                 }
                 Divider()
+                ForEach(Array(store.visibleTabs.prefix(9).enumerated()), id: \.element.id) { index, tab in
+                    Button("Switch to Tab \(index + 1): \(tab.label)") { store.selectTab(tab) }
+                        .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .control)
+                        .disabled(!canNavigateTabs)
+                }
+                Divider()
+                Button("Next Tab") { moveTab(1) }
+                    .keyboardShortcut(.tab, modifiers: .control)
+                    .disabled(!canNavigateTabs)
+                Button("Previous Tab") { moveTab(-1) }
+                    .keyboardShortcut(.tab, modifiers: [.control, .shift])
+                    .disabled(!canNavigateTabs)
                 Button("Next Tab") { moveTab(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
+                    .disabled(!canNavigateTabs)
                 Button("Previous Tab") { moveTab(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
+                    .disabled(!canNavigateTabs)
                 Divider()
                 Button("Next Pane") { movePane() }.keyboardShortcut("`", modifiers: [.control])
                 Button("Show Agents") { store.sidebarMode = "agents" }.keyboardShortcut("a", modifiers: [.command, .shift])
                 Button("Show Spaces") { store.sidebarMode = "spaces" }.keyboardShortcut("s", modifiers: [.command, .shift])
             }
         }
+    }
+    private var canNavigateTabs: Bool {
+        store.connected && !store.visibleTabs.isEmpty && store.sheet == nil && store.pendingClose == nil && store.operationError == nil
     }
     private func moveTab(_ offset: Int) {
         let tabs = store.visibleTabs
