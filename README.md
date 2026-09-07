@@ -2,6 +2,8 @@
 
 A native SwiftUI + AppKit client for the herdr runtime. Spaces map to herdr workspaces; each space has tabs with nested, resizable terminal panes. The Agents view shows detected agents and their status.
 
+![Herdr for macOS showing spaces, tabs, and two terminal panes running coding agents](docs/images/uherdr.png)
+
 ## Requirements
 
 - macOS 14 or newer.
@@ -11,6 +13,8 @@ A native SwiftUI + AppKit client for the herdr runtime. Spaces map to herdr work
 ## Build and run
 
 ```sh
+git clone https://github.com/MrMySQL/uherdr.git
+cd uherdr
 ./scripts/build-app.sh
 open dist/Herdr.app
 ```
@@ -54,3 +58,11 @@ swift run HerdrCoreTests  # Protocol, layout, selection, and error handling
 The standalone Swift test runner works with Command Line Tools; XCTest is not required. Live tests cover workspace/tab/pane lifecycle, nested right/down splits, divider ratios, shell input/output, agent status fixtures, terminal ANSI streaming, resize, scrolling, and detach preservation. They accept only an explicitly disposable socket under `/tmp`.
 
 Topology and agent status refresh every 1.25 seconds and after actions; terminal output streams continuously. Only visible terminals acquire writable controllers. Remote SSH connections and Kitty graphics overlays are not included in this version.
+
+## Contributing
+
+Issues and pull requests are welcome. Include your macOS, Swift, and herdr versions when reporting a bug, along with steps to reproduce it. For code changes, run the verification commands above and describe any manual UI checks in your pull request.
+
+## License
+
+[MIT](LICENSE). Third-party dependencies retain their own licenses.
