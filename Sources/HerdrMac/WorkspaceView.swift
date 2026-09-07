@@ -120,6 +120,7 @@ struct WorkspaceView: View {
                             }
                             .font(.system(size: 11, weight: store.selectedTab == tab.id ? .semibold : .regular))
                             .padding(.horizontal, 10).frame(height: 26)
+                            .contentShape(Rectangle())
                             .background(store.selectedTab == tab.id ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
                             .overlay(alignment: .bottom) { if store.selectedTab == tab.id { Capsule().fill(mint).frame(height: 2).padding(.horizontal, 12) } }
                         }
@@ -282,6 +283,7 @@ struct SidebarView: View {
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .background(selected ? mint.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
             .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? mint.opacity(0.25) : Color.clear) }
         }
