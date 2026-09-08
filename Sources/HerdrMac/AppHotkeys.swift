@@ -12,15 +12,18 @@ struct AppHotkey: Hashable {
 
 enum AppHotkeyAction: Equatable {
     case renameCurrentTab
+    case renameCurrentWorkspace
     case togglePaneZoom
 }
 
 enum AppHotkeys {
-    static let renameCurrentTab = AppHotkey(key: "r", modifiers: [.command, .shift])
+    static let renameCurrentTab = AppHotkey(key: "r", modifiers: .command)
+    static let renameCurrentWorkspace = AppHotkey(key: "r", modifiers: [.command, .shift])
     static let togglePaneZoom = AppHotkey(key: "\r", modifiers: .command)
 
     private static let bindings: [AppHotkey: AppHotkeyAction] = [
         renameCurrentTab: .renameCurrentTab,
+        renameCurrentWorkspace: .renameCurrentWorkspace,
         togglePaneZoom: .togglePaneZoom,
     ]
 
