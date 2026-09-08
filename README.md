@@ -19,7 +19,7 @@ cd uherdr
 open dist/Herdr.app
 ```
 
-Open `Package.swift` in Xcode to develop the app, or use `swift build` and `swift run HerdrCoreTests` from a terminal. Swift Package Manager downloads the pinned SwiftTerm dependency on the first build.
+Open `Package.swift` in Xcode to develop the app, or use `swift build` and `swift run HerdrCoreTests` from a terminal. Swift Package Manager downloads GhosttyTerminal's checksummed native XCFramework and MSDisplayLink on the first build. The pinned Swift wrapper is vendored in this repository.
 
 The app uses your default local herdr socket. Set an explicit socket and the herdr executable in Settings to connect to a named session. Start herdr first, or use the app's Start Server button. Quit detaches the client; shells and agents remain owned by herdr.
 
@@ -35,7 +35,9 @@ Closing a pane, tab, or space terminates its processes and therefore asks for co
 
 ## Architecture
 
-`HerdrCore` contains Codable protocol models, bounded JSON line parsing, and local Unix socket requests. `HerdrMac` contains the SwiftUI shell, session store, and SwiftTerm AppKit bridge. Each visible terminal uses `herdr terminal session control` with JSON messages on standard input and base64 ANSI frames on standard output. The CLI handles herdr's binary protocol negotiation. Shells are never spawned as substitutes for server panes.
+`HerdrCore` contains Codable protocol models, bounded JSON line parsing, and local Unix socket requests. `HerdrMac` contains the SwiftUI shell, session store, and GhosttyTerminal AppKit bridge. Each visible terminal uses `herdr terminal session control` with JSON messages on standard input and base64 ANSI frames on standard output. Ghostty's host-managed in-memory backend renders these frames and encodes keyboard/mouse input; Herdr owns the shell and scrollback. The CLI handles herdr's binary protocol negotiation. Shells are never spawned as substitutes for server panes.
+
+GhosttyTerminal is the sole terminal backend in this prototype. The Swift wrapper is vendored from `1.5.20260906` with a small addition exposing the native replay API; see [vendor provenance and patch notes](Vendor/GhosttyTerminal/README.md). The community binary carries host-managed I/O patches over Ghostty. Native font/theme changes update the existing surface. Terminal-query replies generated while rendering server frames are suppressed at their source, because Herdr handles those queries upstream. Mouse-wheel events continue to use Herdr's scroll protocol.
 
 Connection state is refreshed from authoritative snapshots. UI actions use explicit server resource IDs. Window geometry and connection/appearance preferences are persisted locally.
 
@@ -45,14 +47,14 @@ The build script creates an ad-hoc-signed app for local use. Distribution to oth
 
 ## Dependencies
 
-[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), MIT license, supplies the native terminal emulator. [Herdr](https://github.com/herdrdev/herdr) supplies the runtime and terminal/control protocols.
+[GhosttyTerminal / libghostty-spm](https://github.com/Lakr233/libghostty-spm) supplies the Swift/AppKit integration around [Ghostty](https://github.com/ghostty-org/ghostty), with [MSDisplayLink](https://github.com/Lakr233/MSDisplayLink) for display scheduling. These dependencies are MIT licensed; their notices are included in the built app. [Herdr](https://github.com/herdrdev/herdr) supplies the runtime and terminal/control protocols.
 
 ## Verification
 
 ```sh
 swift run HerdrCoreTests  # Protocol, layout, selection, and error handling
 ./scripts/test-hotkeys.sh # Command-key hint lifecycle
-bash scripts/test-terminal-keyboard.sh # Terminal Enter and Shift-Enter encoding
+bash scripts/test-terminal-keyboard.sh # Real Ghostty rendering, keyboard, paste, resize, and teardown
 ./scripts/test.sh         # Also starts and cleans up an isolated herdr server
 ```
 

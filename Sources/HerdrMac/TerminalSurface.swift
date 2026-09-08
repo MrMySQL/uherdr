@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import SwiftTerm
+import GhosttyTerminal
 import HerdrCore
 
 @MainActor
@@ -128,115 +128,184 @@ struct TerminalSurface: NSViewRepresentable {
     @ObservedObject var store: SessionStore
     let dark: Bool
 
-    func makeCoordinator() -> Coordinator { Coordinator(controller: controller, store: store, paneID: pane.id) }
-    func makeNSView(context: Context) -> TerminalView {
+    func makeCoordinator() -> Coordinator {
+        Coordinator(controller: controller, store: store, paneID: pane.id)
+    }
+
+    func makeNSView(context: Context) -> HerdrTerminalView {
+        let coordinator = context.coordinator
         let view = HerdrTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 360))
-        view.font = .monospacedSystemFont(ofSize: store.fontSize, weight: .regular)
-        view.nativeBackgroundColor = background
-        view.nativeForegroundColor = foreground
-        view.terminalDelegate = context.coordinator
-        view.optionAsMetaKey = true
+        coordinator.view = view
+        view.delegate = coordinator
+        // Set the host backend before assigning a controller: the default backend
+        // launches a shell, whereas Herdr must retain ownership of every pane.
+        view.configuration = TerminalSurfaceOptions(backend: .inMemory(coordinator.bridge.session))
+        view.controller = coordinator.engine
+        view.onAttach = { [weak coordinator] in coordinator?.focusIfSelected() }
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
-        context.coordinator.view = view
-        view.onAttach = { [weak coordinator = context.coordinator] in coordinator?.focusIfSelected() }
-        controller.receive = { [weak view, weak coordinator = context.coordinator] data in
-            coordinator?.feeding = true
-            view?.feed(byteArray: Array(data)[...])
-            coordinator?.feeding = false
-        }
-        let term = view.getTerminal()
-        controller.start(executable: store.executable, socket: store.socketPath, pane: pane.id, cols: term.cols, rows: term.rows)
-        context.coordinator.installEvents()
+        controller.receive = { [weak bridge = coordinator.bridge] in bridge?.receive($0) }
+        coordinator.updateAppearance(fontSize: store.fontSize, dark: dark)
+        coordinator.installEvents()
         return view
     }
-    private var background: NSColor { dark ? NSColor(red: 0.055, green: 0.065, blue: 0.075, alpha: 1) : NSColor(red: 0.98, green: 0.98, blue: 0.97, alpha: 1) }
-    private var foreground: NSColor { dark ? NSColor(red: 0.86, green: 0.89, blue: 0.87, alpha: 1) : NSColor(red: 0.13, green: 0.16, blue: 0.15, alpha: 1) }
-    func updateNSView(_ view: TerminalView, context: Context) {
-        if view.font.pointSize != store.fontSize { view.font = .monospacedSystemFont(ofSize: store.fontSize, weight: .regular) }
-        view.nativeBackgroundColor = background
-        view.nativeForegroundColor = foreground
+
+    func updateNSView(_ view: HerdrTerminalView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.updateAppearance(fontSize: store.fontSize, dark: dark)
         let shouldFocus = store.selectedPane == pane.id
-        if shouldFocus && !context.coordinator.wasSelected && store.sheet == nil && store.pendingClose == nil {
-            DispatchQueue.main.async { [weak view] in
-                guard let view else { return }
-                view.window?.makeFirstResponder(view)
-            }
+        if shouldFocus && !coordinator.wasSelected {
+            DispatchQueue.main.async { [weak coordinator] in coordinator?.focusIfSelected() }
         }
-        context.coordinator.wasSelected = shouldFocus
+        coordinator.wasSelected = shouldFocus
     }
-    static func dismantleNSView(_ view: TerminalView, coordinator: Coordinator) {
+
+    static func dismantleNSView(_ view: HerdrTerminalView, coordinator: Coordinator) {
         coordinator.removeEvents()
         coordinator.controller.receive = nil
         coordinator.controller.stop()
+        coordinator.stopped = true
+        view.onAttach = nil
+        view.delegate = nil
+        view.setSurfaceVisible(false)
+        view.controller = nil
     }
 
-    @MainActor final class Coordinator: NSObject, @preconcurrency TerminalViewDelegate {
+    @MainActor final class Coordinator: NSObject, TerminalSurfaceLifecycleDelegate,
+        TerminalSurfaceFocusDelegate, TerminalSurfaceBellDelegate,
+        TerminalSurfaceOpenURLDelegate, TerminalSurfaceClipboardConfirmationDelegate {
         let controller: TerminalController
         weak var store: SessionStore?
         let paneID: String
-        weak var view: TerminalView?
-        var monitor: Any?
-        var feeding = false
-        var wasSelected = false
-        var scrollRemainder: Double = 0
-        init(controller: TerminalController, store: SessionStore, paneID: String) {
-            self.controller = controller; self.store = store; self.paneID = paneID
-        }
-        func focusIfSelected() {
-            guard let view, let store, store.selectedPane == paneID, store.sheet == nil, store.pendingClose == nil else { return }
-            view.window?.makeFirstResponder(view)
-        }
-        func installEvents() {
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .keyDown]) { [weak self] event in
-                guard let self, let view = self.view, event.window === view.window else { return event }
-                if event.type == .keyDown {
-                    guard view.window?.firstResponder === view,
-                          let terminal = view as? HerdrTerminalView else { return event }
-                    return terminal.handleShiftEnter(event) ? nil : event
+        weak var view: HerdrTerminalView?
+        let engine = GhosttyTerminal.TerminalController(
+            configuration: HerdrTerminalView.baseConfiguration,
+            theme: TerminalTheme(
+                light: TerminalConfiguration.alabaster.background("#fafaf7").foreground("#212926"),
+                dark: TerminalConfiguration().background("#0e1113").foreground("#dbe3de")
+            )
+        )
+        lazy var bridge = GhosttyStreamBridge(
+            input: { [weak self] data in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.stopped else { return }
+                    self.controller.send(data)
                 }
-                guard view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return event }
-                if event.type == .leftMouseDown { self.store?.focusPane(self.paneID); return event }
+            },
+            resize: { [weak self] viewport in
+                DispatchQueue.main.async { [weak self] in
+                    self?.resize(cols: Int(viewport.columns), rows: Int(viewport.rows))
+                }
+            }
+        )
+        var monitor: Any?
+        var wasSelected = false
+        var started = false
+        var stopped = false
+        var scrollRemainder: Double = 0
+        private var fontSize: Double?
+        private var dark: Bool?
+
+        init(controller: TerminalController, store: SessionStore, paneID: String) {
+            self.controller = controller
+            self.store = store
+            self.paneID = paneID
+        }
+
+        func updateAppearance(fontSize: Double, dark: Bool) {
+            if self.fontSize != fontSize {
+                engine.setTerminalConfiguration(TerminalConfiguration().fontSize(Float(fontSize)))
+                self.fontSize = fontSize
+            }
+            if self.dark != dark {
+                view?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                engine.setColorScheme(dark ? .dark : .light)
+                self.dark = dark
+            }
+        }
+
+        private func resize(cols: Int, rows: Int) {
+            guard !stopped, cols > 1, rows > 1, let store else { return }
+            if !started {
+                started = true
+                controller.start(executable: store.executable, socket: store.socketPath,
+                                 pane: paneID, cols: cols, rows: rows)
+            } else {
+                controller.resize(cols: cols, rows: rows)
+            }
+        }
+
+        func focusIfSelected() {
+            guard !stopped, let view, let store, store.selectedPane == paneID,
+                  store.sheet == nil, store.pendingClose == nil else { return }
+            view.acquireProgrammaticFocus()
+        }
+
+        func installEvents() {
+            // Herdr owns the scrollback represented by its ANSI frames. Keep
+            // wheel scrolling on the server, while Ghostty handles keys/mouse.
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown]) { [weak self] event in
+                guard let self, !self.stopped, let view = self.view,
+                      event.window === view.window,
+                      view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return event }
+                if event.type == .leftMouseDown {
+                    self.store?.focusPane(self.paneID)
+                    return event
+                }
                 self.scrollRemainder += Double(event.scrollingDeltaY) / (event.hasPreciseScrollingDeltas ? 15 : 1)
                 let whole = self.scrollRemainder.rounded(.towardZero)
-                if abs(whole) >= 1 { self.controller.scroll(delta: whole); self.scrollRemainder -= whole }
+                if abs(whole) >= 1 {
+                    self.controller.scroll(delta: whole)
+                    self.scrollRemainder -= whole
+                }
                 return nil
             }
         }
-        func removeEvents() { if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil }
-        func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) { controller.resize(cols: newCols, rows: newRows) }
-        func send(source: TerminalView, data: ArraySlice<UInt8>) { if !feeding { controller.send(Data(data)) } }
-        func setTerminalTitle(source: TerminalView, title: String) {}
-        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-        func scrolled(source: TerminalView, position: Double) {}
-        func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
-        func bell(source: TerminalView) { NSSound.beep() }
-        func clipboardCopy(source: TerminalView, content: Data) {
-            guard let text = String(data: content, encoding: .utf8) else { return }
-            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
+
+        func removeEvents() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
         }
-        func clipboardRead(source: TerminalView) -> Data? { nil }
-        func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-            guard let url = URL(string: link), ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else { return }
+
+        func terminalDidAttachSurface(_ surface: GhosttyTerminal.TerminalSurface) {
+            DispatchQueue.main.async { [weak self] in self?.focusIfSelected() }
+        }
+        func terminalDidDetachSurface() {}
+        func terminalDidChangeFocus(_ focused: Bool) {
+            if focused { store?.focusPane(paneID) }
+        }
+        func terminalDidRingBell() { NSSound.beep() }
+        func terminalDidRequestOpenURL(_ text: String, kind: TerminalOpenURLKind) {
+            guard let url = URL(string: text),
+                  ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else { return }
             NSWorkspace.shared.open(url)
+        }
+        func terminalDidRequestClipboardConfirmation(_ request: TerminalClipboardConfirmationRequest) {
+            // Preserve explicit user paste/copy while denying programmatic reads.
+            request.respond(allow: request.kind != .osc52Read)
         }
     }
 }
 
 @MainActor
-final class HerdrTerminalView: TerminalView {
+final class HerdrTerminalView: AppTerminalView {
     var onAttach: (() -> Void)?
 
-    func handleShiftEnter(_ event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection([.shift, .control, .option, .command])
-        if (event.keyCode == 36 || event.keyCode == 76), modifiers == .shift,
-           !hasMarkedText(), getTerminal().keyboardEnhancementFlags.isEmpty {
-            // Legacy terminal input collapses Shift-Enter to Return. Preserve the
-            // modifier with CSI-u so Claude Code and Codex can insert a newline.
-            selectNone()
-            send(txt: "\u{1b}[13;2u")
-            return true
-        }
-        return false
+    static var baseConfiguration: TerminalConfiguration {
+        TerminalConfiguration.default
+            .fontFamily("Menlo")
+            // TUI input fields can supply dark backgrounds even in light mode.
+            // Keep text readable against each cell's actual background.
+            .minimumContrast(4.5)
+            .windowPaddingX(0).windowPaddingY(0)
+            .custom("macos-option-as-alt", "true")
+            .custom("clipboard-read", "deny")
+            .custom("clipboard-write", "allow")
+            .custom("keybind", "clear")
+            .custom("keybind", "super+c=copy_to_clipboard")
+            .custom("keybind", "super+v=paste_from_clipboard")
+            .custom("keybind", "super+a=select_all")
+            .custom("keybind", "shift+enter=text:\\x1b[13;2u")
+            .custom("keybind", "shift+numpad_enter=text:\\x1b[13;2u")
     }
 
     override func viewDidMoveToWindow() {

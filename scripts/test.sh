@@ -24,5 +24,5 @@ done
 if [ ! -S "$TEST_SOCKET" ]; then cat "$TEST_ROOT/server.log" >&2; exit 1; fi
 swift run HerdrCoreTests --live "$TEST_SOCKET"
 ./scripts/test-hotkeys.sh
-bash scripts/test-terminal-keyboard.sh
+bash scripts/test-terminal-keyboard.sh --live "$TEST_SOCKET" "$HERDR_TEST_BIN"
 python3 scripts/test-terminal-stream.py "$TEST_SOCKET" "$HERDR_TEST_BIN"

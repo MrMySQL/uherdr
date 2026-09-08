@@ -41,3 +41,20 @@ Third-party agent credentials and real provider calls were not exercised. Agents
 - `scripts/test-hotkeys.sh` passed for holding/releasing Command, combined modifiers, app deactivation, inactive state, and observer cleanup.
 - Verified Command-1, Command-2, and Command-3 in the packaged app against three disposable workspaces, including terminal focus and a filtered sidebar.
 - The release build and existing 10 core tests passed. The hold-state transitions were checked directly against the AppKit observer; UI automation verified the workspace-switching actions.
+# Ghostty prototype — 2026-09-08
+
+SwiftTerm has been replaced with the pinned GhosttyTerminal wrapper. The full
+`bash scripts/test.sh` suite passed, including real AppKit Ghostty surfaces and
+a disposable Herdr server through the production SwiftUI bridge:
+
+- Unicode output, grid resize, Enter/Shift-Enter/keypad Enter, Option-Enter,
+  negotiated keyboard mode, bracketed paste, and focus isolation.
+- Server-frame query suppression, font changes preserving the surface,
+  shell input/output, reconnect, and teardown preserving the server pane.
+- Resource resolution from a macOS app bundle without using the build path.
+
+`bash scripts/build-app.sh` builds the release app; its ad-hoc signature passes
+`codesign --verify --deep --strict dist/Herdr.app`.
+These checks use shell fixtures, not an interactive Claude Code session.
+The vendored wrapper's provenance and two local compatibility changes are
+documented in `Vendor/GhosttyTerminal/README.md`.

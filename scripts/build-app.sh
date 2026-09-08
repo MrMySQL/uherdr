@@ -7,9 +7,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 BIN_DIR="$(swift build -c release --show-bin-path)"
 cp "$BIN_DIR/Herdr" "$APP/Contents/MacOS/Herdr"
-for resource in "$BIN_DIR"/*.bundle; do
-    [ -d "$resource" ] && cp -R "$resource" "$APP/Contents/Resources/"
-done
+cp -R "$BIN_DIR/GhosttyKit_GhosttyTerminal.bundle" "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -27,9 +25,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 PLIST
-if [ -f .build/checkouts/SwiftTerm/LICENSE ]; then
-    cp .build/checkouts/SwiftTerm/LICENSE "$APP/Contents/Resources/SwiftTerm-LICENSE"
-fi
+cp Vendor/GhosttyTerminal/LICENSE "$APP/Contents/Resources/GhosttyTerminal-LICENSE"
+cp .build/checkouts/MSDisplayLink/LICENSE "$APP/Contents/Resources/MSDisplayLink-LICENSE"
+cp docs/licenses/Ghostty-LICENSE "$APP/Contents/Resources/Ghostty-LICENSE"
 swift scripts/make-icon.swift .build/Herdr.iconset
 iconutil -c icns .build/Herdr.iconset -o "$APP/Contents/Resources/Herdr.icns"
 codesign --force --deep --sign - "$APP"
