@@ -34,6 +34,12 @@ struct HerdrApp: App {
                     if let pane = store.currentPane { store.pendingClose = ResourceTarget(kind: "pane", id: pane.id, label: pane.displayTitle) }
                 }.keyboardShortcut("w", modifiers: [.command, .shift]).disabled(!canUseCurrentPane)
             }
+            CommandMenu("Space") {
+                Button("Rename Current Space…") {
+                    if let space = store.currentSpace { store.sheet = .rename(ResourceTarget(kind: "workspace", id: space.id, label: space.label)) }
+                }.keyboardShortcut(KeyEquivalent(AppHotkeys.renameCurrentWorkspace.key), modifiers: AppHotkeys.renameCurrentWorkspace.eventModifiers)
+                    .disabled(!canUseCurrentSpace)
+            }
             CommandMenu("Tab") {
                 Button("Rename Current Tab…") {
                     if let tab = store.currentTab { store.sheet = .rename(ResourceTarget(kind: "tab", id: tab.id, label: tab.label)) }
@@ -81,6 +87,9 @@ struct HerdrApp: App {
     }
     private var canUseCurrentTab: Bool {
         store.connected && store.currentTab != nil && canInteract
+    }
+    private var canUseCurrentSpace: Bool {
+        store.connected && store.currentSpace != nil && canInteract
     }
     private var canNavigateTabs: Bool {
         store.connected && !store.visibleTabs.isEmpty && canInteract
