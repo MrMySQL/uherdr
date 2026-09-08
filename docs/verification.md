@@ -2,13 +2,15 @@
 
 ## Multi-device SSH — 2026-09-08
 
-Implemented on `feat/multi-device-ssh`, forked from `main` at `f9130ce` in a separate worktree. This feature uses the committed SwiftTerm baseline; concurrent terminal-renderer changes in the original checkout were not incorporated or modified.
+Implemented on `feat/multi-device-ssh`, forked from `main` at `f9130ce` in a separate worktree. Merged `main` at `f00f25e` to preserve the Ghostty renderer, live-terminal zoom behavior, and worktree-based agent launches alongside multi-device connections.
 
 - `bash scripts/test.sh` passed, including the original protocol, live API, command hints, hotkeys, keyboard encoding, and terminal stream checks.
 - New profile/process tests passed: saved-device round trips, migration of old local preferences and selection, SSH input validation, bounded diagnostics, timeout, cancellation, independent tunnels, reuse, private socket permissions, cleanup, host-key/forwarding errors, and reconnect.
 - `bash scripts/test-devices.sh` passed against two disposable real herdr servers with overlapping workspace IDs. Verified action isolation, per-device selection, persistence, disconnect/reconnect, remote directory handling, terminal frames/input/resize/scroll through forwarded sockets, and preservation of remote workspaces after detach.
 - Independent code review identified a queued-action/disconnect race. A regression test reproduced it before the fix and passed afterward: obsolete queued actions do not dispatch or leave the device busy.
 - Integration testing exposed the separate binary terminal socket. Remote connections now forward both the API socket and its derived `-client.sock` companion.
+- After merging main, the full suite passed with Ghostty. The production native bridge test verifies terminal input/output through the device's forwarded terminal socket; a fixture usage marker detects accidental bypass of the tunnel. Repeated nested zoom preserves the same terminal surfaces and their content.
+- Agent worktree tests use isolated device profiles and injected clients. A new queued-launch/disconnect test verifies that a cancelled connection cannot create a worktree or leave the session busy.
 - `bash scripts/build-app.sh`, `codesign --verify --deep --strict dist/Herdr.app`, `plutil -lint dist/Herdr.app/Contents/Info.plist`, and `git diff --check` passed.
 
 The SSH integration harness is explicitly a controlled process stand-in with real Unix-stream forwarding. Authentication and a connection to a physical remote Mac were not exercised. Native multi-device visual interaction was not manually inspected; the app was compiled and its underlying connection/routing behavior exercised. Existing native-window checks below describe the original local-client version.
@@ -54,3 +56,33 @@ Third-party agent credentials and real provider calls were not exercised. Agents
 - `scripts/test-hotkeys.sh` passed for holding/releasing Command, combined modifiers, app deactivation, inactive state, and observer cleanup.
 - Verified Command-1, Command-2, and Command-3 in the packaged app against three disposable workspaces, including terminal focus and a filtered sidebar.
 - The release build and existing 10 core tests passed. The hold-state transitions were checked directly against the AppKit observer; UI automation verified the workspace-switching actions.
+# Ghostty prototype — 2026-09-08
+
+SwiftTerm has been replaced with the pinned GhosttyTerminal wrapper. The full
+`bash scripts/test.sh` suite passed, including real AppKit Ghostty surfaces and
+a disposable Herdr server through the production SwiftUI bridge:
+
+- Unicode output, grid resize, Enter/Shift-Enter/keypad Enter, Option-Enter,
+  negotiated keyboard mode, bracketed paste, and focus isolation.
+- Server-frame query suppression, font changes preserving the surface,
+  shell input/output, reconnect, and teardown preserving the server pane.
+- Resource resolution from a macOS app bundle without using the build path.
+
+`bash scripts/build-app.sh` builds the release app; its ad-hoc signature passes
+`codesign --verify --deep --strict dist/Herdr.app`.
+These checks use shell fixtures, not an interactive Claude Code session.
+The vendored wrapper's provenance and two local compatibility changes are
+documented in `Vendor/GhosttyTerminal/README.md`.
+
+## Pane zoom — 2026-09-08
+
+Zoom and restore keep the split tree and its terminal surfaces mounted, changing
+pane geometry and visibility without reconnecting the streams. Hidden terminals
+stop rendering and ignore focus and mouse/scroll events.
+
+`bash scripts/test.sh` passed, including a live regression that repeats zoom and
+restore on a bottom-right nested pane, checks that all three native terminal views
+survive, and verifies restored split sizes, retained output, and subsequent input.
+The regression reproduced terminal recreation before the fix.
+`bash scripts/build-app.sh`, the strict code-signature check, and the app plist
+check passed for the updated `dist/Herdr.app`.

@@ -67,4 +67,7 @@ while True:
     readable, _, _ = select.select(listeners, [], [])
     for listener in readable:
         client, _ = listener.accept()
+        # Lets the native-view integration test prove it used the forwarded socket.
+        with open(listener.getsockname() + ".used", "w"):
+            pass
         threading.Thread(target=forward, args=(client, listeners[listener]), daemon=True).start()

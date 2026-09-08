@@ -33,13 +33,13 @@ final class SessionStore: ObservableObject {
     private let defaults: UserDefaults
     private let tunnel: SSHTunnel
     private var retryAfter = Date.distantPast
-    private var client: HerdrClient
+    private var client: any HerdrRequesting
     private var pollTask: Task<Void, Never>?
     private var refreshingGeneration: UUID?
     private var serverProcess: Process?
     private var selectionRevision = 0
 
-    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil) {
+    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil) {
         self.profile = profile
         self.defaults = defaults
         self.tunnel = tunnel ?? SSHTunnel()
@@ -47,7 +47,7 @@ final class SessionStore: ObservableObject {
         effectiveSocketPath = socket
         appearance = defaults.string(forKey: "appearance") ?? "system"
         fontSize = defaults.object(forKey: "fontSize") as? Double ?? 13
-        client = HerdrClient(socketPath: (socket as NSString).expandingTildeInPath)
+        self.client = client ?? HerdrClient(socketPath: socket)
         selectedSpace = defaults.string(forKey: "selectedSpace:\(profile.id.uuidString)")
         selectedTab = defaults.string(forKey: "selectedTab:\(profile.id.uuidString)")
     }
@@ -117,7 +117,7 @@ final class SessionStore: ObservableObject {
                 guard generation == connectionGeneration, !Task.isCancelled else { return }
                 remoteHome = tunnel.remoteHome
             } else { path = (socketPath as NSString).expandingTildeInPath }
-            if effectiveSocketPath != path || client.socketPath != path {
+            if effectiveSocketPath != path {
                 effectiveSocketPath = path
                 client = HerdrClient(socketPath: path)
             }
@@ -255,7 +255,44 @@ final class SessionStore: ObservableObject {
         perform("\(target.kind).close", params: ["\(target.kind)_id": .string(target.id)])
     }
     func startAgent(paneID: String, kind: String, name: String) {
-        perform("agent.start", params: ["pane_id": .string(paneID), "kind": .string(kind), "name": .string(name), "timeout_ms": .number(30000)])
+        guard connected, !suspended, !busy else { return }
+        guard let pane = panes.first(where: { $0.id == paneID }), pane.directory.hasPrefix("/") else {
+            operationError = "Could not find the pane’s project folder. Refresh and try again."
+            return
+        }
+        let activeClient = client
+        let generation = connectionGeneration
+        let directory = pane.directory
+        busy = true
+        operationError = nil
+        Task {
+            defer { if generation == connectionGeneration { busy = false } }
+            guard generation == connectionGeneration, connected, !suspended else { return }
+            var createdWorktree = false
+            do {
+                let created = try await activeClient.request("worktree.create", params: [
+                    "cwd": .string(directory), "label": .string(name), "focus": .bool(true)
+                ], timeout: 60)
+                guard generation == connectionGeneration else { return }
+                createdWorktree = true
+                let rootPane = try created["root_pane"].decode(Pane.self)
+                selectionRevision += 1
+                selectedSpace = rootPane.workspaceID
+                selectedTab = rootPane.tabID
+                selectedPane = rootPane.id
+                await refresh()
+                guard generation == connectionGeneration, connected, !suspended else { return }
+                _ = try await activeClient.request("agent.start", params: [
+                    "pane_id": .string(rootPane.id), "kind": .string(kind),
+                    "name": .string(name), "timeout_ms": .number(30000)
+                ], timeout: 40)
+            } catch {
+                guard generation == connectionGeneration else { return }
+                operationError = error.localizedDescription
+            }
+            guard generation == connectionGeneration else { return }
+            if createdWorktree { await refresh() }
+        }
     }
 
     func startServer() {

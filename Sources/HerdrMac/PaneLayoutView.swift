@@ -6,6 +6,7 @@ struct SplitTree: View {
     let tabID: String
     let path: [Bool]
     @ObservedObject var store: SessionStore
+    var zoomedPaneID: String? = nil
     var body: some View {
         content
     }
@@ -13,14 +14,21 @@ struct SplitTree: View {
         switch node {
         case .pane(let id):
             if let pane = store.panes.first(where: { $0.id == id }) {
-                return AnyView(PaneCard(pane: pane, store: store, zoomed: false).id(pane.terminalID))
+                return AnyView(PaneCard(pane: pane, store: store, zoomed: zoomedPaneID == id,
+                                        visible: zoomedPaneID == nil || zoomedPaneID == id).id(pane.terminalID))
             }
             return AnyView(Color.clear)
         case .split(let direction, let ratio, let first, let second):
-            return AnyView(ResizablePair(direction: direction, ratio: ratio, onCommit: { store.setRatio(tabID: tabID, path: path, ratio: $0) }) {
-                SplitTree(node: first, tabID: tabID, path: path + [false], store: store)
+            let expandedFirst: Bool? = zoomedPaneID.flatMap { id in
+                if first.paneIDs.contains(id) { return true }
+                if second.paneIDs.contains(id) { return false }
+                return nil
+            }
+            return AnyView(ResizablePair(direction: direction, ratio: ratio, expandedFirst: expandedFirst,
+                                        onCommit: { store.setRatio(tabID: tabID, path: path, ratio: $0) }) {
+                SplitTree(node: first, tabID: tabID, path: path + [false], store: store, zoomedPaneID: zoomedPaneID)
             } second: {
-                SplitTree(node: second, tabID: tabID, path: path + [true], store: store)
+                SplitTree(node: second, tabID: tabID, path: path + [true], store: store, zoomedPaneID: zoomedPaneID)
             })
         }
     }
@@ -29,6 +37,7 @@ struct SplitTree: View {
 struct ResizablePair<First: View, Second: View>: View {
     let direction: SplitDirection
     let ratio: Double
+    var expandedFirst: Bool? = nil
     let onCommit: (Double) -> Void
     @ViewBuilder let first: () -> First
     @ViewBuilder let second: () -> Second
@@ -40,18 +49,33 @@ struct ResizablePair<First: View, Second: View>: View {
             let size = direction == .right ? geometry.size.width : geometry.size.height
             let available = max(0, size - 8)
             let fraction = draggedRatio ?? ratio
-            if direction == .right {
-                HStack(spacing: 0) {
-                    first().frame(width: max(0, available * fraction))
-                    divider(available: available).frame(width: 8)
-                    second().frame(width: max(0, available * (1 - fraction)))
-                }
-            } else {
-                VStack(spacing: 0) {
-                    first().frame(height: max(0, available * fraction))
-                    divider(available: available).frame(height: 8)
-                    second().frame(height: max(0, available * (1 - fraction)))
-                }
+            let horizontal = direction == .right
+            let firstSize = expandedFirst == true ? size : max(0, available * fraction)
+            let secondSize = expandedFirst == false ? size : max(0, available * (1 - fraction))
+            let secondOffset = expandedFirst == false ? 0 : available * fraction + 8
+            // Keep both branches mounted: replacing them on zoom reconnects every
+            // terminal stream and rebuilds its renderer. Only geometry changes.
+            ZStack(alignment: .topLeading) {
+                first()
+                    .frame(width: horizontal ? firstSize : geometry.size.width,
+                           height: horizontal ? geometry.size.height : firstSize)
+                    .opacity(expandedFirst == false ? 0 : 1)
+                    .allowsHitTesting(expandedFirst != false)
+                    .accessibilityHidden(expandedFirst == false)
+                second()
+                    .frame(width: horizontal ? secondSize : geometry.size.width,
+                           height: horizontal ? geometry.size.height : secondSize)
+                    .offset(x: horizontal ? secondOffset : 0, y: horizontal ? 0 : secondOffset)
+                    .opacity(expandedFirst == true ? 0 : 1)
+                    .allowsHitTesting(expandedFirst != true)
+                    .accessibilityHidden(expandedFirst == true)
+                divider(available: available)
+                    .frame(width: horizontal ? 8 : geometry.size.width,
+                           height: horizontal ? geometry.size.height : 8)
+                    .offset(x: horizontal ? available * fraction : 0, y: horizontal ? 0 : available * fraction)
+                    .opacity(expandedFirst == nil ? 1 : 0)
+                    .allowsHitTesting(expandedFirst == nil)
+                    .accessibilityHidden(expandedFirst != nil)
             }
         }
         .onChange(of: ratio) { _, _ in draggedRatio = nil }
@@ -88,6 +112,7 @@ struct PaneCard: View {
     let pane: Pane
     @ObservedObject var store: SessionStore
     let zoomed: Bool
+    var visible = true
     @StateObject private var controller = TerminalController()
     @Environment(\.colorScheme) private var colorScheme
     private var selected: Bool { store.selectedPane == pane.id }
@@ -120,7 +145,7 @@ struct PaneCard: View {
             .contentShape(Rectangle()).onTapGesture { store.focusPane(pane.id) }
             Divider().opacity(0.6)
             ZStack {
-                TerminalSurface(controller: controller, pane: pane, store: store, dark: colorScheme == .dark)
+                TerminalSurface(controller: controller, pane: pane, store: store, dark: colorScheme == .dark, visible: visible)
                     .padding(7)
                 if let error = controller.error {
                     VStack(spacing: 12) {
