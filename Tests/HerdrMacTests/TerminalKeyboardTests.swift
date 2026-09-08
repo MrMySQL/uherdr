@@ -171,6 +171,52 @@ struct TerminalKeyboardTests {
         other.controller = nil
         precondition(!other.performDragOperation(drop), "Detached surfaces must reject drops")
         other.removeFromSuperview()
+        // Exercise real mouse events and Ghostty matching, intercepting only
+        // the external URL delegate so the test does not launch a browser.
+        func linkClick(_ output: String, modifiers: NSEvent.ModifierFlags = [],
+                       drag: Bool = false, clickCount: Int = 1) {
+            bridge.receive(Data(("\u{1b}[2J\u{1b}[H" + output).utf8))
+            bridge.session.waitForPendingOutput()
+            lifecycle.urls = []
+            let grid = capture.viewport!
+            let scale = window.backingScaleFactor
+            let point = NSPoint(x: CGFloat(grid.cellWidthPixels) * 2.5 / scale,
+                                y: view.bounds.height - CGFloat(grid.cellHeightPixels) * 0.5 / scale)
+            func event(_ type: NSEvent.EventType, at point: NSPoint) -> NSEvent {
+                NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil),
+                                   modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
+                                   windowNumber: window.windowNumber, context: nil,
+                                   eventNumber: 0, clickCount: clickCount, pressure: 0)!
+            }
+            view.mouseMoved(with: event(.mouseMoved, at: NSPoint(x: -1, y: -1)))
+            view.mouseMoved(with: event(.mouseMoved, at: point))
+            view.mouseDown(with: event(.leftMouseDown, at: point))
+            if drag {
+                view.mouseDragged(with: event(.leftMouseDragged, at: NSPoint(x: point.x + 60, y: point.y)))
+                view.mouseDragged(with: event(.leftMouseDragged, at: point))
+            }
+            view.mouseUp(with: event(.leftMouseUp, at: point))
+        }
+        let url = "https://example.com/agent?task=123&view=diff"
+        linkClick(url)
+        precondition(lifecycle.urls == [url], "Plain click must open a detected URL")
+        linkClick(url, modifiers: .command)
+        precondition(lifecycle.urls == [url], "Command-click must reach the URL opener exactly once")
+        linkClick("\u{1b}]8;;\(url)\u{1b}\\Agent link\u{1b}]8;;\u{1b}\\")
+        precondition(lifecycle.urls == [url], "Plain click must open an OSC 8 destination, not its label")
+        linkClick("ordinary terminal text")
+        precondition(lifecycle.urls.isEmpty, "Plain text must not open a URL")
+        linkClick(url, drag: true)
+        precondition(lifecycle.urls.isEmpty, "Dragging over a link and back must not open it")
+        linkClick(url, modifiers: .shift)
+        precondition(lifecycle.urls.isEmpty, "Shift-click must retain selection behavior")
+        linkClick(url, clickCount: 2)
+        precondition(lifecycle.urls.isEmpty, "Double-click must retain word selection")
+        linkClick("\u{1b}[?1000h\u{1b}[?1006h" + url)
+        precondition(lifecycle.urls.isEmpty, "Applications capturing the mouse must retain their clicks")
+        bridge.receive(Data("\u{1b}[?1000l\u{1b}[?1006l".utf8))
+        bridge.session.waitForPendingOutput()
+        print("PASS: terminal URL clicks preserve destinations, selection, and mouse capture")
         lifecycle.surface = nil
         view.controller = nil
         precondition(bridge.session.readViewportText() == nil)
@@ -207,8 +253,10 @@ private final class StreamCapture: @unchecked Sendable {
 }
 
 @MainActor
-private final class SurfaceCapture: TerminalSurfaceLifecycleDelegate {
+private final class SurfaceCapture: TerminalSurfaceLifecycleDelegate, TerminalSurfaceOpenURLDelegate {
     var surface: GhosttyTerminal.TerminalSurface?
+    var urls: [String] = []
+    func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) { urls.append(url) }
     func terminalDidAttachSurface(_ surface: GhosttyTerminal.TerminalSurface) { self.surface = surface }
     func terminalDidDetachSurface() { surface = nil }
 }
