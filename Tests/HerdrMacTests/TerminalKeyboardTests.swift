@@ -174,13 +174,13 @@ struct TerminalKeyboardTests {
         // Exercise real mouse events and Ghostty matching, intercepting only
         // the external URL delegate so the test does not launch a browser.
         func linkClick(_ output: String, modifiers: NSEvent.ModifierFlags = [],
-                       drag: Bool = false, clickCount: Int = 1) {
+                       drag: Bool = false, clickCount: Int = 1, column: CGFloat = 2.5) {
             bridge.receive(Data(("\u{1b}[2J\u{1b}[H" + output).utf8))
             bridge.session.waitForPendingOutput()
             lifecycle.urls = []
             let grid = capture.viewport!
             let scale = window.backingScaleFactor
-            let point = NSPoint(x: CGFloat(grid.cellWidthPixels) * 2.5 / scale,
+            let point = NSPoint(x: CGFloat(grid.cellWidthPixels) * column / scale,
                                 y: view.bounds.height - CGFloat(grid.cellHeightPixels) * 0.5 / scale)
             func event(_ type: NSEvent.EventType, at point: NSPoint) -> NSEvent {
                 NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil),
@@ -212,10 +212,18 @@ struct TerminalKeyboardTests {
         precondition(lifecycle.urls.isEmpty, "Shift-click must retain selection behavior")
         linkClick(url, clickCount: 2)
         precondition(lifecycle.urls.isEmpty, "Double-click must retain word selection")
-        linkClick("\u{1b}[?1000h\u{1b}[?1006h" + url)
+        capture.clear()
+        linkClick("\u{1b}[?1000h\u{1b}[?1006h" + url, column: 0.5)
         precondition(lifecycle.urls.isEmpty, "Applications capturing the mouse must retain their clicks")
+        let expectedClick = Array("\u{1b}[<0;1;1M\u{1b}[<0;1;1m".utf8)
+        waitUntil { capture.bytes == expectedClick }
+        precondition(capture.bytes == expectedClick,
+                     "Mouse-enabled apps must receive an unmodified press and release at the clicked cell: \(capture.bytes)")
         bridge.receive(Data("\u{1b}[?1000l\u{1b}[?1006l".utf8))
         bridge.session.waitForPendingOutput()
+        capture.clear()
+        linkClick("ordinary terminal text")
+        precondition(capture.bytes.isEmpty, "Disabling mouse capture must restore local selection without sending mouse input")
         print("PASS: terminal URL clicks preserve destinations, selection, and mouse capture")
         lifecycle.surface = nil
         view.controller = nil

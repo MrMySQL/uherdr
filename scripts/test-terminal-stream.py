@@ -54,6 +54,21 @@ try:
     wait_frame(lambda f: f.get('type') == 'terminal.frame')
     send({'type': 'terminal.input', 'text': "printf 'terminal-%s\\n' stream-ok\r"})
     wait_frame(lambda f: b'terminal-stream-ok' in base64.b64decode(f.get('bytes', '')))
+    if '--check-mouse-modes' in sys.argv[3:]:
+        # Capability regression probe: Herdr 0.8.2 reconstructs visible cells
+        # but omits the application's mouse modes from terminal.frame.
+        # Keep this opt-in until the runtime exposes those modes.
+        send({'type': 'terminal.input', 'text':
+              "printf '\\033[?1000h\\033[?1006hmouse-%s\\n' ready\r"})
+        mouse_output = bytearray()
+        def mouse_ready(frame):
+            mouse_output.extend(base64.b64decode(frame.get('bytes', '')))
+            return b'mouse-ready' in mouse_output
+        wait_frame(mouse_ready)
+        assert b'\x1b[?1000h' in mouse_output and b'\x1b[?1006h' in mouse_output, (
+            'Herdr terminal.frame omitted mouse reporting modes 1000/1006; '
+            'embedded terminal clicks cannot reach mouse-enabled applications')
+        print('PASS: terminal stream preserves application mouse reporting modes')
     send({'type': 'terminal.resize', 'cols': 110, 'rows': 35})
     wait_frame(lambda f: f.get('width') == 110 and f.get('height') == 35)
     send({'type': 'terminal.scroll', 'direction': 'up', 'lines': 3, 'source': 'wheel'})
