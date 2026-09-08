@@ -7,8 +7,6 @@ struct EditorSheet: View {
     @State private var label = ""
     @State private var cwd = NSHomeDirectory()
     @State private var kind = "claude"
-    @State private var socket = ""
-    @State private var executable = ""
     @FocusState private var fieldFocused: Bool
     private var title: String {
         switch sheet {
@@ -21,8 +19,11 @@ struct EditorSheet: View {
     }
     private var valid: Bool {
         switch sheet {
-        case .settings: return !socket.trimmingCharacters(in: .whitespaces).isEmpty && !executable.isEmpty
-        case .space: return !label.trimmingCharacters(in: .whitespaces).isEmpty && FileManager.default.fileExists(atPath: (cwd as NSString).expandingTildeInPath)
+        case .settings: return true
+        case .space:
+            let path = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+            let validPath = store.isRemote ? path.hasPrefix("/") : FileManager.default.fileExists(atPath: (path as NSString).expandingTildeInPath)
+            return !label.trimmingCharacters(in: .whitespaces).isEmpty && validPath
         case .agent: return label.range(of: #"^[a-z][a-z0-9_-]{0,31}$"#, options: .regularExpression) != nil
         default: return !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
@@ -43,9 +44,9 @@ struct EditorSheet: View {
                         Text("Project folder").font(.caption).foregroundStyle(.secondary)
                         HStack {
                             TextField("Folder", text: $cwd).textFieldStyle(.roundedBorder)
-                            Button("Choose…") { chooseFolder() }
+                            if !store.isRemote { Button("Choose…") { chooseFolder() } }
                         }
-                        Text("Each space keeps its own tabs, terminals, and agents.").font(.caption).foregroundStyle(.secondary)
+                        Text(store.isRemote ? "Enter the full folder path on \(store.profile.name)." : "Each space keeps its own tabs, terminals, and agents.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -60,13 +61,12 @@ struct EditorSheet: View {
             if case .rename(let target) = sheet { label = target.label }
             if case .tab = sheet { label = "Terminal" }
             if case .agent = sheet { label = "agent-\(Int.random(in: 100...999))" }
-            cwd = store.currentPane?.directory.isEmpty == false ? store.currentPane!.directory : NSHomeDirectory()
-            socket = store.socketPath; executable = store.executable
+            cwd = store.currentPane?.directory.isEmpty == false ? store.currentPane!.directory : store.defaultDirectory
             fieldFocused = true
         }
     }
     private var buttonTitle: String {
-        switch sheet { case .settings: return "Save and reconnect"; case .rename: return "Rename"; case .agent: return "Start agent"; default: return "Create" }
+        switch sheet { case .settings: return "Done"; case .rename: return "Rename"; case .agent: return "Start agent"; default: return "Create" }
     }
     private var agentFields: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -85,13 +85,7 @@ struct EditorSheet: View {
     }
     private var settingsFields: some View {
         VStack(alignment: .leading, spacing: 15) {
-            Group {
-                Text("HERDR CONNECTION").font(.system(size: 10, weight: .semibold)).tracking(1.2).foregroundStyle(.secondary)
-                TextField("herdr executable", text: $executable).textFieldStyle(.roundedBorder)
-                TextField("API socket path", text: $socket).textFieldStyle(.roundedBorder)
-                Text("Named sessions: ~/.config/herdr/sessions/<name>/herdr.sock").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
-            }
-            Divider()
+            Text("Manage connections using the menu beside each device in the sidebar.").font(.callout).foregroundStyle(.secondary)
             Picker("Appearance", selection: $store.appearance) {
                 Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark")
             }.pickerStyle(.segmented)
@@ -111,14 +105,13 @@ struct EditorSheet: View {
     private func submit() {
         let name = label.trimmingCharacters(in: .whitespacesAndNewlines)
         switch sheet {
-        case .space: store.createSpace(label: name, cwd: (cwd as NSString).expandingTildeInPath)
+        case .space:
+            let path = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+            store.createSpace(label: name, cwd: store.isRemote ? path : (path as NSString).expandingTildeInPath)
         case .tab: store.createTab(label: name)
         case .rename(let target): store.rename(target, label: name)
         case .agent(let paneID): store.startAgent(paneID: paneID, kind: kind, name: name)
-        case .settings:
-            store.socketPath = socket.trimmingCharacters(in: .whitespacesAndNewlines)
-            store.executable = executable.trimmingCharacters(in: .whitespacesAndNewlines)
-            store.reconnect()
+        case .settings: break
         }
         dismiss()
     }

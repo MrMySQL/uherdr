@@ -26,3 +26,4 @@ swift run HerdrCoreTests --live "$TEST_SOCKET"
 ./scripts/test-hotkeys.sh
 bash scripts/test-terminal-keyboard.sh
 python3 scripts/test-terminal-stream.py "$TEST_SOCKET" "$HERDR_TEST_BIN"
+bash scripts/test-devices.sh

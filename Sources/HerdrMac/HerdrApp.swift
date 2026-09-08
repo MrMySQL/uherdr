@@ -4,33 +4,35 @@ import AppKit
 @main
 struct HerdrApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var store = SessionStore()
+    @StateObject private var devices = DeviceStore()
+    private var store: SessionStore { devices.activeSession }
     var body: some Scene {
         Window("Herdr", id: "main") {
-            WorkspaceView(store: store)
+            WorkspaceView(store: store, devices: devices)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in devices.stop() }
         }
         .defaultSize(width: 1280, height: 820)
         .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Space…") { store.sheet = .space }.keyboardShortcut("n").disabled(!store.connected)
-                Button("New Tab…") { store.sheet = .tab }.keyboardShortcut("t").disabled(store.selectedSpace == nil || !store.connected)
+                Button("New Space…") { store.sheet = .space }.keyboardShortcut("n").disabled(!store.connected || !canInteract)
+                Button("New Tab…") { store.sheet = .tab }.keyboardShortcut("t").disabled(store.selectedSpace == nil || !store.connected || !canInteract)
             }
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { store.sheet = .settings }.keyboardShortcut(",")
+                Button("Settings…") { store.sheet = .settings }.keyboardShortcut(",").disabled(!canInteract)
             }
             CommandMenu("Pane") {
-                Button("Split Side by Side") { store.split(.right) }.keyboardShortcut("d").disabled(store.selectedPane == nil || !store.connected)
-                Button("Split Top and Bottom") { store.split(.down) }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(store.selectedPane == nil || !store.connected)
+                Button("Split Side by Side") { store.split(.right) }.keyboardShortcut("d").disabled(!canUseCurrentPane)
+                Button("Split Top and Bottom") { store.split(.down) }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(!canUseCurrentPane)
                 Divider()
                 Button("Zoom Pane") { if let id = store.selectedPane { store.zoom(id) } }
                     .keyboardShortcut(KeyEquivalent(AppHotkeys.togglePaneZoom.key), modifiers: AppHotkeys.togglePaneZoom.eventModifiers)
                     .disabled(!canUseCurrentPane)
-                Button("Start Agent…") { if let id = store.selectedPane { store.sheet = .agent(id) } }.disabled(store.selectedPane == nil)
+                Button("Start Agent…") { if let id = store.selectedPane { store.sheet = .agent(id) } }.disabled(!canUseCurrentPane)
                 Divider()
                 Button("Close Pane…") {
                     if let pane = store.currentPane { store.pendingClose = ResourceTarget(kind: "pane", id: pane.id, label: pane.displayTitle) }
-                }.keyboardShortcut("w", modifiers: [.command, .shift]).disabled(store.selectedPane == nil)
+                }.keyboardShortcut("w", modifiers: [.command, .shift]).disabled(!canUseCurrentPane)
             }
             CommandMenu("Tab") {
                 Button("Rename Current Tab…") {
@@ -39,13 +41,13 @@ struct HerdrApp: App {
                     .disabled(!canUseCurrentTab)
             }
             CommandMenu("Navigate") {
-                ForEach(Array(store.workspaces.prefix(9).enumerated()), id: \.element.id) { index, space in
-                    Button("Switch to \(space.label)") {
-                        store.sidebarMode = "spaces"
-                        store.selectSpace(space)
+                ForEach(Array(devices.workspaceShortcuts.enumerated()), id: \.offset) { index, entry in
+                    Button("\(entry.session.profile.name): \(entry.workspace.label)") {
+                        devices.sidebarMode = "spaces"
+                        devices.select(entry.session, workspace: entry.workspace)
                     }
                     .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
-                    .disabled(!store.connected || store.sheet != nil || store.pendingClose != nil)
+                    .disabled(!entry.session.connected || !canInteract)
                 }
                 Divider()
                 ForEach(Array(store.visibleTabs.prefix(9).enumerated()), id: \.element.id) { index, tab in
@@ -65,20 +67,23 @@ struct HerdrApp: App {
                 Button("Previous Tab") { moveTab(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
                     .disabled(!canNavigateTabs)
                 Divider()
-                Button("Next Pane") { movePane() }.keyboardShortcut("`", modifiers: [.control])
-                Button("Show Agents") { store.sidebarMode = "agents" }.keyboardShortcut("a", modifiers: [.command, .shift])
-                Button("Show Spaces") { store.sidebarMode = "spaces" }.keyboardShortcut("s", modifiers: [.command, .shift])
+                Button("Next Pane") { movePane() }.keyboardShortcut("`", modifiers: [.control]).disabled(!canUseCurrentPane)
+                Button("Show Agents") { devices.sidebarMode = "agents" }.keyboardShortcut("a", modifiers: [.command, .shift])
+                Button("Show Spaces") { devices.sidebarMode = "spaces" }.keyboardShortcut("s", modifiers: [.command, .shift])
             }
         }
     }
+    private var canInteract: Bool {
+        store.sheet == nil && store.pendingClose == nil && store.operationError == nil && devices.editor == nil && devices.pendingRemoval == nil
+    }
     private var canUseCurrentPane: Bool {
-        store.connected && store.selectedPane != nil && store.sheet == nil && store.pendingClose == nil
+        store.connected && store.selectedPane != nil && canInteract
     }
     private var canUseCurrentTab: Bool {
-        store.connected && store.currentTab != nil && store.sheet == nil && store.pendingClose == nil
+        store.connected && store.currentTab != nil && canInteract
     }
     private var canNavigateTabs: Bool {
-        store.connected && !store.visibleTabs.isEmpty && store.sheet == nil && store.pendingClose == nil && store.operationError == nil
+        store.connected && !store.visibleTabs.isEmpty && canInteract
     }
     private func moveTab(_ offset: Int) {
         let tabs = store.visibleTabs

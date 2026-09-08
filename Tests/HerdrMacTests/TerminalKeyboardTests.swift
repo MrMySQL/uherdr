@@ -1,5 +1,6 @@
 import AppKit
 import SwiftTerm
+import HerdrCore
 @testable import HerdrMac
 
 @main
@@ -13,7 +14,7 @@ struct TerminalKeyboardTests {
         window.contentView = view
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
-        let store = SessionStore()
+        let store = SessionStore(profile: DeviceProfile(name: "Keyboard test", kind: .local, socketPath: "/tmp/uherdr-keyboard-test.sock", executable: "/tmp/herdr"))
         let coordinator = TerminalSurface.Coordinator(controller: TerminalController(), store: store, paneID: "keyboard-test")
         coordinator.view = view
         coordinator.installEvents()

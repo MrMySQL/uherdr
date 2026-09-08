@@ -1,0 +1,11 @@
+# Devices and SSH connections
+
+Show all saved devices in the sidebar, with each device's spaces and agents underneath. Keep the local Mac as the first device and migrate the existing socket/executable preferences. A click selects a device's space and restores that device's tab/pane selection. Each device owns a separate SessionStore so identical server IDs cannot route actions to another device.
+
+Add/edit device sheets save a name, SSH host (including SSH-config aliases), optional user/port/identity file, and an optional remote socket path. An empty remote path discovers the remote user's default herdr socket. Forward both the API socket and its companion terminal socket (API filename stem plus `-client.sock`) through the same SSH connection. Both Macs need compatible herdr installations. Existing SSH keys/agent/config and known_hosts provide authentication and host verification; first-time SSH setup is described in the sheet and README.
+
+Use an app-owned OpenSSH process for each remote device, forwarding a private local Unix socket to the remote herdr socket. Discover the remote home/default socket through a fixed SSH command. Preserve host verification, disable interactive prompts/backgrounding/multiplexing, bound connection attempts, and show errors on the affected device. Reconnect has a retry delay; explicit disconnect suppresses automatic retries. Removing a device only removes its saved connection. Closing the app stops client streams/tunnels while server-owned sessions remain alive.
+
+Each session polls independently. The selected session alone owns visible terminal controllers. A device switch recreates terminal views, even when pane IDs match. New remote spaces accept remote absolute paths without checking the local filesystem. Settings retain shared appearance preferences and edit the selected device's connection separately.
+
+Verification: protocol/profile tests, controlled process/tunnel lifecycle tests, two isolated herdr servers with overlapping IDs for routing/selection/disconnect, existing local terminal and keyboard checks, and a complete app build. Real SSH to another physical device requires a reachable configured host; do not claim that test without one.

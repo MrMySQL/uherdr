@@ -31,6 +31,7 @@ final class TerminalController: ObservableObject {
         child.arguments = ["terminal", "session", "control", pane, "--cols", String(max(2, cols)), "--rows", String(max(2, rows))] + (takeover ? ["--takeover"] : [])
         var env = ProcessInfo.processInfo.environment
         env.removeValue(forKey: "HERDR_SESSION")
+        env.removeValue(forKey: "HERDR_CLIENT_SOCKET_PATH")
         env["HERDR_SOCKET_PATH"] = (socket as NSString).expandingTildeInPath
         child.environment = env
         child.standardInput = stdinPipe
@@ -145,7 +146,7 @@ struct TerminalSurface: NSViewRepresentable {
             coordinator?.feeding = false
         }
         let term = view.getTerminal()
-        controller.start(executable: store.executable, socket: store.socketPath, pane: pane.id, cols: term.cols, rows: term.rows)
+        controller.start(executable: store.executable, socket: store.effectiveSocketPath, pane: pane.id, cols: term.cols, rows: term.rows)
         context.coordinator.installEvents()
         return view
     }
