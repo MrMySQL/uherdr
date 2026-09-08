@@ -19,30 +19,37 @@ final class SessionStore: ObservableObject {
     @Published var version = ""
     @Published var sheet: AppSheet?
     @Published var pendingClose: ResourceTarget?
-    @Published var sidebarMode = "spaces"
     @Published var connectionGeneration = UUID()
-    @Published var socketPath: String
-    @Published var executable: String
-    @Published var appearance: String { didSet { UserDefaults.standard.set(appearance, forKey: "appearance") } }
-    @Published var fontSize: Double { didSet { UserDefaults.standard.set(fontSize, forKey: "fontSize") } }
+    @Published private(set) var profile: DeviceProfile
+    @Published private(set) var effectiveSocketPath: String
+    @Published private(set) var remoteHome: String?
+    @Published private(set) var suspended = false
+    @Published var appearance: String { didSet { defaults.set(appearance, forKey: "appearance") } }
+    @Published var fontSize: Double { didSet { defaults.set(fontSize, forKey: "fontSize") } }
+    var socketPath: String { profile.socketPath }
+    var executable: String { profile.executable }
+    var isRemote: Bool { profile.kind == .ssh }
+    var defaultDirectory: String { isRemote ? remoteHome ?? "/tmp" : NSHomeDirectory() }
+    private let defaults: UserDefaults
+    private let tunnel: SSHTunnel
+    private var retryAfter = Date.distantPast
     private var client: any HerdrRequesting
     private var pollTask: Task<Void, Never>?
-    private var refreshing = false
+    private var refreshingGeneration: UUID?
     private var serverProcess: Process?
     private var selectionRevision = 0
 
-    init(client: (any HerdrRequesting)? = nil) {
-        let defaults = UserDefaults.standard
-        let env = ProcessInfo.processInfo.environment
-        let configHome = env["XDG_CONFIG_HOME"] ?? NSHomeDirectory() + "/.config"
-        let socket = env["HERDR_SOCKET_PATH"] ?? defaults.string(forKey: "socketPath") ?? configHome + "/herdr/herdr.sock"
-        socketPath = socket
-        executable = defaults.string(forKey: "herdrExecutable") ?? Self.findExecutable()
+    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil) {
+        self.profile = profile
+        self.defaults = defaults
+        self.tunnel = tunnel ?? SSHTunnel()
+        let socket = profile.kind == .local ? (profile.socketPath as NSString).expandingTildeInPath : ""
+        effectiveSocketPath = socket
         appearance = defaults.string(forKey: "appearance") ?? "system"
         fontSize = defaults.object(forKey: "fontSize") as? Double ?? 13
-        self.client = client ?? HerdrClient(socketPath: (socket as NSString).expandingTildeInPath)
-        selectedSpace = defaults.string(forKey: "selectedSpace:\(socket)")
-        selectedTab = defaults.string(forKey: "selectedTab:\(socket)")
+        self.client = client ?? HerdrClient(socketPath: socket)
+        selectedSpace = defaults.string(forKey: "selectedSpace:\(profile.id.uuidString)")
+        selectedTab = defaults.string(forKey: "selectedTab:\(profile.id.uuidString)")
     }
 
     static func findExecutable() -> String {
@@ -60,7 +67,7 @@ final class SessionStore: ObservableObject {
     var colorScheme: ColorScheme? { appearance == "dark" ? .dark : appearance == "light" ? .light : nil }
 
     func start() {
-        guard pollTask == nil else { return }
+        guard pollTask == nil, !suspended else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
@@ -70,27 +77,51 @@ final class SessionStore: ObservableObject {
     }
 
     func reconnect() {
-        pollTask?.cancel()
-        pollTask = nil
-        connectionGeneration = UUID()
-        client = HerdrClient(socketPath: (socketPath as NSString).expandingTildeInPath)
-        UserDefaults.standard.set(socketPath, forKey: "socketPath")
-        UserDefaults.standard.set(executable, forKey: "herdrExecutable")
-        workspaces = []; tabs = []; panes = []; agents = []; layouts = [:]
-        selectedSpace = nil; selectedTab = nil; selectedPane = nil
-        connected = false
+        disconnect()
+        suspended = false
+        retryAfter = .distantPast
+        connectionError = nil
         start()
     }
 
+    func disconnect() {
+        pollTask?.cancel(); pollTask = nil
+        connectionGeneration = UUID()
+        tunnel.stop()
+        suspended = true; connected = false; connecting = false; busy = false
+        if isRemote { effectiveSocketPath = "" }
+    }
+
+    func updateProfile(_ value: DeviceProfile) {
+        disconnect()
+        profile = value
+        workspaces = []; tabs = []; panes = []; agents = []; layouts = [:]
+        selectedSpace = nil; selectedTab = nil; selectedPane = nil
+        reconnect()
+    }
+
     func refresh() async {
-        guard !refreshing else { return }
-        refreshing = true
-        connecting = !connected
-        defer { refreshing = false; connecting = false }
+        guard !suspended, refreshingGeneration != connectionGeneration, Date() >= retryAfter else { return }
         let generation = connectionGeneration
+        refreshingGeneration = generation
+        connecting = !connected
+        defer {
+            if refreshingGeneration == generation { refreshingGeneration = nil }
+            if connectionGeneration == generation { connecting = false }
+        }
         let revision = selectionRevision
-        let activeClient = client
         do {
+            let path: String
+            if isRemote {
+                path = try await tunnel.connect(profile)
+                guard generation == connectionGeneration, !Task.isCancelled else { return }
+                remoteHome = tunnel.remoteHome
+            } else { path = (socketPath as NSString).expandingTildeInPath }
+            if effectiveSocketPath != path {
+                effectiveSocketPath = path
+                client = HerdrClient(socketPath: path)
+            }
+            let activeClient = client
             let response = try await activeClient.request("session.snapshot")
             let snapshot = try response["snapshot"].decode(SessionSnapshot.self)
             guard generation == connectionGeneration, !Task.isCancelled else { return }
@@ -124,6 +155,7 @@ final class SessionStore: ObservableObject {
             guard generation == connectionGeneration, !Task.isCancelled else { return }
             connected = false
             connectionError = error.localizedDescription
+            if isRemote { retryAfter = Date().addingTimeInterval(10) }
         }
     }
 
@@ -160,16 +192,18 @@ final class SessionStore: ObservableObject {
     }
 
     private func persistSelection() {
-        UserDefaults.standard.set(selectedSpace, forKey: "selectedSpace:\(socketPath)")
-        UserDefaults.standard.set(selectedTab, forKey: "selectedTab:\(socketPath)")
+        defaults.set(selectedSpace, forKey: "selectedSpace:\(profile.id.uuidString)")
+        defaults.set(selectedTab, forKey: "selectedTab:\(profile.id.uuidString)")
     }
 
     func perform(_ method: String, params: [String: JSONValue], showBusy: Bool = true, completion: ((JSONValue) -> Void)? = nil) {
+        guard connected, !suspended else { return }
         let activeClient = client
         let generation = connectionGeneration
         Task {
+            guard generation == connectionGeneration, connected, !suspended else { return }
             if showBusy { busy = true }
-            defer { if showBusy { busy = false } }
+            defer { if showBusy, generation == connectionGeneration { busy = false } }
             do {
                 let result = try await activeClient.request(method, params: params, timeout: method == "agent.start" ? 40 : 8)
                 guard generation == connectionGeneration else { return }
@@ -221,7 +255,7 @@ final class SessionStore: ObservableObject {
         perform("\(target.kind).close", params: ["\(target.kind)_id": .string(target.id)])
     }
     func startAgent(paneID: String, kind: String, name: String) {
-        guard !busy else { return }
+        guard connected, !suspended, !busy else { return }
         guard let pane = panes.first(where: { $0.id == paneID }), pane.directory.hasPrefix("/") else {
             operationError = "Could not find the pane’s project folder. Refresh and try again."
             return
@@ -232,7 +266,8 @@ final class SessionStore: ObservableObject {
         busy = true
         operationError = nil
         Task {
-            defer { busy = false }
+            defer { if generation == connectionGeneration { busy = false } }
+            guard generation == connectionGeneration, connected, !suspended else { return }
             var createdWorktree = false
             do {
                 let created = try await activeClient.request("worktree.create", params: [
@@ -246,7 +281,7 @@ final class SessionStore: ObservableObject {
                 selectedTab = rootPane.tabID
                 selectedPane = rootPane.id
                 await refresh()
-                guard generation == connectionGeneration else { return }
+                guard generation == connectionGeneration, connected, !suspended else { return }
                 _ = try await activeClient.request("agent.start", params: [
                     "pane_id": .string(rootPane.id), "kind": .string(kind),
                     "name": .string(name), "timeout_ms": .number(30000)
@@ -261,6 +296,7 @@ final class SessionStore: ObservableObject {
     }
 
     func startServer() {
+        guard !isRemote else { return }
         guard serverProcess?.isRunning != true else { return }
         do {
             let path = (socketPath as NSString).expandingTildeInPath
@@ -270,6 +306,7 @@ final class SessionStore: ObservableObject {
             process.arguments = [(executable as NSString).expandingTildeInPath, "server"]
             var env = ProcessInfo.processInfo.environment
             env.removeValue(forKey: "HERDR_SESSION")
+            env.removeValue(forKey: "HERDR_CLIENT_SOCKET_PATH")
             env["HERDR_SOCKET_PATH"] = path
             process.environment = env
             process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())

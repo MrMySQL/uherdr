@@ -21,11 +21,23 @@ open dist/Herdr.app
 
 Open `Package.swift` in Xcode to develop the app, or use `swift build` and `swift run HerdrCoreTests` from a terminal. Swift Package Manager downloads GhosttyTerminal's checksummed native XCFramework and MSDisplayLink on the first build. The pinned Swift wrapper is vendored in this repository.
 
-The app uses your default local herdr socket. Set an explicit socket and the herdr executable in Settings to connect to a named session. Start herdr first, or use the app's Start Server button. Quit detaches the client; shells and agents remain owned by herdr.
+The sidebar groups spaces and agents by device. **This Mac** uses your default local herdr socket and preserves existing connection preferences. Use the menu beside a device to edit its socket and local herdr executable. Start herdr first, or use the local device's Start Server button. Quit detaches the client; shells and agents remain owned by herdr.
+
+## Connect another device over SSH
+
+1. On the other Mac, enable Remote Login and start herdr. Install a compatible herdr CLI on this Mac too; the app uses it to control terminals through the tunnel.
+2. Configure SSH key authentication and connect once from Terminal (for example, `ssh alex@mac-mini.local`) to verify the host key. Existing SSH aliases, keys, agents, ports, and jump hosts in `~/.ssh/config` are supported. Password-only authentication and interactive passphrase prompts are not supported in the app; unlock encrypted keys in your SSH agent first.
+3. Click **Add device…** in the sidebar. Enter a name and SSH host, such as `alex@mac-mini.local` or an SSH-config alias. Username, port, and identity file are optional overrides.
+4. Leave **Remote socket** empty to discover the remote default socket. For a named session, enter `~/.config/herdr/sessions/<name>/herdr.sock`. The executable field always refers to the herdr CLI on this Mac.
+5. Click **Save and connect**. All devices stay visible together. Click a space to work on its device; each device remembers its selection. When creating a remote space, enter an absolute folder path on that device.
+
+Each remote device has its own SSH connection forwarding two private Unix sockets: the workspace API socket and herdr's companion `-client.sock` terminal socket, using [OpenSSH local socket forwarding](https://man.openbsd.org/ssh.1#L). Host verification stays enabled. The remote SSH server must allow Unix-socket forwarding (`AllowStreamLocalForwarding`). No herdr TCP listener is required.
+
+Connection errors appear under the affected device and in its detail view. Failed remote connections retry every ten seconds. Use the device menu to reconnect immediately, disconnect, edit, or remove a saved connection. Disconnecting or removing a device leaves its remote workspaces and processes running. Start/stop of remote herdr servers is managed on the remote device.
 
 ## Interaction
 
-- Sidebar: switch between Spaces and Agents; select a space or jump to an agent. Command-1 through Command-9 select the first nine spaces in sidebar order. Hold Command to reveal shortcut badges on the space cards. Search filtering does not renumber shortcuts.
+- Sidebar: switch between Spaces and Agents, grouped by device; select a space or jump to an agent. Command-1 through Command-9 select the first nine spaces across devices in sidebar order. Hold Command to reveal shortcut badges on the space cards. Search filtering and collapsing devices do not renumber shortcuts.
 - Tabs: create with Command-T and rename the current tab with Command-Shift-R. Control-1 through Control-9 select the first nine tabs in the current space. Control-Tab selects the next tab, and Control-Shift-Tab selects the previous tab, wrapping at either end. Command-Shift-] and Command-Shift-[ also cycle tabs. Rename and close from the context menu.
 - Panes: Command-D splits side by side; Command-Shift-D stacks panes; Command-Return toggles zoom for the focused pane. Drag the divider to resize. Use the pane header to focus, zoom, rename, start an agent, or close.
 - Start an agent: creates a Git worktree from the pane’s repository, opens it in a new space, and launches the selected agent there. Herdr generates the branch name. The selected agent CLI must be installed. If launching fails, the new space stays available for retrying in its terminal.
@@ -36,7 +48,7 @@ Closing a pane, tab, or space terminates its processes and therefore asks for co
 
 ## Architecture
 
-`HerdrCore` contains Codable protocol models, bounded JSON line parsing, and local Unix socket requests. `HerdrMac` contains the SwiftUI shell, session store, and GhosttyTerminal AppKit bridge. Each visible terminal uses `herdr terminal session control` with JSON messages on standard input and base64 ANSI frames on standard output. Ghostty's host-managed in-memory backend renders these frames and encodes keyboard/mouse input; Herdr owns the shell and scrollback. The CLI handles herdr's binary protocol negotiation. Shells are never spawned as substitutes for server panes.
+`HerdrCore` contains Codable protocol/device models, bounded JSON line parsing, Unix socket requests, and managed SSH processes. `HerdrMac` contains the SwiftUI shell, a device store with one independent session store per device, and the GhosttyTerminal AppKit bridge. Each visible terminal uses the local `herdr terminal session control` with JSON messages on standard input and base64 ANSI frames on standard output. Each remote device forwards both its API socket and the companion terminal socket over its SSH connection. Ghostty's host-managed in-memory backend renders these frames and encodes keyboard/mouse input; Herdr owns the shell and scrollback. The CLI handles herdr's binary protocol negotiation. Shells are never spawned as substitutes for server panes.
 
 GhosttyTerminal is the sole terminal backend in this prototype. The Swift wrapper is vendored from `1.5.20260906` with a small addition exposing the native replay API; see [vendor provenance and patch notes](Vendor/GhosttyTerminal/README.md). The community binary carries host-managed I/O patches over Ghostty. Native font/theme changes update the existing surface. Terminal-query replies generated while rendering server frames are suppressed at their source, because Herdr handles those queries upstream. Mouse-wheel events continue to use Herdr's scroll protocol.
 
@@ -58,11 +70,12 @@ swift run HerdrCoreTests  # Protocol, layout, selection, and error handling
 bash scripts/test-agent-worktree.sh # Worktree agent launch and failure handling
 bash scripts/test-terminal-keyboard.sh # Real Ghostty rendering, keyboard, paste, resize, and teardown
 ./scripts/test.sh         # Also starts and cleans up an isolated herdr server
+bash scripts/test-devices.sh # Two isolated servers, overlapping IDs, and forwarded terminal control
 ```
 
 The standalone Swift test runner works with Command Line Tools; XCTest is not required. Live tests cover workspace/tab/pane lifecycle, nested right/down splits, divider ratios, shell input/output, agent status fixtures, terminal ANSI streaming, resize, scrolling, and detach preservation. They accept only an explicitly disposable socket under `/tmp`.
 
-Topology and agent status refresh every 1.25 seconds and after actions; terminal output streams continuously. Only visible terminals acquire writable controllers. Remote SSH connections and Kitty graphics overlays are not included in this version.
+Topology and agent status refresh independently per device every 1.25 seconds and after actions; terminal output streams continuously. Only visible terminals acquire writable controllers. Switching devices releases the previous terminal controllers without stopping their shells. The multi-device tests use a controlled SSH stand-in with real Unix-stream forwarding, not a physical remote Mac. Kitty graphics overlays are not included in this version.
 
 ## Contributing
 

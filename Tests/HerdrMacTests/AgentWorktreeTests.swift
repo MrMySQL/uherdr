@@ -3,16 +3,15 @@ import HerdrCore
 
 @main struct AgentWorktreeTests {
     @MainActor static func main() async throws {
-        // Keep fixture selections out of the user's saved session preferences.
-        let socket = "/tmp/uherdr-agent-worktree-fixture-\(UUID().uuidString).sock"
-        setenv("HERDR_SOCKET_PATH", socket, 1)
-        defer {
-            UserDefaults.standard.removeObject(forKey: "selectedSpace:\(socket)")
-            UserDefaults.standard.removeObject(forKey: "selectedTab:\(socket)")
-        }
+        let suiteName = "dev.herdr.agent-worktree-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let profile = DeviceProfile(name: "Agent fixture", kind: .local,
+                                    socketPath: "/tmp/uherdr-agent-worktree-fixture.sock", executable: "/tmp/herdr")
         for failure in ["", "worktree.create", "agent.start"] {
             let client = FixtureClient(failure: failure)
-            let store = SessionStore(client: client)
+            let store = SessionStore(profile: profile, defaults: defaults, client: client)
+            store.connected = true
             store.panes = [try FixtureClient.source.decode(Pane.self)]
             store.selectedSpace = "other-space"
             store.selectedPane = "other-pane"
@@ -42,12 +41,23 @@ import HerdrCore
             precondition(!store.busy)
         }
         let client = FixtureClient(failure: "")
-        let store = SessionStore(client: client)
+        let store = SessionStore(profile: profile, defaults: defaults, client: client)
+        store.connected = true
         store.startAgent(paneID: "missing-pane", kind: "claude", name: "test-agent")
         try await settle(store)
         let calls = await client.calls
         precondition(calls.isEmpty, "Never fall back to the runtime's active workspace for a missing pane")
         precondition(store.operationError != nil)
+        let cancelledClient = FixtureClient(failure: "")
+        let cancelled = SessionStore(profile: profile, defaults: defaults, client: cancelledClient)
+        cancelled.connected = true
+        cancelled.panes = [try FixtureClient.source.decode(Pane.self)]
+        cancelled.startAgent(paneID: "source-pane", kind: "codex", name: "cancelled-agent")
+        cancelled.disconnect()
+        try await settle(cancelled)
+        let cancelledCalls = await cancelledClient.calls
+        precondition(cancelledCalls.isEmpty, "A queued agent launch must not create a worktree after disconnect")
+        precondition(!cancelled.busy)
         print("PASS: worktree agent launch, source pane targeting, creation/launch failures, and missing pane")
     }
 

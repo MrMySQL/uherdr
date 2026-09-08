@@ -5,10 +5,11 @@ private let mint = Color(red: 0.34, green: 0.73, blue: 0.58)
 
 struct WorkspaceView: View {
     @ObservedObject var store: SessionStore
+    @ObservedObject var devices: DeviceStore
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
     var body: some View {
         NavigationSplitView(columnVisibility: $sidebarVisibility) {
-            SidebarView(store: store)
+            DeviceSidebarView(devices: devices)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 360)
                 .toolbar(removing: .sidebarToggle)
         } detail: {
@@ -37,7 +38,7 @@ struct WorkspaceView: View {
                 statusBar
             }
             .background(Color(nsColor: .windowBackgroundColor))
-            .navigationTitle(store.currentSpace?.label ?? "Herdr")
+            .navigationTitle("\(store.profile.name) — \(store.currentSpace?.label ?? "Herdr")")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 2) {
@@ -74,6 +75,14 @@ struct WorkspaceView: View {
         .frame(minWidth: 840, minHeight: 520)
         .preferredColorScheme(store.colorScheme)
         .sheet(item: $store.sheet) { sheet in EditorSheet(sheet: sheet, store: store) }
+        .sheet(item: $devices.editor) { target in DeviceEditorSheet(target: target, devices: devices) }
+        .alert("Remove device?", isPresented: Binding(get: { devices.pendingRemoval != nil }, set: { if !$0 { devices.pendingRemoval = nil } })) {
+            Button("Cancel", role: .cancel) { devices.pendingRemoval = nil }
+            Button("Remove", role: .destructive) {
+                if let id = devices.pendingRemoval { devices.remove(id) }
+                devices.pendingRemoval = nil
+            }
+        } message: { Text("This removes the saved connection. Workspaces and running processes on the device are kept.") }
         .alert("Couldn’t complete the action", isPresented: Binding(get: { store.operationError != nil }, set: { if !$0 { store.operationError = nil } })) {
             Button("OK") { store.operationError = nil }
         } message: { Text(store.operationError ?? "") }
@@ -87,7 +96,7 @@ struct WorkspaceView: View {
             Text("Closing “\(store.pendingClose?.label ?? "")” terminates its terminals and running agents. You can quit Herdr instead to keep them running.")
         }
         .background(WindowAccessor())
-        .task { store.start() }
+        .task { devices.start() }
     }
 
     private func compactToolbarButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
@@ -137,6 +146,7 @@ struct WorkspaceView: View {
     private var statusBar: some View {
         HStack(spacing: 8) {
             Circle().fill(store.connected ? mint : Color.orange).frame(width: 6, height: 6)
+            Text(store.profile.name)
             Text(store.connected ? "Connected to herdr \(store.version)" : store.connecting ? "Connecting…" : "Disconnected")
             Spacer()
             if store.connected {
@@ -164,8 +174,8 @@ struct WorkspaceView: View {
     private var connectionView: some View {
         VStack(spacing: 18) {
             Image(systemName: "square.split.2x2").font(.system(size: 50, weight: .ultraLight)).foregroundStyle(mint)
-            Text("Your agents. One workspace.").font(.system(size: 26, weight: .medium))
-            Text("Connect to herdr to bring your spaces, tabs, and terminals together.")
+            Text(store.profile.name).font(.system(size: 26, weight: .medium))
+            Text(store.isRemote ? "Connect over SSH to see this device’s workspaces." : "Connect to herdr on this Mac to see your workspaces.")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
             if let error = store.connectionError {
                 Text(error).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
@@ -173,129 +183,17 @@ struct WorkspaceView: View {
                     .padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
             }
             HStack {
-                Button("Connection settings…") { store.sheet = .settings }
-                Button("Start server") { store.startServer() }.buttonStyle(.borderedProminent)
+                Button("Edit device…") { devices.editor = DeviceEditorTarget(profile: store.profile) }
+                Button(store.connecting ? "Connecting…" : "Connect") { store.reconnect() }.disabled(store.connecting)
+                if !store.isRemote {
+                    Button("Start server") { store.startServer(); store.reconnect() }.buttonStyle(.borderedProminent)
+                }
             }
             Text("Your sessions keep running when you close this app.").font(.caption).foregroundStyle(.tertiary)
         }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-struct SidebarView: View {
-    @ObservedObject var store: SessionStore
-    @State private var search = ""
-    @StateObject private var commandKey = CommandKeyMonitor()
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 9) {
-                Image(systemName: "square.split.2x2.fill").foregroundStyle(mint).font(.system(size: 24))
-                Text("herdr").font(.system(size: 25, weight: .semibold, design: .rounded))
-                Spacer()
-                Text("NATIVE").font(.system(size: 8, weight: .bold, design: .monospaced)).tracking(1.4).foregroundStyle(.tertiary)
-            }.padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 20)
-            Picker("Sidebar", selection: $store.sidebarMode) {
-                Text("Spaces").tag("spaces")
-                Text("Agents\(store.attentionCount > 0 ? " · \(store.attentionCount)" : "")").tag("agents")
-            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 12)
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.tertiary)
-                TextField(store.sidebarMode == "spaces" ? "Find a space" : "Find an agent", text: $search).textFieldStyle(.plain)
-            }.font(.system(size: 11)).padding(9).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6)).padding(12)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 5) {
-                    if store.sidebarMode == "spaces" {
-                        Text("YOUR SPACES").font(.system(size: 9, weight: .semibold)).tracking(1.5).foregroundStyle(.tertiary).padding(.horizontal, 10).padding(.bottom, 6)
-                        ForEach(store.workspaces.filter { search.isEmpty || $0.label.localizedCaseInsensitiveContains(search) }) { space in
-                            spaceRow(space)
-                        }
-                        if store.workspaces.isEmpty { Text("Your spaces will appear here.").font(.caption).foregroundStyle(.tertiary).padding(10) }
-                    } else {
-                        Text("AGENT ACTIVITY").font(.system(size: 9, weight: .semibold)).tracking(1.5).foregroundStyle(.tertiary).padding(.horizontal, 10).padding(.bottom, 6)
-                        ForEach(store.agents.filter { search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search) }) { agent in
-                            Button { store.revealAgent(agent) } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "sparkles").foregroundStyle(mint)
-                                        Text(agent.displayName).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                                        Spacer(minLength: 0)
-                                    }.frame(height: 18)
-                                    HStack(spacing: 6) {
-                                        Text(store.workspaces.first { $0.id == agent.workspaceID }?.label ?? "Space")
-                                            .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                                        Spacer(minLength: 0)
-                                        StatusBadge(status: agent.agentStatus)
-                                            .fixedSize()
-                                    }
-                                }.padding(.horizontal, 8).padding(.vertical, 6)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
-                                    .background(store.selectedPane == agent.paneID ? mint.opacity(0.12) : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
-                            }.buttonStyle(.plain)
-                        }
-                        if store.agents.isEmpty {
-                            VStack(alignment: .leading, spacing: 7) {
-                                Text("No agents yet").font(.system(size: 12, weight: .medium))
-                                Text("Start an agent in a terminal. Its activity will appear here automatically.").font(.caption).foregroundStyle(.secondary)
-                            }.padding(10)
-                        }
-                    }
-                }.padding(.horizontal, 10)
-            }
-            Spacer(minLength: 8)
-            Divider()
-            Button { store.sheet = .space } label: {
-                HStack { Image(systemName: "plus"); Text("New space"); Spacer(); Text("⌘N").foregroundStyle(.tertiary) }
-                    .font(.system(size: 11))
-                    .padding(.horizontal, 12).frame(height: 28)
-                    .contentShape(Rectangle())
-            }.buttonStyle(.plain).disabled(!store.connected || store.busy)
-        }
-        .onAppear { commandKey.start() }
-        .onDisappear { commandKey.stop() }
-    }
-
-    private func spaceRow(_ space: Workspace) -> some View {
-        let selected = store.selectedSpace == space.id
-        let spaceAgents = store.agents.filter { $0.workspaceID == space.id }
-        return Button { store.selectSpace(space) } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Image(systemName: selected ? "folder.fill" : "folder").foregroundStyle(selected ? mint : .secondary)
-                    Text(space.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                    Spacer(minLength: 0)
-                    if space.agentStatus == .working || space.agentStatus == .blocked || space.agentStatus == .done { StatusDot(status: space.agentStatus) }
-                    if let index = store.workspaces.firstIndex(where: { $0.id == space.id }), index < 9 {
-                        Text("⌘\(index + 1)")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(mint)
-                            .frame(width: 30, height: 18)
-                            .background(mint.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
-                            .opacity(commandKey.isHeld ? 1 : 0)
-                            .accessibilityLabel("Command \(index + 1)")
-                            .accessibilityHidden(!commandKey.isHeld)
-                    }
-                }
-                HStack(spacing: 6) {
-                    Text("\(space.tabCount) tabs")
-                    Text("·")
-                    Text("\(space.paneCount) panes")
-                    Spacer()
-                    if !spaceAgents.isEmpty { Image(systemName: "sparkles"); Text("\(spaceAgents.count)") }
-                }.font(.system(size: 10)).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .background(selected ? mint.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? mint.opacity(0.25) : Color.clear) }
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button("Rename space…") { store.sheet = .rename(ResourceTarget(kind: "workspace", id: space.id, label: space.label)) }
-            Button("Close space…", role: .destructive) { store.pendingClose = ResourceTarget(kind: "workspace", id: space.id, label: space.label) }
-        }
-    }
-}
 
 struct StatusDot: View {
     let status: AgentStatus

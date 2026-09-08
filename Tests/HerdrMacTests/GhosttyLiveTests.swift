@@ -15,9 +15,14 @@ enum GhosttyLiveTests {
         ])
         let workspace = try created["workspace"].decode(Workspace.self)
         let pane = try created["root_pane"].decode(Pane.self)
-        let store = SessionStore()
-        store.socketPath = socket
-        store.executable = executable
+        let suiteName = "dev.herdr.ghostty-live-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let devices = DeviceStore(defaults: defaults, profiles: [
+            DeviceProfile(name: "Ghostty test", kind: .local, socketPath: socket, executable: executable)
+        ])
+        let store = devices.activeSession
+        defer { devices.stop() }
         store.selectedPane = pane.id
         let transport = HerdrMac.TerminalController()
         let host = NSHostingView(rootView: AnyView(HerdrMac.TerminalSurface(
@@ -74,7 +79,8 @@ enum GhosttyLiveTests {
             let existing = try await client.request("pane.get", params: ["pane_id": .string(pane.id)])
             precondition(existing["pane"]["pane_id"].string == pane.id)
             print("PASS: SwiftUI teardown detaches without closing the server pane")
-            try await checkZoom(client: client, store: store, workspace: workspace, pane: pane)
+            try await checkZoom(client: client, devices: devices, workspace: workspace, pane: pane)
+            try await checkRemote(socket: socket, executable: executable, pane: pane, defaults: defaults)
             _ = try await client.request("workspace.close", params: ["workspace_id": .string(workspace.id)])
         } catch {
             host.rootView = AnyView(EmptyView())
@@ -84,8 +90,53 @@ enum GhosttyLiveTests {
         }
     }
 
-    @MainActor private static func checkZoom(client: HerdrClient, store: SessionStore,
+    @MainActor private static func checkRemote(socket: String, executable: String, pane: Pane, defaults: UserDefaults) async throws {
+        let fixture = FileManager.default.currentDirectoryPath + "/Tests/Fixtures/ssh-fixture.py"
+        let remote = SessionStore(
+            profile: DeviceProfile(name: "Remote Ghostty", host: "fixture.test", socketPath: socket, executable: executable),
+            defaults: defaults, tunnel: SSHTunnel(sshExecutable: fixture)
+        )
+        defer { remote.disconnect() }
+        await remote.refresh()
+        guard remote.connected else { throw HerdrError.message(remote.connectionError ?? "Remote fixture did not connect") }
+        remote.selectedPane = pane.id
+        let transport = HerdrMac.TerminalController()
+        let host = NSHostingView(rootView: AnyView(HerdrMac.TerminalSurface(
+            controller: transport, pane: pane, store: remote, dark: true
+        )))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 400),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { host.rootView = AnyView(EmptyView()); transport.stop(); window.orderOut(nil) }
+        func waitFor(_ predicate: () -> Bool) async throws {
+            for _ in 0..<100 {
+                if predicate() { return }
+                if let error = transport.error { throw HerdrError.message(error) }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            throw HerdrError.message("Remote Ghostty terminal timed out")
+        }
+        try await waitFor { transport.ready }
+        let usageMarker = DeviceProfile.clientSocketPath(for: remote.effectiveSocketPath) + ".used"
+        precondition(FileManager.default.fileExists(atPath: usageMarker), "The Ghostty coordinator must connect through the device tunnel, not directly to its configured remote path")
+        func terminal(in root: NSView) -> HerdrTerminalView? {
+            if let view = root as? HerdrTerminalView { return view }
+            return root.subviews.compactMap { terminal(in: $0) }.first
+        }
+        guard let view = terminal(in: host), case .inMemory(let session) = view.configuration.backend else {
+            throw HerdrError.message("Remote Ghostty surface did not mount")
+        }
+        window.makeFirstResponder(view)
+        precondition(view.paste(text: "printf 'ghostty-remote-%s\\n' ok"))
+        precondition(view.sendKey(.enter))
+        try await waitFor { session.readViewportText()?.contains("ghostty-remote-ok") == true }
+        print("PASS: production Ghostty bridge uses the device tunnel for remote terminal input and output")
+    }
+
+    @MainActor private static func checkZoom(client: HerdrClient, devices: DeviceStore,
                                             workspace: Workspace, pane: Pane) async throws {
+        let store = devices.activeSession
         let right = try await client.request("pane.split", params: [
             "target_pane_id": .string(pane.id), "direction": .string("right"), "focus": .bool(false)
         ])["pane"].decode(Pane.self)
@@ -94,7 +145,7 @@ enum GhosttyLiveTests {
         ])["pane"].decode(Pane.self)
         store.reconnect()
         store.selectSpace(workspace)
-        let host = NSHostingView(rootView: AnyView(WorkspaceView(store: store)))
+        let host = NSHostingView(rootView: AnyView(WorkspaceView(store: store, devices: devices)))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.contentView = host
