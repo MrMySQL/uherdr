@@ -18,13 +18,8 @@ struct WorkspaceView: View {
                         tabStrip
                         Divider()
                         if let layout = store.currentLayout, let tabID = store.selectedTab {
-                            Group {
-                                if layout.zoomed, let id = layout.focusedPaneID, let pane = store.panes.first(where: { $0.id == id }) {
-                                    PaneCard(pane: pane, store: store, zoomed: true).id(pane.terminalID)
-                                } else {
-                                    SplitTree(node: layout.root, tabID: tabID, path: [], store: store)
-                                }
-                            }
+                            SplitTree(node: layout.root, tabID: tabID, path: [], store: store,
+                                      zoomedPaneID: layout.zoomed ? layout.resolveSelectedPane(nil) : nil)
                             .id(store.connectionGeneration)
                             .padding(8)
                         } else {

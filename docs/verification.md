@@ -58,3 +58,16 @@ a disposable Herdr server through the production SwiftUI bridge:
 These checks use shell fixtures, not an interactive Claude Code session.
 The vendored wrapper's provenance and two local compatibility changes are
 documented in `Vendor/GhosttyTerminal/README.md`.
+
+## Pane zoom — 2026-09-08
+
+Zoom and restore keep the split tree and its terminal surfaces mounted, changing
+pane geometry and visibility without reconnecting the streams. Hidden terminals
+stop rendering and ignore focus and mouse/scroll events.
+
+`bash scripts/test.sh` passed, including a live regression that repeats zoom and
+restore on a bottom-right nested pane, checks that all three native terminal views
+survive, and verifies restored split sizes, retained output, and subsequent input.
+The regression reproduced terminal recreation before the fix.
+`bash scripts/build-app.sh`, the strict code-signature check, and the app plist
+check passed for the updated `dist/Herdr.app`.

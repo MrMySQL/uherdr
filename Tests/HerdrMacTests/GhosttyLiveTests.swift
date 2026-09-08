@@ -115,11 +115,15 @@ enum GhosttyLiveTests {
         let originals = terminals(in: host)
         let frames = originals.map { $0.convert($0.bounds, to: host) }
         // The selected bottom-right leaf must expand through both split levels.
+        let target = originals.max { a, b in
+            let a = a.convert(a.bounds, to: host), b = b.convert(b.bounds, to: host)
+            if abs(a.midX - b.midX) > 2 { return a.midX < b.midX }
+            return host.isFlipped ? a.midY < b.midY : a.midY > b.midY
+        }!
         store.focusPane(bottom.id)
         try await waitFor("Nested pane did not receive focus") {
-            originals.contains { window.firstResponder === $0 }
+            window.firstResponder === target
         }
-        let target = originals.first { window.firstResponder === $0 }!
         guard case .inMemory(let session) = target.configuration.backend else {
             throw HerdrError.message("Expected the Herdr in-memory backend")
         }
@@ -137,7 +141,18 @@ enum GhosttyLiveTests {
                 throw HerdrError.message("Zoom recreated terminal views instead of preserving their live connections")
             }
             guard target.bounds.width > 800, target.bounds.height > 600 else {
-                throw HerdrError.message("Nested pane did not expand to fill the workspace")
+                throw HerdrError.message("Nested pane did not expand to fill the workspace: \(target.bounds)")
+            }
+            let hidden = originals.first { $0 !== target }!
+            let click = hidden.convert(NSPoint(x: hidden.bounds.midX, y: hidden.bounds.midY), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                NSApp.sendEvent(NSEvent.mouseEvent(with: type, location: click, modifierFlags: [],
+                                                  timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil,
+                                                  eventNumber: 0, clickCount: 1, pressure: 1)!)
+            }
+            guard store.selectedPane == bottom.id, window.firstResponder === target else {
+                throw HerdrError.message("A hidden pane intercepted a click on the zoomed terminal")
             }
             store.zoom(bottom.id)
             try await waitFor("Pane did not restore") { store.currentLayout?.zoomed == false }
