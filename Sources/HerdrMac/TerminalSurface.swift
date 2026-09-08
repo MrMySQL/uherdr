@@ -127,9 +127,12 @@ struct TerminalSurface: NSViewRepresentable {
     let pane: Pane
     @ObservedObject var store: SessionStore
     let dark: Bool
+    var visible = true
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(controller: controller, store: store, paneID: pane.id)
+        let coordinator = Coordinator(controller: controller, store: store, paneID: pane.id)
+        coordinator.visible = visible
+        return coordinator
     }
 
     func makeNSView(context: Context) -> HerdrTerminalView {
@@ -141,6 +144,7 @@ struct TerminalSurface: NSViewRepresentable {
         // launches a shell, whereas Herdr must retain ownership of every pane.
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(coordinator.bridge.session))
         view.controller = coordinator.engine
+        view.setSurfaceVisible(visible)
         view.onAttach = { [weak coordinator] in coordinator?.focusIfSelected() }
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
         controller.receive = { [weak bridge = coordinator.bridge] in bridge?.receive($0) }
@@ -151,8 +155,10 @@ struct TerminalSurface: NSViewRepresentable {
 
     func updateNSView(_ view: HerdrTerminalView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.visible = visible
+        view.setSurfaceVisible(visible)
         coordinator.updateAppearance(fontSize: store.fontSize, dark: dark)
-        let shouldFocus = store.selectedPane == pane.id
+        let shouldFocus = visible && store.selectedPane == pane.id
         if shouldFocus && !coordinator.wasSelected {
             DispatchQueue.main.async { [weak coordinator] in coordinator?.focusIfSelected() }
         }
@@ -201,6 +207,7 @@ struct TerminalSurface: NSViewRepresentable {
         var wasSelected = false
         var started = false
         var stopped = false
+        var visible = true
         var scrollRemainder: Double = 0
         private var fontSize: Double?
         private var dark: Bool?
@@ -235,7 +242,7 @@ struct TerminalSurface: NSViewRepresentable {
         }
 
         func focusIfSelected() {
-            guard !stopped, let view, let store, store.selectedPane == paneID,
+            guard !stopped, visible, let view, let store, store.selectedPane == paneID,
                   store.sheet == nil, store.pendingClose == nil else { return }
             view.acquireProgrammaticFocus()
         }
@@ -244,7 +251,7 @@ struct TerminalSurface: NSViewRepresentable {
             // Herdr owns the scrollback represented by its ANSI frames. Keep
             // wheel scrolling on the server, while Ghostty handles keys/mouse.
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown]) { [weak self] event in
-                guard let self, !self.stopped, let view = self.view,
+                guard let self, !self.stopped, self.visible, let view = self.view,
                       event.window === view.window,
                       view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return event }
                 if event.type == .leftMouseDown {
@@ -271,7 +278,7 @@ struct TerminalSurface: NSViewRepresentable {
         }
         func terminalDidDetachSurface() {}
         func terminalDidChangeFocus(_ focused: Bool) {
-            if focused { store?.focusPane(paneID) }
+            if focused && visible { store?.focusPane(paneID) }
         }
         func terminalDidRingBell() { NSSound.beep() }
         func terminalDidRequestOpenURL(_ text: String, kind: TerminalOpenURLKind) {
