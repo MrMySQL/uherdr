@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import GhosttyTerminal
+import GhosttyKit
 import HerdrCore
 
 @MainActor
@@ -305,6 +306,49 @@ final class HerdrTerminalView: AppTerminalView {
     var onAttach: (() -> Void)?
     var canAcceptFileDrop: () -> Bool = { false }
     private var surfaceVisible = true
+    private var plainLinkClick = false
+
+    override func mouseDown(with event: NSEvent) {
+        plainLinkClick = event.clickCount == 1 && !isMouseCaptured
+            && event.modifierFlags.isDisjoint(with: [.shift, .control, .option, .command])
+        if plainLinkClick {
+            let point = convert(event.locationInWindow, from: nil)
+            let modifiers = TerminalInputModifiers(from: event.modifierFlags).union(.super_)
+            // The embedded API ignores stationary mouse updates, even when
+            // modifiers changed. Reset hover before pressing any button.
+            sendMousePos(x: -1, y: -1, modifiers: modifiers)
+            sendMousePos(x: point.x, y: bounds.height - point.y, modifiers: modifiers)
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        plainLinkClick = false
+        super.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { plainLinkClick = false }
+        guard plainLinkClick, !isMouseCaptured,
+              event.modifierFlags.isDisjoint(with: [.shift, .control, .option, .command]) else {
+            super.mouseUp(with: event)
+            return
+        }
+
+        // Ghostty's URL and OSC 8 matchers require Command. Apply it only
+        // to plain clicks so matching uses the engine's real
+        // terminal cells and the existing default-browser URL delegate.
+        let point = convert(event.locationInWindow, from: nil)
+        let x = point.x, y = bounds.height - point.y
+        let modifiers = TerminalInputModifiers(from: event.modifierFlags)
+        sendMousePos(x: x, y: y, modifiers: modifiers.union(.super_))
+        sendMouseButton(state: GHOSTTY_MOUSE_RELEASE, button: GHOSTTY_MOUSE_LEFT,
+                        modifiers: modifiers.union(.super_))
+        // Restore hover and modifiers after release, when this cannot
+        // create a selection drag or report movement to a mouse consumer.
+        sendMousePos(x: -1, y: -1, modifiers: modifiers)
+        sendMousePos(x: x, y: y, modifiers: modifiers)
+    }
 
     override var acceptsFirstResponder: Bool { surfaceVisible }
 
