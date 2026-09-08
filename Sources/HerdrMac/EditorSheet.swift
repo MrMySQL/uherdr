@@ -70,7 +70,7 @@ struct EditorSheet: View {
     }
     private var agentFields: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("The agent starts in this pane’s existing shell and working directory.").font(.callout).foregroundStyle(.secondary)
+            Text("The agent starts in a new Git worktree and opens in its own space.").font(.callout).foregroundStyle(.secondary)
             Picker("Agent", selection: $kind) {
                 Text("Claude Code").tag("claude")
                 Text("Codex").tag("codex")
@@ -80,7 +80,7 @@ struct EditorSheet: View {
                 Text("Cursor").tag("cursor")
             }
             TextField("Agent name", text: $label).textFieldStyle(.roundedBorder).focused($fieldFocused)
-            Text("Use a unique lowercase name. Install the selected agent CLI first; the pane must be at an available shell prompt.").font(.caption).foregroundStyle(.secondary)
+            Text("Use a unique lowercase name. This pane’s folder must be in a Git repository. Install the selected agent CLI first.").font(.caption).foregroundStyle(.secondary)
         }
     }
     private var settingsFields: some View {

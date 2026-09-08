@@ -25,13 +25,13 @@ final class SessionStore: ObservableObject {
     @Published var executable: String
     @Published var appearance: String { didSet { UserDefaults.standard.set(appearance, forKey: "appearance") } }
     @Published var fontSize: Double { didSet { UserDefaults.standard.set(fontSize, forKey: "fontSize") } }
-    private var client: HerdrClient
+    private var client: any HerdrRequesting
     private var pollTask: Task<Void, Never>?
     private var refreshing = false
     private var serverProcess: Process?
     private var selectionRevision = 0
 
-    init() {
+    init(client: (any HerdrRequesting)? = nil) {
         let defaults = UserDefaults.standard
         let env = ProcessInfo.processInfo.environment
         let configHome = env["XDG_CONFIG_HOME"] ?? NSHomeDirectory() + "/.config"
@@ -40,7 +40,7 @@ final class SessionStore: ObservableObject {
         executable = defaults.string(forKey: "herdrExecutable") ?? Self.findExecutable()
         appearance = defaults.string(forKey: "appearance") ?? "system"
         fontSize = defaults.object(forKey: "fontSize") as? Double ?? 13
-        client = HerdrClient(socketPath: (socket as NSString).expandingTildeInPath)
+        self.client = client ?? HerdrClient(socketPath: (socket as NSString).expandingTildeInPath)
         selectedSpace = defaults.string(forKey: "selectedSpace:\(socket)")
         selectedTab = defaults.string(forKey: "selectedTab:\(socket)")
     }
@@ -221,7 +221,43 @@ final class SessionStore: ObservableObject {
         perform("\(target.kind).close", params: ["\(target.kind)_id": .string(target.id)])
     }
     func startAgent(paneID: String, kind: String, name: String) {
-        perform("agent.start", params: ["pane_id": .string(paneID), "kind": .string(kind), "name": .string(name), "timeout_ms": .number(30000)])
+        guard !busy else { return }
+        guard let pane = panes.first(where: { $0.id == paneID }), pane.directory.hasPrefix("/") else {
+            operationError = "Could not find the pane’s project folder. Refresh and try again."
+            return
+        }
+        let activeClient = client
+        let generation = connectionGeneration
+        let directory = pane.directory
+        busy = true
+        operationError = nil
+        Task {
+            defer { busy = false }
+            var createdWorktree = false
+            do {
+                let created = try await activeClient.request("worktree.create", params: [
+                    "cwd": .string(directory), "label": .string(name), "focus": .bool(true)
+                ], timeout: 60)
+                guard generation == connectionGeneration else { return }
+                createdWorktree = true
+                let rootPane = try created["root_pane"].decode(Pane.self)
+                selectionRevision += 1
+                selectedSpace = rootPane.workspaceID
+                selectedTab = rootPane.tabID
+                selectedPane = rootPane.id
+                await refresh()
+                guard generation == connectionGeneration else { return }
+                _ = try await activeClient.request("agent.start", params: [
+                    "pane_id": .string(rootPane.id), "kind": .string(kind),
+                    "name": .string(name), "timeout_ms": .number(30000)
+                ], timeout: 40)
+            } catch {
+                guard generation == connectionGeneration else { return }
+                operationError = error.localizedDescription
+            }
+            guard generation == connectionGeneration else { return }
+            if createdWorktree { await refresh() }
+        }
     }
 
     func startServer() {

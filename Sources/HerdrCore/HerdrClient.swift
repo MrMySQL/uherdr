@@ -1,8 +1,18 @@
 import Foundation
 import Darwin
 
+public protocol HerdrRequesting: Sendable {
+    func request(_ method: String, params: [String: JSONValue], timeout: Int) async throws -> JSONValue
+}
+
+public extension HerdrRequesting {
+    func request(_ method: String, params: [String: JSONValue] = [:]) async throws -> JSONValue {
+        try await request(method, params: params, timeout: 8)
+    }
+}
+
 /// Requests are serialized off the UI thread. Each has its own socket and bounded deadline.
-public final class HerdrClient: @unchecked Sendable {
+public final class HerdrClient: HerdrRequesting, @unchecked Sendable {
     public let socketPath: String
     private let queue = DispatchQueue(label: "dev.herdr.native.api", qos: .userInitiated)
     public init(socketPath: String) { self.socketPath = socketPath }
