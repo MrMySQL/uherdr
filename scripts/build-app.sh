@@ -23,6 +23,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSHighResolutionCapable</key><true/>
 <key>CFBundleIconFile</key><string>Herdr</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
+<key>UTExportedTypeDeclarations</key><array><dict>
+<key>UTTypeIdentifier</key><string>dev.herdr.native.pane</string>
+<key>UTTypeDescription</key><string>Herdr pane</string>
+<key>UTTypeConformsTo</key><array><string>public.data</string></array>
+</dict></array>
 </dict></plist>
 PLIST
 cp Vendor/GhosttyTerminal/LICENSE "$APP/Contents/Resources/GhosttyTerminal-LICENSE"

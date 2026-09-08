@@ -1,5 +1,16 @@
 import SwiftUI
 import HerdrCore
+import UniformTypeIdentifiers
+
+private extension UTType {
+    static let herdrPane = UTType(exportedAs: "dev.herdr.native.pane", conformingTo: .data)
+}
+
+extension PaneDragPayload: Transferable {
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .herdrPane)
+    }
+}
 
 struct SplitTree: View {
     let node: LayoutNode
@@ -115,17 +126,36 @@ struct PaneCard: View {
     let zoomed: Bool
     var visible = true
     @StateObject private var controller = TerminalController()
+    @StateObject private var drop = PaneDropState()
     @Environment(\.colorScheme) private var colorScheme
     private var selected: Bool { store.selectedPane == pane.id }
     private var target: ResourceTarget { ResourceTarget(kind: "pane", id: pane.id, label: pane.displayTitle) }
     var body: some View {
+        GeometryReader { geometry in
+            card
+                .overlay(alignment: .topLeading) {
+                    if let edge = drop.edge, visible, store.paneDragPayload(for: pane.id) != nil {
+                        let rect = edge.preview(in: geometry.size)
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.accentColor.opacity(0.25))
+                            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor, lineWidth: 2) }
+                            .frame(width: rect.width, height: rect.height)
+                            .offset(x: rect.minX, y: rect.minY)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .onDrop(of: [.herdrPane], delegate: PaneDockDropDelegate(
+                    paneID: pane.id, size: geometry.size, visible: visible, store: store, state: drop
+                ))
+        }
+        .onChange(of: visible) { _, visible in if !visible { drop.reset() } }
+        .onDisappear { drop.reset() }
+    }
+
+    private var card: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: pane.agent == nil ? "terminal" : "sparkles")
-                    .font(.system(size: 10)).foregroundStyle(selected ? Color.accentColor : .secondary)
-                Text(pane.displayTitle).font(.system(size: 11, weight: .medium)).lineLimit(1)
-                if pane.agent != nil { StatusBadge(status: pane.agentStatus) }
-                Spacer(minLength: 4)
+                draggableTitle
                 Button { store.zoom(pane.id) } label: { Image(systemName: zoomed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
                     .buttonStyle(.plain).help(zoomed ? "Restore split layout" : "Zoom pane")
                 Menu {
@@ -175,5 +205,145 @@ struct PaneCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1) }
+    }
+
+    @ViewBuilder private var draggableTitle: some View {
+        if visible, let payload = store.paneDragPayload(for: pane.id) {
+            paneTitle.draggable(payload) {
+                Label(pane.displayTitle, systemImage: "terminal")
+                    .font(.system(size: 12, weight: .medium))
+                    .padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            }
+        } else {
+            paneTitle
+        }
+    }
+
+    private var paneTitle: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 9)).foregroundStyle(.tertiary)
+            Image(systemName: pane.agent == nil ? "terminal" : "sparkles")
+                .font(.system(size: 10)).foregroundStyle(selected ? Color.accentColor : .secondary)
+            Text(pane.displayTitle).font(.system(size: 11, weight: .medium)).lineLimit(1)
+            if pane.agent != nil { StatusBadge(status: pane.agentStatus) }
+            Spacer(minLength: 4)
+        }
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .help("Drag to a pane’s top, bottom, left, or right edge to move it")
+        .accessibilityHint("Drag to a pane’s top, bottom, left, or right edge to move it")
+    }
+}
+
+@MainActor
+final class PaneDropState: ObservableObject {
+    private static let activePreviews = NSHashTable<PaneDropState>.weakObjects()
+
+    @Published var edge: PaneDockEdge? {
+        didSet {
+            if edge == nil {
+                Self.activePreviews.remove(self)
+                if let monitor { NSEvent.removeMonitor(monitor) }
+                monitor = nil
+                releaseTimer?.invalidate()
+                releaseTimer = nil
+            } else if monitor == nil {
+                Self.activePreviews.add(self)
+                // AppKit can cancel a native drag without calling dropExited.
+                monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .leftMouseUp]) { [weak self] event in
+                    self?.handleEndingEvent(event)
+                    return event
+                }
+                if #unavailable(macOS 26.0) {
+                    // Older SwiftUI has no drag-session completion callback.
+                    // Read button state even when native dragging consumes mouseUp.
+                    let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+                        MainActor.assumeIsolated {
+                            guard self != nil else { timer.invalidate(); return }
+                            if NSEvent.pressedMouseButtons & 1 == 0 { Self.endDrag() }
+                        }
+                    }
+                    releaseTimer = timer
+                    RunLoop.main.add(timer, forMode: .common)
+                    RunLoop.main.add(timer, forMode: .eventTracking)
+                }
+            }
+        }
+    }
+    private var monitor: Any?
+    private var releaseTimer: Timer?
+
+    static func endDrag() {
+        for preview in activePreviews.allObjects { preview.reset() }
+    }
+
+    func handleEndingEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown || event.type == .leftMouseUp || (event.type == .keyDown && event.keyCode == 53) {
+            Self.endDrag()
+        }
+    }
+
+    func reset() {
+        edge = nil
+    }
+}
+
+struct PaneDragLifecycle: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.onDragSessionUpdated { session in
+                if case .ended = session.phase { PaneDropState.endDrag() }
+            }
+        } else {
+            content
+        }
+    }
+}
+
+
+struct PaneDockDropDelegate: DropDelegate {
+    let paneID: String
+    let size: CGSize
+    let visible: Bool
+    let store: SessionStore
+    let state: PaneDropState
+
+    func validateDrop(info: DropInfo) -> Bool {
+        visible && store.paneDragPayload(for: paneID) != nil
+            && info.hasItemsConforming(to: [.herdrPane])
+    }
+
+    func dropEntered(info: DropInfo) {
+        updatePreview(location: info.location, hasPaneItems: info.hasItemsConforming(to: [.herdrPane]))
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        updatePreview(location: info.location, hasPaneItems: info.hasItemsConforming(to: [.herdrPane]))
+        return DropProposal(operation: state.edge != nil ? .move : .cancel)
+    }
+
+    func dropExited(info: DropInfo) { state.reset() }
+
+    func performDrop(info: DropInfo) -> Bool {
+        PaneDropState.endDrag()
+        let providers = info.itemProviders(for: [.herdrPane])
+        guard validateDrop(info: info), let edge = PaneDockEdge.at(info.location, in: size),
+              providers.count == 1, let provider = providers.first else { return false }
+        // macOS permits access to provider contents only during performDrop.
+        // The hover preview uses type metadata and pointer geometry instead.
+        _ = provider.loadTransferable(type: PaneDragPayload.self) { result in
+            Task { @MainActor in
+                guard case .success(let source) = result else { return }
+                store.movePane(source, to: paneID, edge: edge)
+            }
+        }
+        return true
+    }
+
+    func updatePreview(location: CGPoint, hasPaneItems: Bool) {
+        if visible, hasPaneItems, store.paneDragPayload(for: paneID) != nil {
+            state.edge = PaneDockEdge.at(location, in: size)
+        } else { state.edge = nil }
     }
 }

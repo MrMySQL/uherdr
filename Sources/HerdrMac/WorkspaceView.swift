@@ -19,6 +19,7 @@ struct WorkspaceView: View {
                         tabStrip
                         Divider()
                         terminalDeck
+                            .modifier(PaneDragLifecycle())
                             .id(store.connectionGeneration)
                             .padding(8)
                     } else {

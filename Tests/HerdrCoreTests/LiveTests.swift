@@ -27,6 +27,17 @@ enum LiveTests {
             guard case .split(_, _, _, let second) = updated.root, case .split(let direction, let ratio, _, _) = second else { throw HerdrError.message("Wrong nested layout") }
             XCTAssertEqual(direction, .down)
             XCTAssertTrue(abs(ratio - 0.65) < 0.001)
+            _ = try await client.request("pane.swap", params: ["source_pane_id": .string(pane.id), "target_pane_id": .string(bottomPane.id)])
+            let swapped = try await client.request("layout.export", params: ["tab_id": .string(tab.id)])["layout"].decode(TabLayout.self)
+            guard case .split(let outerDirection, let outerRatio, _, _) = updated.root else { throw HerdrError.message("Missing outer split") }
+            XCTAssertEqual(swapped.root, .split(outerDirection, outerRatio, .pane(bottomPane.id),
+                                               .split(.down, 0.65, .pane(rightPane.id), .pane(pane.id))))
+            let afterSwap = try await client.request("session.snapshot")["snapshot"].decode(SessionSnapshot.self)
+            for original in [pane, rightPane, bottomPane] {
+                XCTAssertEqual(afterSwap.panes.first { $0.id == original.id }?.terminalID, original.terminalID)
+            }
+            // Restore the original ordering before checking collapse below.
+            _ = try await client.request("pane.swap", params: ["source_pane_id": .string(pane.id), "target_pane_id": .string(bottomPane.id)])
             _ = try await client.request("pane.send_input", params: ["pane_id": .string(bottomPane.id), "text": .string("printf 'native-client-%s\\n' verified"), "keys": .array([.string("enter")])])
             var matched = false
             for _ in 0..<30 {
@@ -53,7 +64,7 @@ enum LiveTests {
             let collapsed = try await client.request("layout.export", params: ["tab_id": .string(tab.id)])
             XCTAssertEqual(try collapsed["layout"].decode(TabLayout.self).root.paneIDs, [pane.id, rightPane.id])
             _ = try await client.request("workspace.close", params: ["workspace_id": .string(space.id)])
-            print("PASS: live snapshot, workspace/tab lifecycle, nested splits, resize, shell input/output, agent status, rename, and collapse")
+            print("PASS: live snapshot, workspace/tab lifecycle, nested splits, resize, pane swaps, terminal identity, shell input/output, agent status, rename, and collapse")
         } catch {
             _ = try? await client.request("workspace.close", params: ["workspace_id": .string(space.id)])
             throw error
