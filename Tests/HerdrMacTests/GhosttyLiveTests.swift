@@ -266,5 +266,63 @@ enum GhosttyLiveTests {
         await store.refresh()
         try await waitFor("Closed tab retained its terminal stream") { other.controller == nil }
         print("PASS: tab switching preserves terminal instances, content, geometry and focus; closing releases them")
+
+        // macOS exposes provider contents only in performDrop. Hover feedback
+        // must be available synchronously, with no decoded source payload.
+        try await waitFor("Pane layout unavailable for preview") { store.paneDragPayload(for: bottom.id) != nil }
+        let preview = PaneDropState()
+        let previewDelegate = PaneDockDropDelegate(paneID: bottom.id, size: CGSize(width: 400, height: 200),
+                                                   visible: true, store: store, state: preview)
+        for (point, edge) in [(CGPoint(x: 200, y: 5), PaneDockEdge.top),
+                              (CGPoint(x: 5, y: 100), .left),
+                              (CGPoint(x: 395, y: 100), .right),
+                              (CGPoint(x: 200, y: 195), .bottom)] {
+            previewDelegate.updatePreview(location: point, hasPaneItems: true)
+            precondition(preview.edge == edge, "Preview must appear and follow the pointer before drop data is available")
+        }
+        previewDelegate.updatePreview(location: CGPoint(x: 200, y: 5), hasPaneItems: false)
+        precondition(preview.edge == nil, "File and text drags must not show a pane preview")
+        previewDelegate.updatePreview(location: CGPoint(x: 401, y: 100), hasPaneItems: true)
+        precondition(preview.edge == nil, "Leaving the pane must clear the preview")
+        previewDelegate.updatePreview(location: CGPoint(x: 200, y: 5), hasPaneItems: true)
+        preview.reset()
+        precondition(preview.edge == nil, "Ending a drag must clear its preview")
+        previewDelegate.updatePreview(location: CGPoint(x: 200, y: 5), hasPaneItems: true)
+        let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                      windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+                                      charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+        preview.handleEndingEvent(escape)
+        precondition(preview.edge == nil, "Escape must clear feedback even when AppKit omits dropExited")
+        // Native dragging can consume mouseUp and omit dropExited on a view
+        // crossed earlier. Session completion must clear every visited pane.
+        let previousTarget = PaneDropState()
+        previousTarget.edge = .left
+        preview.edge = .top
+        PaneDropState.endDrag()
+        precondition(preview.edge == nil && previousTarget.edge == nil,
+                     "Ending the native drag must clear all previews without mouse or exit callbacks")
+        print("PASS: pane preview appears before payload loading, tracks all edges, and clears correctly")
+
+        for (index, edge) in PaneDockEdge.allCases.enumerated() {
+            try await waitFor("Pane layout unavailable for docking") { store.paneDragPayload(for: pane.id) != nil }
+            precondition(store.movePane(store.paneDragPayload(for: pane.id)!, to: bottom.id, edge: edge))
+            try await waitFor("Pane docking did not finish") { !store.busy }
+            if let error = store.operationError { throw HerdrError.message(error) }
+            try await waitFor("Docked terminal did not regain keyboard focus") {
+                store.selectedPane == pane.id && terminals(in: host).count == 3
+                    && (window.firstResponder as? HerdrTerminalView)?.canAcceptFileDrop() == true
+            }
+            guard let moved = window.firstResponder as? HerdrTerminalView,
+                  case .inMemory(let movedSession) = moved.configuration.backend else {
+                throw HerdrError.message("Missing docked terminal renderer")
+            }
+            let marker = "dock-renderer-\(index)-ok"
+            precondition(moved.paste(text: "printf 'dock-renderer-\(index)-%s\\n' ok"))
+            precondition(moved.sendKey(.enter))
+            try await waitFor("Docked terminal did not accept input: \(edge)") {
+                movedSession.readViewportText()?.contains(marker) == true
+            }
+        }
+        print("PASS: repeated four-edge docking preserves live terminal input, rendering, and focus")
     }
 }

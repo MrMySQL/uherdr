@@ -1,6 +1,37 @@
 import SwiftUI
 import HerdrCore
 
+struct PaneDragPayload: Codable, Equatable, Sendable {
+    let deviceID: UUID
+    let connectionGeneration: UUID
+    let tabID: String
+    let paneID: String
+}
+
+enum PaneDockEdge: CaseIterable {
+    case left, right, top, bottom
+
+    static func at(_ point: CGPoint, in size: CGSize) -> Self? {
+        guard size.width > 0, size.height > 0,
+              point.x >= 0, point.x <= size.width, point.y >= 0, point.y <= size.height else { return nil }
+        let x = point.x / size.width, y = point.y / size.height
+        if min(point.x, size.width - point.x) < min(point.y, size.height - point.y) { return x < 0.5 ? .left : .right }
+        return y < 0.5 ? .top : .bottom
+    }
+
+    func preview(in size: CGSize) -> CGRect {
+        switch self {
+        case .left: return CGRect(x: 0, y: 0, width: size.width / 2, height: size.height)
+        case .right: return CGRect(x: size.width / 2, y: 0, width: size.width / 2, height: size.height)
+        case .top: return CGRect(x: 0, y: 0, width: size.width, height: size.height / 2)
+        case .bottom: return CGRect(x: 0, y: size.height / 2, width: size.width, height: size.height / 2)
+        }
+    }
+
+    var splitDirection: SplitDirection { self == .left || self == .right ? .right : .down }
+    var insertsBefore: Bool { self == .left || self == .top }
+}
+
 @MainActor
 final class SessionStore: ObservableObject {
     @Published var workspaces: [Workspace] = []
@@ -38,6 +69,8 @@ final class SessionStore: ObservableObject {
     private var refreshingGeneration: UUID?
     private var serverProcess: Process?
     private var selectionRevision = 0
+    private var paneMoveID: UUID?
+    private var layoutRevision = 0
 
     init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil) {
         self.profile = profile
@@ -87,6 +120,7 @@ final class SessionStore: ObservableObject {
     func disconnect() {
         pollTask?.cancel(); pollTask = nil
         connectionGeneration = UUID()
+        paneMoveID = nil
         tunnel.stop()
         suspended = true; connected = false; connecting = false; busy = false
         if isRemote { effectiveSocketPath = "" }
@@ -101,7 +135,7 @@ final class SessionStore: ObservableObject {
     }
 
     func refresh() async {
-        guard !suspended, refreshingGeneration != connectionGeneration, Date() >= retryAfter else { return }
+        guard !suspended, paneMoveID == nil, refreshingGeneration != connectionGeneration, Date() >= retryAfter else { return }
         let generation = connectionGeneration
         refreshingGeneration = generation
         connecting = !connected
@@ -110,6 +144,7 @@ final class SessionStore: ObservableObject {
             if connectionGeneration == generation { connecting = false }
         }
         let revision = selectionRevision
+        let expectedLayoutRevision = layoutRevision
         do {
             let path: String
             if isRemote {
@@ -124,7 +159,7 @@ final class SessionStore: ObservableObject {
             let activeClient = client
             let response = try await activeClient.request("session.snapshot")
             let snapshot = try response["snapshot"].decode(SessionSnapshot.self)
-            guard generation == connectionGeneration, !Task.isCancelled else { return }
+            guard generation == connectionGeneration, !Task.isCancelled, expectedLayoutRevision == layoutRevision else { return }
             version = snapshot.version
             if workspaces != snapshot.workspaces { workspaces = snapshot.workspaces }
             if tabs != snapshot.tabs { tabs = snapshot.tabs }
@@ -144,7 +179,7 @@ final class SessionStore: ObservableObject {
             if let tabID = selectedTab {
                 let result = try await activeClient.request("layout.export", params: ["tab_id": .string(tabID)])
                 let layout = try result["layout"].decode(TabLayout.self)
-                guard generation == connectionGeneration, !Task.isCancelled else { return }
+                guard generation == connectionGeneration, !Task.isCancelled, expectedLayoutRevision == layoutRevision else { return }
                 if layouts[tabID] != layout { layouts[tabID] = layout }
                 if selectedTab == tabID { selectedPane = layout.resolveSelectedPane(selectedPane) }
             }
@@ -152,7 +187,7 @@ final class SessionStore: ObservableObject {
             connectionError = nil
             persistSelection()
         } catch {
-            guard generation == connectionGeneration, !Task.isCancelled else { return }
+            guard generation == connectionGeneration, !Task.isCancelled, expectedLayoutRevision == layoutRevision else { return }
             connected = false
             connectionError = error.localizedDescription
             if isRemote { retryAfter = Date().addingTimeInterval(10) }
@@ -201,9 +236,9 @@ final class SessionStore: ObservableObject {
         let activeClient = client
         let generation = connectionGeneration
         Task {
+            defer { if showBusy, generation == connectionGeneration { busy = false } }
             guard generation == connectionGeneration, connected, !suspended else { return }
             if showBusy { busy = true }
-            defer { if showBusy, generation == connectionGeneration { busy = false } }
             do {
                 let result = try await activeClient.request(method, params: params, timeout: method == "agent.start" ? 40 : 8)
                 guard generation == connectionGeneration else { return }
@@ -245,6 +280,87 @@ final class SessionStore: ObservableObject {
 
     func setRatio(tabID: String, path: [Bool], ratio: Double) {
         perform("layout.set_split_ratio", params: ["tab_id": .string(tabID), "path": .array(path.map(JSONValue.bool)), "ratio": .number(min(0.9, max(0.1, ratio)))], showBusy: false)
+    }
+
+    func paneDragPayload(for paneID: String) -> PaneDragPayload? {
+        guard connected, !suspended, !busy, paneMoveID == nil, sheet == nil, pendingClose == nil,
+              let pane = panes.first(where: { $0.id == paneID }),
+              selectedTab == pane.tabID, let layout = layouts[pane.tabID],
+              !layout.zoomed, layout.root.paneIDs.contains(paneID), layout.root.paneIDs.count > 1 else { return nil }
+        return PaneDragPayload(deviceID: profile.id, connectionGeneration: connectionGeneration,
+                               tabID: pane.tabID, paneID: paneID)
+    }
+
+    func canMovePane(_ source: PaneDragPayload, to targetID: String) -> Bool {
+        source.paneID != targetID && paneDragPayload(for: source.paneID) == source
+            && paneDragPayload(for: targetID)?.tabID == source.tabID
+    }
+
+    @discardableResult
+    func movePane(_ source: PaneDragPayload, to targetID: String, edge: PaneDockEdge) -> Bool {
+        guard canMovePane(source, to: targetID), let pane = panes.first(where: { $0.id == source.paneID }) else { return false }
+        busy = true
+        operationError = nil
+        let activeClient = client, generation = connectionGeneration
+        let moveID = UUID()
+        paneMoveID = moveID
+        layoutRevision += 1
+        let revision = selectionRevision
+        Task {
+            defer {
+                if generation == connectionGeneration, paneMoveID == moveID || paneMoveID == nil { busy = false }
+                if paneMoveID == moveID { paneMoveID = nil }
+            }
+            guard generation == connectionGeneration, connected, !suspended else { return }
+            var parkingTabID: String?
+            do {
+                // Herdr 0.8.x treats same-tab pane.move as a no-op. Transfer via
+                // a temporary tab; moving its last pane back closes it safely.
+                // Suppress intermediate polling so the mounted terminals stay put.
+                let parked = try await activeClient.request("pane.move", params: [
+                    "pane_id": .string(source.paneID), "focus": .bool(false),
+                    "destination": .object(["type": .string("new_tab"),
+                                            "workspace_id": .string(pane.workspaceID), "label": .string(pane.displayTitle)])
+                ])
+                guard generation == connectionGeneration, !suspended else { return }
+                parkingTabID = parked["move_result"]["pane"]["tab_id"].string
+                _ = try await activeClient.request("pane.move", params: [
+                    "pane_id": .string(source.paneID), "focus": .bool(true),
+                    "destination": .object([
+                        "type": .string("tab"), "tab_id": .string(source.tabID),
+                        "target_pane_id": .string(targetID),
+                        "split": .string(edge.splitDirection.rawValue), "ratio": .number(0.5)
+                    ])
+                ])
+                guard generation == connectionGeneration, !suspended else { return }
+                parkingTabID = nil
+                // Herdr inserts after the target. Reverse only the newly created
+                // pair for top/left docking; the source's old split has collapsed.
+                if edge.insertsBefore {
+                    _ = try await activeClient.request("pane.swap", params: [
+                        "source_pane_id": .string(source.paneID), "target_pane_id": .string(targetID)
+                    ])
+                }
+                guard generation == connectionGeneration else { return }
+                if revision == selectionRevision, selectedTab == source.tabID { selectedPane = source.paneID }
+            } catch {
+                guard generation == connectionGeneration else { return }
+                operationError = error.localizedDescription
+            }
+            if let parkingTabID, generation == connectionGeneration {
+                operationError = (operationError ?? "Could not finish moving the pane.") + "\nThe terminal has not been closed. Check its tab before retrying."
+                if revision == selectionRevision {
+                    selectedSpace = pane.workspaceID
+                    selectedTab = parkingTabID
+                    selectedPane = source.paneID
+                }
+            }
+            // Fetch the final tree even after failure; never close a temporary
+            // tab that still holds the user's live terminal.
+            if paneMoveID == moveID { paneMoveID = nil }
+            await refresh()
+        }
+        return true
     }
 
     func zoom(_ paneID: String) { selectedPane = paneID; perform("pane.zoom", params: ["pane_id": .string(paneID), "mode": .string("toggle")]) }
