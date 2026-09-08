@@ -90,6 +90,49 @@ struct TerminalKeyboardTests {
         precondition(capture.bytes == Array("\u{1b}[200~paste café\u{1b}[201~".utf8))
         print("PASS: explicit paste honors bracketed paste")
 
+        let dropBoard = NSPasteboard.withUniqueName()
+        defer { dropBoard.releaseGlobally() }
+        let droppedFiles = [URL(fileURLWithPath: "/tmp/project notes.txt"),
+                            URL(fileURLWithPath: "/tmp/it's $draft; café.png")]
+        precondition(dropBoard.writeObjects(droppedFiles as [NSURL]))
+        let drop = FileDragInfo(pasteboard: dropBoard, window: window)
+        view.canAcceptFileDrop = { true }
+        precondition(view.registeredDraggedTypes.contains(.fileURL), "Terminal must register for file drops")
+        capture.clear()
+        precondition(view.draggingEntered(drop) == .copy, "Files must be accepted without sending input on hover")
+        precondition(capture.bytes.isEmpty)
+        precondition(view.prepareForDragOperation(drop))
+        precondition(view.performDragOperation(drop))
+        let expectedDrop = "\u{1b}[200~'/tmp/project notes.txt' '/tmp/it'\\''s $draft; cafe\u{301}.png' \u{1b}[201~"
+        waitUntil { capture.bytes == Array(expectedDrop.utf8) }
+        precondition(capture.bytes == Array(expectedDrop.utf8), "Drop must paste quoted file paths without submitting: \(String(decoding: capture.bytes, as: UTF8.self).debugDescription)")
+        print("PASS: multiple file drops preserve quoting, Unicode, and bracketed paste")
+
+        view.canAcceptFileDrop = { false }
+        capture.clear()
+        precondition(view.draggingUpdated(drop).isEmpty)
+        precondition(!view.prepareForDragOperation(drop))
+        precondition(!view.performDragOperation(drop))
+        precondition(capture.bytes.isEmpty, "Unavailable panes must reject drops")
+        view.canAcceptFileDrop = { true }
+        drop.draggingSourceOperationMask = .move
+        precondition(view.draggingEntered(drop).isEmpty, "Drops must never move source files")
+        precondition(!view.performDragOperation(drop))
+        drop.draggingSourceOperationMask = .copy
+
+        dropBoard.clearContents()
+        dropBoard.setString("https://example.com", forType: .string)
+        capture.clear()
+        precondition(view.draggingEntered(drop).isEmpty)
+        precondition(!view.performDragOperation(drop))
+        precondition(capture.bytes.isEmpty, "Unsupported drops must not send input")
+
+        dropBoard.clearContents()
+        dropBoard.writeObjects([URL(fileURLWithPath: "/tmp/bad\nname.txt") as NSURL])
+        precondition(view.draggingEntered(drop).isEmpty, "Control characters in paths must not reach terminal input")
+        precondition(!view.performDragOperation(drop))
+        print("PASS: text and control-character file drops are rejected")
+
         bridge.receive(Data("\u{1b}[>1u".utf8))
         bridge.session.waitForPendingOutput()
         check("negotiated Shift-Return", modifiers: .shift, expected: "\u{1b}[13;2u")
@@ -112,7 +155,21 @@ struct TerminalKeyboardTests {
         window.makeFirstResponder(view)
         check("only focused pane receives Shift-Return", modifiers: .shift, expected: "\u{1b}[13;2u")
         precondition(otherCapture.bytes.isEmpty)
+        dropBoard.clearContents()
+        dropBoard.writeObjects([URL(fileURLWithPath: "/tmp/picture.png") as NSURL])
+        capture.clear()
+        other.canAcceptFileDrop = { true }
+        precondition(other.draggingEntered(drop) == .copy)
+        precondition(window.firstResponder === view, "Hovering must not change keyboard focus")
+        precondition(other.performDragOperation(drop))
+        let otherExpected = Array("'/tmp/picture.png' ".utf8)
+        waitUntil { otherCapture.bytes == otherExpected }
+        precondition(otherCapture.bytes == otherExpected, "Drop must reach its target even without bracketed paste")
+        precondition(capture.bytes.isEmpty, "Previously focused pane must receive no drop input")
+        precondition(window.firstResponder === other, "Dropping must focus the target pane")
+        print("PASS: drops target and focus the receiving pane without submitting")
         other.controller = nil
+        precondition(!other.performDragOperation(drop), "Detached surfaces must reject drops")
         other.removeFromSuperview()
         lifecycle.surface = nil
         view.controller = nil
@@ -154,4 +211,33 @@ private final class SurfaceCapture: TerminalSurfaceLifecycleDelegate {
     var surface: GhosttyTerminal.TerminalSurface?
     func terminalDidAttachSurface(_ surface: GhosttyTerminal.TerminalSurface) { self.surface = surface }
     func terminalDidDetachSurface() { surface = nil }
+}
+
+// AppKit supplies this object during a drag; the pasteboard and terminal are real.
+@MainActor
+private final class FileDragInfo: NSObject, NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    let draggingDestinationWindow: NSWindow?
+    var draggingSourceOperationMask: NSDragOperation = .copy
+    var draggingLocation: NSPoint = .zero
+    var draggedImageLocation: NSPoint = .zero
+    nonisolated var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 0
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+
+    init(pasteboard: NSPasteboard, window: NSWindow) {
+        draggingPasteboard = pasteboard
+        draggingDestinationWindow = window
+    }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    nonisolated override func namesOfPromisedFilesDropped(atDestination dropDestination: URL) -> [String]? { nil }
+    func resetSpringLoading() {}
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [],
+                                for view: NSView?, classes classArray: [AnyClass],
+                                searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+                                using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
 }

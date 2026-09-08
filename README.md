@@ -42,6 +42,7 @@ Connection errors appear under the affected device and in its detail view. Faile
 - Panes: Command-D splits side by side; Command-Shift-D stacks panes; Command-Return toggles zoom for the focused pane. Drag the divider to resize. Use the pane header to focus, zoom, rename, start an agent, or close.
 - Start an agent: creates a Git worktree from the pane’s repository, opens it in a new space, and launches the selected agent there. Herdr generates the branch name. The selected agent CLI must be installed. If launching fails, the new space stays available for retrying in its terminal.
 - Terminal: normal keyboard input, Shift-Enter for a new line in Claude Code and Codex, native text selection, Command-C/Command-V, and mouse-wheel scrolling.
+- File drops: drag one or more files from Finder onto an agent’s terminal pane to paste their quoted paths. The target pane gains keyboard focus; press Enter when your prompt is ready.
 - Command-N creates a space. Command-comma opens Settings.
 
 Closing a pane, tab, or space terminates its processes and therefore asks for confirmation. Terminal ownership conflicts are shown on the affected pane; Take Control explicitly replaces the previous writable controller.
