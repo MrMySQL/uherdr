@@ -146,6 +146,11 @@ struct TerminalSurface: NSViewRepresentable {
         view.controller = coordinator.engine
         view.setSurfaceVisible(visible)
         view.onAttach = { [weak coordinator] in coordinator?.focusIfSelected() }
+        view.canAcceptFileDrop = { [weak coordinator] in
+            guard let coordinator, let store = coordinator.store else { return false }
+            return !coordinator.stopped && coordinator.visible && coordinator.controller.ready
+                && coordinator.controller.error == nil && store.sheet == nil && store.pendingClose == nil
+        }
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
         controller.receive = { [weak bridge = coordinator.bridge] in bridge?.receive($0) }
         coordinator.updateAppearance(fontSize: store.fontSize, dark: dark)
@@ -171,6 +176,7 @@ struct TerminalSurface: NSViewRepresentable {
         coordinator.controller.stop()
         coordinator.stopped = true
         view.onAttach = nil
+        view.canAcceptFileDrop = { false }
         view.delegate = nil
         view.setSurfaceVisible(false)
         view.controller = nil
@@ -296,6 +302,48 @@ struct TerminalSurface: NSViewRepresentable {
 @MainActor
 final class HerdrTerminalView: AppTerminalView {
     var onAttach: (() -> Void)?
+    var canAcceptFileDrop: () -> Bool = { false }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        fileDropText(sender) == nil ? [] : .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggingEntered(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        fileDropText(sender) != nil
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let text = fileDropText(sender), paste(text: text) else { return false }
+        acquireProgrammaticFocus()
+        return true
+    }
+
+    private func fileDropText(_ sender: NSDraggingInfo) -> String? {
+        guard canAcceptFileDrop(), controller != nil, window != nil, !isHiddenOrHasHiddenAncestor,
+              sender.draggingSourceOperationMask.contains(.copy),
+              let urls = sender.draggingPasteboard.readObjects(
+                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+              ) as? [URL], !urls.isEmpty else { return nil }
+        let paths = urls.map(\.path)
+        // Reject control characters even when bracketed paste is disabled by
+        // the receiving program. A drop must never inject a submit or escape.
+        guard urls.allSatisfy(\.isFileURL), paths.allSatisfy({
+            !$0.isEmpty && $0.rangeOfCharacter(from: .controlCharacters) == nil
+        }) else { return nil }
+        // POSIX single quoting keeps shell metacharacters literal; close and
+        // reopen the quote around apostrophes. Leave room for the next word.
+        return paths.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+            .joined(separator: " ") + " "
+    }
 
     static var baseConfiguration: TerminalConfiguration {
         TerminalConfiguration.default

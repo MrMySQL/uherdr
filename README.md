@@ -29,6 +29,7 @@ The app uses your default local herdr socket. Set an explicit socket and the her
 - Tabs: create with Command-T and rename the current tab with Command-Shift-R. Control-1 through Control-9 select the first nine tabs in the current space. Control-Tab selects the next tab, and Control-Shift-Tab selects the previous tab, wrapping at either end. Command-Shift-] and Command-Shift-[ also cycle tabs. Rename and close from the context menu.
 - Panes: Command-D splits side by side; Command-Shift-D stacks panes; Command-Return toggles zoom for the focused pane. Drag the divider to resize. Use the pane header to focus, zoom, rename, start an agent, or close.
 - Terminal: normal keyboard input, Shift-Enter for a new line in Claude Code and Codex, native text selection, Command-C/Command-V, and mouse-wheel scrolling.
+- File drops: drag one or more files from Finder onto an agent’s terminal pane to paste their quoted paths. The target pane gains keyboard focus; press Enter when your prompt is ready.
 - Command-N creates a space. Command-comma opens Settings.
 
 Closing a pane, tab, or space terminates its processes and therefore asks for confirmation. Terminal ownership conflicts are shown on the affected pane; Take Control explicitly replaces the previous writable controller.
