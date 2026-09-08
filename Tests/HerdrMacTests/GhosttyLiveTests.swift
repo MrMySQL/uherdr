@@ -86,6 +86,10 @@ enum GhosttyLiveTests {
             try await waitFor { session.readViewportText()?.contains("ghostty-live-ok") == true }
             print("PASS: reconnect preserves the server pane and its output")
 
+            if ProcessInfo.processInfo.environment["HERDR_TEST_MOUSE"] == "1" {
+                try await checkMouse(view: view, transport: transport, session: session, window: window)
+            }
+
             host.rootView = AnyView(EmptyView())
             try await Task.sleep(for: .milliseconds(100))
             precondition(view.controller == nil, "SwiftUI teardown must release the engine")
@@ -101,6 +105,67 @@ enum GhosttyLiveTests {
             _ = try? await client.request("workspace.close", params: ["workspace_id": .string(workspace.id)])
             throw error
         }
+    }
+
+    @MainActor private static func checkMouse(view: HerdrTerminalView, transport: HerdrMac.TerminalController,
+                                             session: InMemoryTerminalSession, window: NSWindow) async throws {
+        func waitFor(_ message: String, _ predicate: () -> Bool) async throws {
+            for _ in 0..<100 {
+                if predicate() { return }
+                if let error = transport.error { throw HerdrError.message(error) }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            throw HerdrError.message(message + ": " + (session.readViewportText() ?? "<no viewport>"))
+        }
+        let path = FileManager.default.currentDirectoryPath + "/Tests/Fixtures/terminal-mouse.py"
+        precondition(view.paste(text: "python3 '" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"))
+        precondition(view.sendKey(.enter))
+        try await waitFor("Mouse fixture did not start") {
+            session.readViewportText()?.contains("tool-collapsed") == true
+        }
+        try await waitFor("Herdr stream omitted application mouse state") { view.isMouseCaptured }
+        func click() {
+            // Inside the first cell at the test's default font, away from the
+            // window corner where AppKit intercepts clicks for resizing.
+            let point = view.convert(NSPoint(x: 6, y: view.bounds.height - 10), to: nil)
+            for type: NSEvent.EventType in [.leftMouseDown, .leftMouseUp] {
+                let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
+                // Exercise the mounted production view's AppKit handlers;
+                // a synthetic test app may not own foreground window activation.
+                if type == .leftMouseDown { view.mouseDown(with: event) }
+                else { view.mouseUp(with: event) }
+            }
+        }
+        click()
+        try await waitFor("Click did not expand the tool result or release the button") {
+            let text = session.readViewportText() ?? ""
+            return text.contains("tool-result: success") && text.contains("mouse-release-received")
+        }
+        print("PASS: native click expands a tool call through the real Herdr stream")
+
+        // Reset only the test renderer to prove a new stream restores mode state.
+        session.receive("\u{1b}[?1000l\u{1b}[?1006l")
+        session.waitForPendingOutput()
+        precondition(!view.isMouseCaptured)
+        transport.retry()
+        try await waitFor("Reconnect did not restore application mouse state") { transport.ready && view.isMouseCaptured }
+        click()
+        try await waitFor("Click did not collapse the tool call after reconnect") {
+            session.readViewportText()?.contains("tool-collapsed") == true
+        }
+        print("PASS: reconnect restores mouse input for an already-running application")
+
+        transport.send(Data("d".utf8))
+        try await waitFor("Disabling mouse mode without drawing left capture enabled") { !view.isMouseCaptured }
+        transport.send(Data("e".utf8))
+        try await waitFor("Enabling mouse mode without drawing did not update capture") { view.isMouseCaptured }
+        transport.send(Data("q".utf8))
+        try await waitFor("Exiting the application did not restore ordinary terminal input") {
+            !view.isMouseCaptured && session.readViewportText()?.contains("mouse-fixture-finished") == true
+        }
+        print("PASS: mode-only changes and application exit update native mouse capture")
     }
 
     @MainActor private static func checkRemote(socket: String, executable: String, pane: Pane, defaults: UserDefaults) async throws {

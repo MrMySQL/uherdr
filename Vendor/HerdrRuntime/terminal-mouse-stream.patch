@@ -1,0 +1,625 @@
+diff --git a/docs/next/website/src/content/docs/cli-reference.mdx b/docs/next/website/src/content/docs/cli-reference.mdx
+index a0abc54..e13b945 100644
+--- a/docs/next/website/src/content/docs/cli-reference.mdx
++++ b/docs/next/website/src/content/docs/cli-reference.mdx
+@@ -341,6 +341,11 @@ terminal, or agent target. It prints newline-delimited JSON `terminal.frame`
+ records with base64-encoded ANSI bytes, then a `terminal.closed` record when
+ the server closes the stream. Multiple observers can watch the same terminal
+ without taking input, resize, scroll, or takeover authority.
++Session control and observe ANSI bytes include the application's mouse reporting and encoding modes,
++including updates that change only those modes. Initial and reconnected streams
++synchronize mouse state; reporting is disabled while the server viewport shows
++scrollback and restored at the live bottom. Controllers send the resulting raw
++mouse reports through `terminal.input`.
+ `terminal title clear` hands the outer terminal window title back to `ui.window_title`.
+ 
+ ## Output waits
+diff --git a/src/pane.rs b/src/pane.rs
+index b2e1603..3a53eac 100644
+--- a/src/pane.rs
++++ b/src/pane.rs
+@@ -44,8 +44,8 @@ use self::agent_detection::{
+ pub use self::terminal::InputState;
+ use self::terminal::{GhosttyPaneTerminal, PaneTerminal};
+ pub(crate) use self::terminal::{
+-    TerminalDirtyPatch, TerminalDirtyPatchOutcome, TerminalReadSnapshot, TerminalTextMatch,
+-    TerminalTextPoint, TerminalWordMotion,
++    TerminalDirtyPatch, TerminalDirtyPatchOutcome, TerminalMouseModes, TerminalReadSnapshot,
++    TerminalTextMatch, TerminalTextPoint, TerminalWordMotion,
+ };
+ pub use self::{
+     state::PaneState,
+@@ -2713,6 +2713,10 @@ impl PaneRuntime {
+         self.terminal.sgr_pixel_mouse_enabled()
+     }
+ 
++    pub(crate) fn direct_mouse_modes(&self) -> TerminalMouseModes {
++        self.terminal.direct_mouse_modes()
++    }
++
+     pub fn plain_page_keys_use_host_scrollback(&self) -> Option<bool> {
+         self.terminal.plain_page_keys_use_host_scrollback()
+     }
+diff --git a/src/pane/terminal.rs b/src/pane/terminal.rs
+index 0b06302..595c2d3 100644
+--- a/src/pane/terminal.rs
++++ b/src/pane/terminal.rs
+@@ -46,6 +46,16 @@ const MODE_MOUSE_PRESS_RELEASE: u16 = 1000;
+ const MODE_MOUSE_BUTTON_MOTION: u16 = 1002;
+ const MODE_MOUSE_ANY_MOTION: u16 = 1003;
+ 
++/// DEC mouse modes projected into a direct terminal client's ANSI stream.
++#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
++pub(crate) struct TerminalMouseModes {
++    pub(crate) enabled: [bool; 8],
++}
++
++impl TerminalMouseModes {
++    pub(crate) const MODES: [u16; 8] = [9, 1000, 1002, 1003, 1005, 1006, 1015, 1016];
++}
++
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub struct ScrollMetrics {
+     pub offset_from_bottom: usize,
+@@ -413,6 +423,10 @@ impl PaneTerminal {
+         self.ghostty.sgr_pixel_mouse_enabled()
+     }
+ 
++    pub(crate) fn direct_mouse_modes(&self) -> TerminalMouseModes {
++        self.ghostty.direct_mouse_modes()
++    }
++
+     pub fn plain_page_keys_use_host_scrollback(&self) -> Option<bool> {
+         self.ghostty.plain_page_keys_use_host_scrollback()
+     }
+@@ -1725,6 +1739,25 @@ impl GhosttyPaneTerminal {
+         self.mode_enabled(crate::ghostty::MODE_MOUSE_SGR_PIXELS)
+     }
+ 
++    /// Read only mouse modes and viewport position under one terminal lock.
++    pub(crate) fn direct_mouse_modes(&self) -> TerminalMouseModes {
++        let Ok(core) = self.core.lock() else {
++            return TerminalMouseModes::default();
++        };
++        // Historical cells do not correspond to the live application's mouse coordinates.
++        if core
++            .terminal
++            .scrollbar()
++            .is_ok_and(|scrollbar| scrollbar.offset + scrollbar.len < scrollbar.total)
++        {
++            return TerminalMouseModes::default();
++        }
++        TerminalMouseModes {
++            enabled: TerminalMouseModes::MODES
++                .map(|mode| core.terminal.mode_get(mode).unwrap_or(false)),
++        }
++    }
++
+     fn mode_enabled(&self, mode: u16) -> bool {
+         self.core
+             .lock()
+diff --git a/src/server/clients.rs b/src/server/clients.rs
+index 0d3d9ae..9dd4831 100644
+--- a/src/server/clients.rs
++++ b/src/server/clients.rs
+@@ -53,6 +53,8 @@ pub(crate) struct ClientConnection {
+     pub(crate) last_activity: u64,
+     /// Render baseline for the negotiated client encoding.
+     pub(crate) render_state: ClientRenderState,
++    /// JSON session streams project application mouse modes; interactive attach owns host capture.
++    pub(crate) project_terminal_mouse_modes: bool,
+     /// Client-local host Kitty graphics cache.
+     pub(crate) graphics_cache: crate::kitty_graphics::HostGraphicsCache,
+     /// Passive eligibility for audited local Kitty regular-file graphics.
+@@ -127,6 +129,7 @@ impl ClientConnection {
+             raw_input: crate::raw_input::RawInputFramer::default(),
+             last_activity,
+             render_state: ClientRenderState::new(render_encoding),
++            project_terminal_mouse_modes: false,
+             graphics_cache: crate::kitty_graphics::HostGraphicsCache::default(),
+             direct_graphics: false,
+             pixel_mouse: false,
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index 9161cd3..93ba687 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -1892,6 +1892,7 @@ impl HeadlessServer {
+             terminal_id: terminal_id.clone(),
+         };
+         client.pending_terminal_attach = false;
++        client.project_terminal_mouse_modes = true;
+         client.render_state.reset_baseline();
+         client.last_activity = stamp;
+         let was_foreground = self.foreground_client_id == Some(client_id);
+@@ -1909,7 +1910,13 @@ impl HeadlessServer {
+             return false;
+         };
+ 
+-        self.attach_terminal_client(client_id, terminal_id, takeover)
++        if !self.attach_terminal_client(client_id, terminal_id, takeover) {
++            return false;
++        }
++        if let Some(client) = self.clients.get_mut(&client_id) {
++            client.project_terminal_mouse_modes = true;
++        }
++        true
+     }
+ 
+     fn handle_terminal_attach_scroll(
+@@ -2878,6 +2885,7 @@ impl HeadlessServer {
+             terminal_id: terminal_id.clone(),
+         };
+         client.pending_terminal_attach = false;
++        client.project_terminal_mouse_modes = false;
+         client.render_state.reset_baseline();
+         client.last_activity = stamp;
+         let was_foreground = self.foreground_client_id == Some(client_id);
+@@ -4454,6 +4462,7 @@ impl HeadlessServer {
+         for (client_id, (cols, rows), cell_size, is_foreground, mode) in render_targets {
+             let area = Rect::new(0, 0, cols, rows);
+             let is_app_client = matches!(mode, ClientConnectionMode::App);
++            let mut mouse_modes = None;
+             let mut frame = match mode {
+                 ClientConnectionMode::App => {
+                     let render_started = crate::render_prof::timer();
+@@ -4519,6 +4528,13 @@ impl HeadlessServer {
+                         broken_clients.push(client_id);
+                         continue;
+                     };
++                    if self
++                        .clients
++                        .get(&client_id)
++                        .is_some_and(|client| client.project_terminal_mouse_modes)
++                    {
++                        mouse_modes = Some(runtime.direct_mouse_modes());
++                    }
+                     let render_started = crate::render_prof::timer();
+                     let (buffer, cursor) =
+                         crate::server::render_stream::render_terminal_virtual(runtime, area);
+@@ -4602,7 +4618,10 @@ impl HeadlessServer {
+                 encoded.incomplete = false;
+             }
+             let has_graphics = !frame.graphics.is_empty();
+-            let Some(mut prepared) = client.render_state.prepare_frame(frame) else {
++            let Some(mut prepared) = client
++                .render_state
++                .prepare_frame_with_mouse_modes(frame, mouse_modes)
++            else {
+                 if commit_graphics_cache {
+                     client.graphics_cache = next_graphics_cache;
+                     client.graphics_surface_reset_pending = false;
+@@ -4633,8 +4652,9 @@ impl HeadlessServer {
+                         continue;
+                     };
+                     text_only_frame.graphics.clear();
+-                    let Some(text_only_prepared) =
+-                        client.render_state.prepare_frame(text_only_frame)
++                    let Some(text_only_prepared) = client
++                        .render_state
++                        .prepare_frame_with_mouse_modes(text_only_frame, mouse_modes)
+                     else {
+                         client.clear_deferred_render();
+                         crate::render_prof::event("full_render.skip_identical_text_only");
+@@ -9201,6 +9221,266 @@ next_tab = ""
+         rt.shutdown_timeout(Duration::from_millis(100));
+     }
+ 
++    #[derive(Clone, Copy)]
++    enum MouseStreamRequest {
++        Attach,
++        Control,
++        Observe,
++    }
++
++    fn direct_mouse_test_server(
++        initial: &[u8],
++        request: MouseStreamRequest,
++    ) -> (HeadlessServer, std::sync::mpsc::Receiver<Vec<u8>>, String) {
++        let (mut server, rx, pane_id) = retained_test_server(initial);
++        server.app.state.ensure_test_terminals();
++        let id = server.app.state.workspaces[0]
++            .terminal_id(pane_id)
++            .unwrap()
++            .clone();
++        let runtime = server.app.state.workspaces[0]
++            .test_runtimes
++            .remove(&pane_id)
++            .unwrap();
++        server.app.terminal_runtimes.insert(id.clone(), runtime);
++        let terminal_id = id.to_string();
++        let writer = server.clients[&1].writer.as_ref().unwrap().clone();
++        assert!(server.handle_server_event(ServerEvent::ClientConnected {
++            client_id: 1,
++            cols: 80,
++            rows: 24,
++            cell_width_px: 0,
++            cell_height_px: 0,
++            render_encoding: RenderEncoding::TerminalAnsi,
++            keybindings: None,
++            direct_attach_requested: true,
++            direct_graphics: false,
++            writer,
++        }));
++        let event = match request {
++            MouseStreamRequest::Attach => ServerEvent::ClientAttachTerminal {
++                client_id: 1,
++                terminal_id: terminal_id.clone(),
++                takeover: false,
++            },
++            MouseStreamRequest::Control => ServerEvent::ClientControlTerminal {
++                client_id: 1,
++                target: terminal_id.clone(),
++                takeover: false,
++            },
++            MouseStreamRequest::Observe => ServerEvent::ClientObserveTerminal {
++                client_id: 1,
++                target: terminal_id.clone(),
++            },
++        };
++        assert!(server.handle_server_event(event));
++        (server, rx, terminal_id)
++    }
++
++    fn next_mouse_frame(rx: &std::sync::mpsc::Receiver<Vec<u8>>) -> crate::protocol::TerminalFrame {
++        match read_server_message(
++            rx.recv_timeout(Duration::from_millis(100))
++                .expect("mouse frame"),
++        ) {
++            ServerMessage::Terminal(frame) => frame,
++            other => panic!("expected terminal frame, got {other:?}"),
++        }
++    }
++
++    #[tokio::test(flavor = "current_thread")]
++    async fn direct_mouse_stream_initial_attach_and_observe_preserve_modes() {
++        for request in [MouseStreamRequest::Control, MouseStreamRequest::Observe] {
++            for tracking in [9, 1000, 1002, 1003] {
++                for encoding in [1005, 1006, 1015, 1016] {
++                    let initial = format!("\x1b[?{tracking}h\x1b[?{encoding}hhello");
++                    let (mut server, rx, _) = direct_mouse_test_server(initial.as_bytes(), request);
++                    crate::pane::reset_aggregate_input_state_reads();
++                    server.render_and_stream();
++                    assert_eq!(crate::pane::aggregate_input_state_reads(), 0);
++                    let frame = next_mouse_frame(&rx);
++                    let mut client_terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
++                    client_terminal.write(&frame.bytes);
++                    assert!(
++                        client_terminal.mode_get(tracking).unwrap(),
++                        "tracking {tracking}"
++                    );
++                    assert!(
++                        client_terminal.mode_get(encoding).unwrap(),
++                        "encoding {encoding}"
++                    );
++                    assert_eq!(frame.seq, 1);
++                }
++            }
++        }
++    }
++
++    #[tokio::test]
++    async fn direct_mouse_stream_mode_only_disable_retry_and_reconnect() {
++        let (mut server, rx, terminal_id) =
++            direct_mouse_test_server(b"hello", MouseStreamRequest::Control);
++        server.render_and_stream();
++        let mut client_terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
++        // An initial disabled state also clears stale modes in a reused client terminal.
++        client_terminal.write(b"\x1b[?1003h\x1b[?1016h");
++        client_terminal.write(&next_mouse_frame(&rx).bytes);
++        assert!(!client_terminal.mode_get(1003).unwrap());
++        assert!(!client_terminal.mode_get(1016).unwrap());
++
++        server
++            .runtime_for_terminal_id_string(&terminal_id)
++            .unwrap()
++            .test_process_pty_bytes(b"\x1b[?1000h\x1b[?1006h");
++        let queued =
++            HeadlessServer::frame_server_message(&ServerMessage::ReloadSoundConfig).unwrap();
++        server.clients[&1]
++            .writer
++            .as_ref()
++            .unwrap()
++            .test_fill_render(queued);
++        server.render_and_stream();
++        assert_eq!(server.clients[&1].render_state.terminal_seq(), Some(1));
++        while rx.try_recv().is_ok() {}
++        server.render_and_stream();
++        let enabled = next_mouse_frame(&rx);
++        assert_eq!(enabled.seq, 2);
++        assert!(!enabled.full);
++        client_terminal.write(&enabled.bytes);
++        assert!(client_terminal.mode_get(1000).unwrap());
++        assert!(client_terminal.mode_get(1006).unwrap());
++        let mut mouse_encoder = crate::ghostty::MouseEncoder::new().unwrap();
++        mouse_encoder.set_from_terminal(&client_terminal);
++        mouse_encoder.set_size(80, 24, 1, 1);
++        let mut event = crate::ghostty::MouseEvent::new().unwrap();
++        event.set_button(crate::ghostty::ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_LEFT);
++        event.set_position(11.0, 9.0);
++        event.set_action(crate::ghostty::ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_PRESS);
++        assert_eq!(mouse_encoder.encode(&event).unwrap(), b"\x1b[<0;12;10M");
++        event.set_action(crate::ghostty::ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_RELEASE);
++        assert_eq!(mouse_encoder.encode(&event).unwrap(), b"\x1b[<0;12;10m");
++        server.render_and_stream();
++        assert!(rx.try_recv().is_err());
++
++        server
++            .clients
++            .get_mut(&1)
++            .unwrap()
++            .render_state
++            .reset_baseline();
++        server.render_and_stream();
++        let reconnected = next_mouse_frame(&rx);
++        let mut fresh_terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
++        fresh_terminal.write(&reconnected.bytes);
++        assert!(fresh_terminal.mode_get(1000).unwrap());
++        assert!(fresh_terminal.mode_get(1006).unwrap());
++
++        server
++            .runtime_for_terminal_id_string(&terminal_id)
++            .unwrap()
++            .test_process_pty_bytes(b"\x1b[?1000l\x1b[?1006l");
++        server.render_and_stream();
++        client_terminal.write(&next_mouse_frame(&rx).bytes);
++        assert!(!client_terminal.mode_get(1000).unwrap());
++        assert!(!client_terminal.mode_get(1006).unwrap());
++    }
++
++    #[tokio::test]
++    async fn direct_mouse_stream_disables_reporting_while_viewing_scrollback() {
++        let (mut server, rx, terminal_id) =
++            direct_mouse_test_server(b"", MouseStreamRequest::Control);
++        let history = format!("{}\x1b[?1000h\x1b[?1006h", "history\r\n".repeat(60));
++        let id = server.terminal_id_by_string(&terminal_id).unwrap();
++        server.app.terminal_runtimes.insert(
++            id,
++            crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
++                80,
++                24,
++                1024 * 1024,
++                history.as_bytes(),
++            ),
++        );
++        server.render_and_stream();
++        let mut client_terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
++        client_terminal.write(&next_mouse_frame(&rx).bytes);
++        assert!(client_terminal.mode_get(1000).unwrap());
++        server
++            .runtime_for_terminal_id_string(&terminal_id)
++            .unwrap()
++            .set_scroll_offset_from_bottom(5);
++        server.render_and_stream();
++        client_terminal.write(&next_mouse_frame(&rx).bytes);
++        assert!(
++            !client_terminal.mode_get(1000).unwrap(),
++            "historical cells must not report live application coordinates"
++        );
++        server
++            .runtime_for_terminal_id_string(&terminal_id)
++            .unwrap()
++            .scroll_reset();
++        server.render_and_stream();
++        client_terminal.write(&next_mouse_frame(&rx).bytes);
++        assert!(client_terminal.mode_get(1000).unwrap());
++        assert!(client_terminal.mode_get(1006).unwrap());
++    }
++
++    #[tokio::test]
++    async fn direct_mouse_stream_legacy_attach_preserves_host_wheel_capture() {
++        let (mut server, rx, terminal_id) =
++            direct_mouse_test_server(b"hello", MouseStreamRequest::Attach);
++        let mut client_terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
++        // The interactive attach CLI enables host capture to implement wheel scrollback.
++        client_terminal.write(b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h");
++        server.render_and_stream();
++        client_terminal.write(&next_mouse_frame(&rx).bytes);
++        assert!(
++            client_terminal.mode_get(1003).unwrap(),
++            "shell rendering must preserve host capture"
++        );
++        assert!(client_terminal.mode_get(1006).unwrap());
++
++        let id = server.terminal_id_by_string(&terminal_id).unwrap();
++        server.app.terminal_runtimes.insert(
++            id,
++            crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
++                80,
++                24,
++                1024 * 1024,
++                "history\r\n".repeat(60).as_bytes(),
++            ),
++        );
++        server
++            .runtime_for_terminal_id_string(&terminal_id)
++            .unwrap()
++            .set_scroll_offset_from_bottom(5);
++        server.render_and_stream();
++        client_terminal.write(&next_mouse_frame(&rx).bytes);
++        let mut encoder = crate::ghostty::MouseEncoder::new().unwrap();
++        encoder.set_from_terminal(&client_terminal);
++        encoder.set_size(80, 24, 1, 1);
++        let mut wheel = crate::ghostty::MouseEvent::new().unwrap();
++        wheel.set_action(crate::ghostty::ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_PRESS);
++        wheel.set_button(crate::ghostty::ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_FOUR);
++        wheel.set_position(0.0, 0.0);
++        assert_eq!(
++            encoder.encode(&wheel).unwrap(),
++            b"\x1b[<64;1;1M",
++            "scrollback must retain wheel reports"
++        );
++    }
++
++    #[tokio::test]
++    async fn direct_mouse_stream_does_not_change_full_app_mouse_modes() {
++        let (mut server, rx, _) =
++            direct_mouse_test_server(b"\x1b[?1000h", MouseStreamRequest::Control);
++        server.clients.get_mut(&1).unwrap().mode = ClientConnectionMode::App;
++        server.render_and_stream();
++        let mut client_terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
++        client_terminal.write(b"\x1b[?1003h\x1b[?1006h");
++        client_terminal.write(&next_mouse_frame(&rx).bytes);
++        assert!(client_terminal.mode_get(1003).unwrap());
++        assert!(client_terminal.mode_get(1006).unwrap());
++        assert!(!client_terminal.mode_get(1000).unwrap());
++    }
++
+     #[test]
+     fn render_and_stream_sends_terminal_frame_for_terminal_ansi_client() {
+         let mut server = test_headless_server();
+diff --git a/src/server/render_stream.rs b/src/server/render_stream.rs
+index f14deb5..a3c1cd9 100644
+--- a/src/server/render_stream.rs
++++ b/src/server/render_stream.rs
+@@ -5,6 +5,7 @@ use ratatui::layout::{Position, Rect, Size};
+ 
+ use crate::app::state::AppState;
+ use crate::app::Mode;
++use crate::pane::TerminalMouseModes;
+ use crate::protocol::render_ansi::{BlitEncoder, EncodedBlit};
+ use crate::protocol::{CursorState, FrameData, RenderEncoding, ServerMessage, TerminalFrame};
+ use crate::terminal::TerminalRuntimeRegistry;
+@@ -18,6 +19,7 @@ pub(crate) enum ClientRenderState {
+         blit_encoder: BlitEncoder,
+         seq: u64,
+         repaint_pending: bool,
++        last_mouse_modes: Option<TerminalMouseModes>,
+     },
+ }
+ 
+@@ -29,6 +31,7 @@ impl ClientRenderState {
+                 blit_encoder: BlitEncoder::new(),
+                 seq: 0,
+                 repaint_pending: false,
++                last_mouse_modes: None,
+             },
+         }
+     }
+@@ -39,10 +42,12 @@ impl ClientRenderState {
+             Self::TerminalAnsi {
+                 blit_encoder,
+                 repaint_pending,
++                last_mouse_modes,
+                 ..
+             } => {
+                 *blit_encoder = BlitEncoder::new();
+                 *repaint_pending = false;
++                *last_mouse_modes = None;
+             }
+         }
+     }
+@@ -63,6 +68,14 @@ impl ClientRenderState {
+     }
+ 
+     pub(crate) fn prepare_frame(&mut self, frame: FrameData) -> Option<PreparedRender> {
++        self.prepare_frame_with_mouse_modes(frame, None)
++    }
++
++    pub(crate) fn prepare_frame_with_mouse_modes(
++        &mut self,
++        frame: FrameData,
++        mouse_modes: Option<TerminalMouseModes>,
++    ) -> Option<PreparedRender> {
+         match self {
+             Self::Semantic { last_frame } => {
+                 if last_frame.as_ref() == Some(&frame) {
+@@ -78,8 +91,10 @@ impl ClientRenderState {
+                 blit_encoder,
+                 seq,
+                 repaint_pending,
++                last_mouse_modes,
+             } => {
+-                if !*repaint_pending && blit_encoder.is_current(&frame) {
++                let mouse_changed = mouse_modes.is_some() && mouse_modes != *last_mouse_modes;
++                if !*repaint_pending && !mouse_changed && blit_encoder.is_current(&frame) {
+                     crate::render_prof::event("prepare_frame.ansi.skip_current");
+                     return None;
+                 }
+@@ -91,7 +106,12 @@ impl ClientRenderState {
+                 } else {
+                     crate::render_prof::event("prepare_frame.ansi.partial");
+                 }
+-                insert_graphics_before_sync_end(&mut encoded.bytes, &frame.graphics);
++                insert_before_sync_end(&mut encoded.bytes, &frame.graphics);
++                if mouse_changed || *repaint_pending {
++                    if let Some(modes) = mouse_modes {
++                        insert_before_sync_end(&mut encoded.bytes, &encode_mouse_modes(modes));
++                    }
++                }
+                 crate::render_prof::counter(
+                     "prepare_frame.graphics.bytes",
+                     frame.graphics.len() as u64,
+@@ -106,6 +126,7 @@ impl ClientRenderState {
+                     }),
+                     frame,
+                     encoded: Some(encoded),
++                    mouse_modes,
+                 })
+             }
+         }
+@@ -131,9 +152,11 @@ impl ClientRenderState {
+                     blit_encoder,
+                     seq,
+                     repaint_pending,
++                    last_mouse_modes,
+                 },
+                 PreparedRender::TerminalAnsi {
+                     frame,
++                    mouse_modes,
+                     encoded: Some(encoded),
+                     ..
+                 },
+@@ -141,6 +164,7 @@ impl ClientRenderState {
+                 blit_encoder.commit(frame, encoded);
+                 *seq += 1;
+                 *repaint_pending = false;
++                *last_mouse_modes = mouse_modes;
+             }
+             _ => {}
+         }
+@@ -155,7 +179,21 @@ impl ClientRenderState {
+     }
+ }
+ 
+-fn insert_graphics_before_sync_end(encoded: &mut Vec<u8>, graphics: &[u8]) {
++fn encode_mouse_modes(modes: TerminalMouseModes) -> Vec<u8> {
++    use std::io::Write;
++
++    // Clear stale modes before enabling the new state. Disabling a mouse mode
++    // after enabling another can also reset the terminal's effective encoder.
++    let mut bytes = b"\x1b[?9;1000;1002;1003;1005;1006;1015;1016l".to_vec();
++    for (mode, enabled) in TerminalMouseModes::MODES.into_iter().zip(modes.enabled) {
++        if enabled {
++            let _ = write!(bytes, "\x1b[?{mode}h");
++        }
++    }
++    bytes
++}
++
++fn insert_before_sync_end(encoded: &mut Vec<u8>, graphics: &[u8]) {
+     if graphics.is_empty() {
+         return;
+     }
+@@ -176,6 +214,7 @@ pub(crate) enum PreparedRender {
+         message: ServerMessage,
+         frame: FrameData,
+         encoded: Option<EncodedBlit>,
++        mouse_modes: Option<TerminalMouseModes>,
+     },
+ }
+ 
+diff --git a/src/terminal/runtime.rs b/src/terminal/runtime.rs
+index 5051a46..a0a403f 100644
+--- a/src/terminal/runtime.rs
++++ b/src/terminal/runtime.rs
+@@ -336,6 +336,10 @@ impl TerminalRuntime {
+         self.0.sgr_pixel_mouse_enabled()
+     }
+ 
++    pub(crate) fn direct_mouse_modes(&self) -> crate::pane::TerminalMouseModes {
++        self.0.direct_mouse_modes()
++    }
++
+     pub fn plain_page_keys_use_host_scrollback(&self) -> Option<bool> {
+         self.0.plain_page_keys_use_host_scrollback()
+     }

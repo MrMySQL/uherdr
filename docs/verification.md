@@ -1,5 +1,36 @@
 # Verification — 2026-09-07
 
+## Agent tool-call clicks — 2026-09-08
+
+Implemented a local Herdr 0.8.2 runtime patch in
+[Vendor/HerdrRuntime](../Vendor/HerdrRuntime/README.md). Session control/observe
+streams now preserve mouse modes in ANSI frames, including mode-only updates,
+initial state, reconnect, disable and output-queue retries. Interactive CLI
+attach and full-app mouse capture retain their previous behavior. No native app
+implementation change was needed.
+
+- The new stream capability probe fails on stock 0.8.2 because mouse modes are
+  omitted, then passes on the patched runtime.
+- `HERDR_BIN="$PWD/dist/herdr-runtime/herdr" bash scripts/test-terminal-mouse.sh`
+  passes. Injected AppKit events
+  through the mounted production SwiftUI/Ghostty bridge expand a raw-mode
+  fixture's tool result, deliver the release, and collapse after reconnect.
+  Mode changes without drawing and application exit correctly update capture.
+- `HERDR_BIN=... bash scripts/test.sh` passes against the final patched binary,
+  including keyboard, paste, links, file drops, live pane layouts and remote
+  forwarding checks.
+- Five focused runtime tests pass. A stock-CLI wheel-capture regression was
+  reproduced during review and fixed by limiting projection to session requests.
+- An isolated live handoff from stock to patched 0.8.2 preserved shell and
+  foreground application process IDs, restored mouse state and accepted a click
+  that expanded the fixture result.
+- The saved patch reverse-applies cleanly to the tested runtime checkout.
+
+The build and activation instructions, exact base commit, binary checksum and
+pixel/overlapping-mode limitations are recorded alongside the patch. Actual
+agent UI clicking has not been manually checked; the end-to-end fixture tests
+the same mouse transport mechanism.
+
 ## Multi-device SSH — 2026-09-08
 
 Implemented on `feat/multi-device-ssh`, forked from `main` at `f9130ce` in a separate worktree. Merged `main` at `f00f25e` to preserve the Ghostty renderer, live-terminal zoom behavior, and worktree-based agent launches alongside multi-device connections.
