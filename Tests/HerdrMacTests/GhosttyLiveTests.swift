@@ -68,6 +68,19 @@ enum GhosttyLiveTests {
             try await waitFor { session.readViewportText()?.contains("after-resize-ok") == true }
             print("PASS: live Herdr terminal remains interactive after resize")
 
+            host.rootView = AnyView(HerdrMac.TerminalSurface(
+                controller: transport, pane: pane, store: store, dark: true, visible: false
+            ))
+            try await Task.sleep(for: .milliseconds(100))
+            guard window.firstResponder !== view, !view.acceptsFirstResponder else {
+                throw HerdrError.message("A hidden terminal retained keyboard focus while the next tab loads")
+            }
+            host.rootView = AnyView(HerdrMac.TerminalSurface(
+                controller: transport, pane: pane, store: store, dark: true
+            ))
+            try await waitFor { window.firstResponder === view }
+            print("PASS: hidden terminals relinquish keyboard focus and regain it when shown")
+
             transport.retry()
             try await waitFor { transport.ready }
             try await waitFor { session.readViewportText()?.contains("ghostty-live-ok") == true }
@@ -222,5 +235,36 @@ enum GhosttyLiveTests {
             session.readViewportText()?.contains("after-zoom-ok") == true
         }
         print("PASS: repeated nested pane zoom preserves live terminals, split sizes, content, and input")
+
+        let originalTab = store.currentTab!
+        let otherTab = try await client.request("tab.create", params: [
+            "workspace_id": .string(workspace.id), "label": .string("Switch target"), "focus": .bool(false)
+        ])["tab"].decode(HerdrCore.Tab.self)
+        await store.refresh()
+        store.selectTab(otherTab)
+        try await waitFor("Other tab did not load") { store.currentLayout?.tabID == otherTab.id }
+        try await Task.sleep(for: .milliseconds(200))
+        guard originals.allSatisfy({ $0.controller != nil && $0.window === window }) else {
+            throw HerdrError.message("Switching tabs destroyed the previous terminal renderers and streams")
+        }
+        let other = terminals(in: host).first { view in !originals.contains { $0 === view } }!
+        try await waitFor("Other tab did not receive focus") { window.firstResponder === other }
+        for _ in 0..<3 {
+            store.selectTab(originalTab)
+            try await waitFor("Original tab did not receive focus") { window.firstResponder === target }
+            guard session.readViewportText()?.contains("after-zoom-ok") == true,
+                  zip(originals, frames).allSatisfy({ view, frame in
+                      let restored = view.convert(view.bounds, to: host)
+                      return abs(restored.width - frame.width) < 2 && abs(restored.height - frame.height) < 2
+                  }) else {
+                throw HerdrError.message("Tab switching lost terminal content or changed split sizes")
+            }
+            store.selectTab(otherTab)
+            try await waitFor("Other tab lost focus on return") { window.firstResponder === other }
+        }
+        _ = try await client.request("tab.close", params: ["tab_id": .string(otherTab.id)])
+        await store.refresh()
+        try await waitFor("Closed tab retained its terminal stream") { other.controller == nil }
+        print("PASS: tab switching preserves terminal instances, content, geometry and focus; closing releases them")
     }
 }

@@ -7,6 +7,7 @@ struct SplitTree: View {
     let path: [Bool]
     @ObservedObject var store: SessionStore
     var zoomedPaneID: String? = nil
+    var visible = true
     var body: some View {
         content
     }
@@ -15,7 +16,7 @@ struct SplitTree: View {
         case .pane(let id):
             if let pane = store.panes.first(where: { $0.id == id }) {
                 return AnyView(PaneCard(pane: pane, store: store, zoomed: zoomedPaneID == id,
-                                        visible: zoomedPaneID == nil || zoomedPaneID == id).id(pane.terminalID))
+                                        visible: visible && (zoomedPaneID == nil || zoomedPaneID == id)).id(pane.terminalID))
             }
             return AnyView(Color.clear)
         case .split(let direction, let ratio, let first, let second):
@@ -26,9 +27,9 @@ struct SplitTree: View {
             }
             return AnyView(ResizablePair(direction: direction, ratio: ratio, expandedFirst: expandedFirst,
                                         onCommit: { store.setRatio(tabID: tabID, path: path, ratio: $0) }) {
-                SplitTree(node: first, tabID: tabID, path: path + [false], store: store, zoomedPaneID: zoomedPaneID)
+                SplitTree(node: first, tabID: tabID, path: path + [false], store: store, zoomedPaneID: zoomedPaneID, visible: visible)
             } second: {
-                SplitTree(node: second, tabID: tabID, path: path + [true], store: store, zoomedPaneID: zoomedPaneID)
+                SplitTree(node: second, tabID: tabID, path: path + [true], store: store, zoomedPaneID: zoomedPaneID, visible: visible)
             })
         }
     }

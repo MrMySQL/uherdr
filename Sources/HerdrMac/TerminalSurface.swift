@@ -304,6 +304,24 @@ struct TerminalSurface: NSViewRepresentable {
 final class HerdrTerminalView: AppTerminalView {
     var onAttach: (() -> Void)?
     var canAcceptFileDrop: () -> Bool = { false }
+    private var surfaceVisible = true
+
+    override var acceptsFirstResponder: Bool { surfaceVisible }
+
+    override func becomeFirstResponder() -> Bool {
+        guard surfaceVisible else { return false }
+        return super.becomeFirstResponder()
+    }
+
+    override func setSurfaceVisible(_ visible: Bool) {
+        surfaceVisible = visible
+        super.setSurfaceVisible(visible)
+        // A destination tab may still be loading. Do not leave keyboard input
+        // routed to the retained, invisible terminal in the meantime.
+        if !visible, let window, window.firstResponder === self {
+            window.makeFirstResponder(nil)
+        }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)

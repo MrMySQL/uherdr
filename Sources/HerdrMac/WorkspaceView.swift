@@ -18,16 +18,9 @@ struct WorkspaceView: View {
                     if store.currentSpace != nil {
                         tabStrip
                         Divider()
-                        if let layout = store.currentLayout, let tabID = store.selectedTab {
-                            SplitTree(node: layout.root, tabID: tabID, path: [], store: store,
-                                      zoomedPaneID: layout.zoomed ? layout.resolveSelectedPane(nil) : nil)
+                        terminalDeck
                             .id(store.connectionGeneration)
                             .padding(8)
-                        } else {
-                            Spacer()
-                            ProgressView("Loading terminals…")
-                            Spacer()
-                        }
                     } else {
                         emptySpaces
                     }
@@ -97,6 +90,29 @@ struct WorkspaceView: View {
         }
         .background(WindowAccessor())
         .task { devices.start() }
+    }
+
+    private var terminalDeck: some View {
+        // Retain every visited tab, including those in other workspaces. Switching
+        // selection must not tear down Ghostty or reconnect/replay its stream.
+        ZStack {
+            ForEach(store.tabs) { tab in
+                if let layout = store.layouts[tab.id] {
+                    let visible = store.selectedTab == tab.id
+                    SplitTree(node: layout.root, tabID: tab.id, path: [], store: store,
+                              zoomedPaneID: layout.zoomed ? layout.resolveSelectedPane(nil) : nil,
+                              visible: visible)
+                        .opacity(visible ? 1 : 0)
+                        .allowsHitTesting(visible)
+                        .accessibilityHidden(!visible)
+                }
+            }
+            if store.currentLayout == nil {
+                ProgressView("Loading terminals…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func compactToolbarButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
