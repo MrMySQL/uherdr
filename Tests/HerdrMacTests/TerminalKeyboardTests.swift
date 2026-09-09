@@ -206,14 +206,20 @@ struct TerminalKeyboardTests {
         // Exercise real mouse events and Ghostty matching, intercepting only
         // the external URL delegate so the test does not launch a browser.
         func linkClick(_ output: String, modifiers: NSEvent.ModifierFlags = [],
-                       drag: Bool = false, clickCount: Int = 1, column: CGFloat = 2.5) {
-            bridge.receive(Data(("\u{1b}[2J\u{1b}[H" + output).utf8))
+                       drag: Bool = false, clickCount: Int = 1, column: CGFloat = 2.5,
+                       dragBack: Bool = true, redraw: Bool = true, row: CGFloat = 0.5) {
+            if redraw { bridge.receive(Data(("\u{1b}[2J\u{1b}[H" + output).utf8)) }
             bridge.session.waitForPendingOutput()
             lifecycle.urls = []
             let grid = capture.viewport!
             let scale = window.backingScaleFactor
-            let point = NSPoint(x: CGFloat(grid.cellWidthPixels) * column / scale,
-                                y: view.bounds.height - CGFloat(grid.cellHeightPixels) * 0.5 / scale)
+            // Font-only resize callbacks can omit cell dimensions. This
+            // fixture has zero padding, so derive them from its pixel grid.
+            let cellWidth = grid.cellWidthPixels > 0 ? grid.cellWidthPixels : grid.widthPixels / UInt32(grid.columns)
+            let cellHeight = grid.cellHeightPixels > 0 ? grid.cellHeightPixels : grid.heightPixels / UInt32(grid.rows)
+            precondition(cellWidth > 0 && cellHeight > 0)
+            let point = NSPoint(x: CGFloat(cellWidth) * column / scale,
+                                y: view.bounds.height - CGFloat(cellHeight) * row / scale)
             func event(_ type: NSEvent.EventType, at point: NSPoint) -> NSEvent {
                 NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil),
                                    modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
@@ -225,9 +231,10 @@ struct TerminalKeyboardTests {
             view.mouseDown(with: event(.leftMouseDown, at: point))
             if drag {
                 view.mouseDragged(with: event(.leftMouseDragged, at: NSPoint(x: point.x + 60, y: point.y)))
-                view.mouseDragged(with: event(.leftMouseDragged, at: point))
+                if dragBack { view.mouseDragged(with: event(.leftMouseDragged, at: point)) }
             }
-            view.mouseUp(with: event(.leftMouseUp, at: point))
+            view.mouseUp(with: event(.leftMouseUp, at: drag && !dragBack
+                                    ? NSPoint(x: point.x + 60, y: point.y) : point))
         }
         let url = "https://example.com/agent?task=123&view=diff"
         linkClick(url)
@@ -245,12 +252,41 @@ struct TerminalKeyboardTests {
         linkClick(url, clickCount: 2)
         precondition(lifecycle.urls.isEmpty, "Double-click must retain word selection")
         capture.clear()
-        linkClick("\u{1b}[?1000h\u{1b}[?1006h" + url, column: 0.5)
+        linkClick("\u{1b}[?1000h\u{1b}[?1006h" + url, modifiers: .command)
+        precondition(lifecycle.urls == [url], "Command-click must open links while an application captures the mouse")
+        linkClick(url)
+        precondition(lifecycle.urls == [url], "Plain click must open links while an application captures the mouse")
+        linkClick("\u{1b}]8;;\(url)\u{1b}\\Agent link\u{1b}]8;;\u{1b}\\")
+        precondition(lifecycle.urls == [url], "Captured OSC 8 links must open their destination")
+        linkClick(url, drag: true)
+        precondition(lifecycle.urls.isEmpty, "Dragging a captured link and returning must not open it")
+        // A subsequent key acts as a barrier for Ghostty's asynchronous input
+        // writer, so a delayed stray press/release cannot escape this check.
+        precondition(view.sendKey(.enter))
+        waitUntil { capture.bytes.last == 13 }
+        precondition(capture.bytes == [13],
+                     "Link clicks and drags must not send partial mouse gestures to the application: \(capture.bytes)")
+        linkClick("Select this text    " + url, modifiers: .shift, drag: true, column: 0.5, dragBack: false)
+        RunLoop.current.run(until: Date().addingTimeInterval(NSEvent.doubleClickInterval + 0.1))
+        linkClick("", column: 24.5, redraw: false)
+        precondition(lifecycle.urls == [url], "An existing text selection must not prevent a later captured link click")
+        linkClick("Heading\r\n\r\n    " + url, column: 8.5, row: 2.5)
+        precondition(lifecycle.urls == [url], "Captured links must open away from the first row and column")
+        capture.clear()
+        linkClick("Expand tool output", column: 0.5)
         precondition(lifecycle.urls.isEmpty, "Applications capturing the mouse must retain their clicks")
         let expectedClick = Array("\u{1b}[<0;1;1M\u{1b}[<0;1;1m".utf8)
         waitUntil { capture.bytes == expectedClick }
         precondition(capture.bytes == expectedClick,
                      "Mouse-enabled apps must receive an unmodified press and release at the clicked cell: \(capture.bytes)")
+        for mode in [1002, 1003] {
+            linkClick("\u{1b}[?1000l\u{1b}[?\(mode)h" + url)
+            precondition(lifecycle.urls == [url], "Link clicks must work with mouse motion mode \(mode)")
+            linkClick(url, drag: true)
+            precondition(lifecycle.urls.isEmpty, "Dragging must not open a link with mouse motion mode \(mode)")
+            bridge.receive(Data("\u{1b}[?\(mode)l".utf8))
+            bridge.session.waitForPendingOutput()
+        }
         bridge.receive(Data("\u{1b}[?1000l\u{1b}[?1006l".utf8))
         bridge.session.waitForPendingOutput()
         capture.clear()

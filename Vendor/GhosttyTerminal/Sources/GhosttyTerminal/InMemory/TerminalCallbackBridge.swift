@@ -21,6 +21,7 @@ final class TerminalCallbackBridge {
     var onCellSizeChange: ((UInt32, UInt32) -> Void)?
     var onRenderRequest: (() -> Void)?
     var onMouseShape: ((ghostty_action_mouse_shape_e) -> Void)?
+    var hoveredLink: String?
 
     init(delegate: (any TerminalSurfaceViewDelegate)? = nil) {
         self.delegate = delegate
@@ -134,6 +135,7 @@ final class TerminalCallbackBridge {
                 let buf = UnsafeBufferPointer(start: ptr, count: Int(payload.len))
                 return String(decoding: buf.map(UInt8.init), as: UTF8.self)
             }()
+            hoveredLink = url
             TerminalDebugLog.log(
                 .actions,
                 "callback action=mouse_over_link url=\(url.map { TerminalDebugLog.describe($0) } ?? "nil")"
