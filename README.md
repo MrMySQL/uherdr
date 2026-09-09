@@ -21,6 +21,8 @@ open dist/Herdr.app
 
 Open `Package.swift` in Xcode to develop the app, or use `swift build` and `swift run HerdrCoreTests` from a terminal. Swift Package Manager downloads GhosttyTerminal's checksummed native XCFramework and MSDisplayLink on the first build. The pinned Swift wrapper is vendored in this repository.
 
+After pulling changes, quit Herdr, rerun `./scripts/build-app.sh`, and open `dist/Herdr.app` again. `swift build` and the test scripts do not update the app bundle. If you keep a copy on your Desktop or in Applications, replace it with the rebuilt bundle; older copies will still have the old shortcuts. Quitting the client preserves running shells and agents.
+
 The sidebar groups spaces and agents by device. **This Mac** uses your default local herdr socket and preserves existing connection preferences. Use the menu beside a device to edit its socket and local herdr executable. Start herdr first, or use the local device's Start Server button. Quit detaches the client; shells and agents remain owned by herdr.
 
 ## Connect another device over SSH
@@ -71,6 +73,7 @@ swift run HerdrCoreTests  # Protocol, layout, selection, and error handling
 ./scripts/test-hotkeys.sh # Command-key hint lifecycle
 bash scripts/test-agent-worktree.sh # Worktree agent launch and failure handling
 bash scripts/test-terminal-keyboard.sh # Real Ghostty rendering, keyboard, paste, resize, and teardown
+bash scripts/test-text-size-menu.sh # Actual SwiftUI text-size shortcuts with a focused terminal
 ./scripts/test.sh         # Also starts and cleans up an isolated herdr server
 bash scripts/test-devices.sh # Two isolated servers, overlapping IDs, and forwarded terminal control
 ```

@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyTerminal
+import HerdrCore
 @testable import HerdrMac
 
 @main
@@ -23,8 +24,17 @@ struct TerminalKeyboardTests {
         }
         let capture = StreamCapture()
         let bridge = GhosttyStreamBridge(input: { capture.append($0) }, resize: { capture.resize($0) })
-        let engine = GhosttyTerminal.TerminalController(configuration: HerdrTerminalView.baseConfiguration)
+        let suiteName = "dev.herdr.font-size-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = SessionStore(profile: DeviceProfile(name: "Font test", kind: .local, executable: "/usr/bin/false"), defaults: defaults)
+        let coordinator = HerdrMac.TerminalSurface.Coordinator(
+            controller: HerdrMac.TerminalController(), store: store, paneID: "font-test"
+        )
+        let engine = coordinator.engine
         let view = HerdrTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 360))
+        coordinator.view = view
+        coordinator.updateAppearance(fontSize: 13, dark: true)
         let lifecycle = SurfaceCapture()
         view.delegate = lifecycle
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(bridge.session))
@@ -172,11 +182,19 @@ struct TerminalKeyboardTests {
         bridge.session.waitForPendingOutput()
 
         let oldSurface = lifecycle.surface
-        engine.setTerminalConfiguration(TerminalConfiguration().fontSize(18))
+        let oldFontColumns = capture.viewport!.columns
+        coordinator.updateAppearance(fontSize: 18, dark: true)
         view.fitToSize()
+        waitUntil { capture.viewport!.columns < oldFontColumns }
+        precondition(capture.viewport!.columns < oldFontColumns,
+                     "Increasing font size must enlarge the rendered terminal cells")
+        coordinator.updateAppearance(fontSize: 13, dark: true)
+        waitUntil { capture.viewport!.columns == oldFontColumns }
+        precondition(capture.viewport!.columns == oldFontColumns,
+                     "Decreasing font size must restore the rendered terminal cell size")
         precondition(lifecycle.surface === oldSurface, "Font settings must not recreate a live terminal")
         precondition(bridge.session.readViewportText()?.contains("Ghostty café 世界") == true)
-        print("PASS: font changes preserve rendered content and surface")
+        print("PASS: font increases and decreases resize live cells while preserving content and surface")
 
         let other = HerdrTerminalView(frame: view.frame)
         let otherCapture = StreamCapture()
