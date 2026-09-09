@@ -51,6 +51,38 @@ struct TerminalKeyboardTests {
         precondition(capture.viewport!.columns > originalColumns)
         print("PASS: resizing reports the actual terminal grid")
 
+        // App shortcuts must reach the menu before Ghostty's own bindings.
+        let previousMenu = NSApp.mainMenu
+        let shortcutMenu = NSMenu()
+        shortcutMenu.autoenablesItems = false
+        let shortcutTarget = ShortcutTarget()
+        NSApp.mainMenu = shortcutMenu
+        let shortcuts: [(String, NSEvent.ModifierFlags, UInt16)] = [
+            ("1", .control, 18), ("2", .control, 19), ("3", .control, 20),
+            ("4", .control, 21), ("5", .control, 23), ("6", .control, 22),
+            ("7", .control, 26), ("8", .control, 28), ("9", .control, 25),
+            ("=", .command, 24), ("+", [.command, .shift], 24), ("-", .command, 27),
+        ]
+        for (key, modifiers, keyCode) in shortcuts {
+            shortcutMenu.removeAllItems()
+            let item = NSMenuItem(title: "App shortcut", action: #selector(ShortcutTarget.invoke(_:)), keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            item.target = shortcutTarget
+            shortcutMenu.addItem(item)
+            shortcutTarget.invocations = 0
+            capture.clear()
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                                        timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: window.windowNumber, context: nil,
+                                        characters: key, charactersIgnoringModifiers: key,
+                                        isARepeat: false, keyCode: keyCode)!
+            NSApp.sendEvent(event)
+            precondition(shortcutTarget.invocations == 1, "App shortcut \(key) must invoke the menu exactly once")
+            precondition(capture.bytes.isEmpty, "App shortcut \(key) must not send terminal input")
+        }
+        NSApp.mainMenu = previousMenu
+        print("PASS: Control-1…9 and Command-plus/equal/minus reach app menus from the terminal")
+
         func check(_ label: String, keyCode: UInt16 = 36, modifiers: NSEvent.ModifierFlags,
                    repeatPress: Bool = false, type: NSEvent.EventType = .keyDown, expected: String) {
             capture.clear()
@@ -247,6 +279,12 @@ struct TerminalKeyboardTests {
             precondition(finished, "Live Ghostty integration timed out")
         }
     }
+}
+
+@MainActor
+private final class ShortcutTarget: NSObject {
+    var invocations = 0
+    @objc func invoke(_ sender: NSMenuItem) { invocations += 1 }
 }
 
 private final class StreamCapture: @unchecked Sendable {

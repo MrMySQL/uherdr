@@ -128,6 +128,7 @@ struct PaneCard: View {
     @StateObject private var controller = TerminalController()
     @StateObject private var drop = PaneDropState()
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.displayScale) private var displayScale
     private var selected: Bool { store.selectedPane == pane.id }
     private var target: ResourceTarget { ResourceTarget(kind: "pane", id: pane.id, label: pane.displayTitle) }
     var body: some View {
@@ -158,6 +159,7 @@ struct PaneCard: View {
                 draggableTitle
                 Button { store.zoom(pane.id) } label: { Image(systemName: zoomed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
                     .buttonStyle(.plain).help(zoomed ? "Restore split layout" : "Zoom pane")
+                    .frame(height: 11)
                 Menu {
                     Button("Split side by side") { store.split(.right, paneID: pane.id) }
                     Button("Split top and bottom") { store.split(.down, paneID: pane.id) }
@@ -169,9 +171,11 @@ struct PaneCard: View {
                     Button("Close pane…", role: .destructive) { store.pendingClose = target }
                 } label: { Image(systemName: "ellipsis") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Pane actions")
+                    .frame(height: 11)
             }
             .foregroundStyle(.secondary).font(.system(size: 10))
-            .padding(.horizontal, 11).frame(height: 33)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 11).padding(.vertical, 1 / displayScale)
             .background(selected ? Color.accentColor.opacity(0.075) : Color.primary.opacity(0.025))
             .contentShape(Rectangle()).onTapGesture { store.focusPane(pane.id) }
             Divider().opacity(0.6)
@@ -193,15 +197,6 @@ struct PaneCard: View {
                 }
             }
             .background(colorScheme == .dark ? Color(red: 0.055, green: 0.065, blue: 0.075) : Color(red: 0.98, green: 0.98, blue: 0.97))
-            if !pane.directory.isEmpty {
-                HStack(spacing: 5) {
-                    Image(systemName: "folder").font(.system(size: 8))
-                    Text(pane.directory.replacingOccurrences(of: NSHomeDirectory(), with: "~")).lineLimit(1).truncationMode(.head)
-                    Spacer()
-                    Text(pane.id).foregroundStyle(.tertiary)
-                }.font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
-                    .padding(.horizontal, 10).frame(height: 22).background(.primary.opacity(0.02))
-            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1) }
@@ -229,7 +224,6 @@ struct PaneCard: View {
             if pane.agent != nil { StatusBadge(status: pane.agentStatus) }
             Spacer(minLength: 4)
         }
-        .frame(maxHeight: .infinity)
         .contentShape(Rectangle())
         .help("Drag to a pane’s top, bottom, left, or right edge to move it")
         .accessibilityHint("Drag to a pane’s top, bottom, left, or right edge to move it")

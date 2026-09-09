@@ -21,6 +21,18 @@ struct HerdrApp: App {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { store.sheet = .settings }.keyboardShortcut(",").disabled(!canInteract)
             }
+            CommandGroup(after: .toolbar) {
+                Button("Increase Text Size") { store.fontSize = min(22, store.fontSize + 1) }
+                    .keyboardShortcut("+", modifiers: .command)
+                    .disabled(!canInteract || store.fontSize >= 22)
+                Button("Increase Text Size") { store.fontSize = min(22, store.fontSize + 1) }
+                    .keyboardShortcut("=", modifiers: .command)
+                    .disabled(!canInteract || store.fontSize >= 22)
+                    .hidden()
+                Button("Decrease Text Size") { store.fontSize = max(10, store.fontSize - 1) }
+                    .keyboardShortcut("-", modifiers: .command)
+                    .disabled(!canInteract || store.fontSize <= 10)
+            }
             CommandMenu("Pane") {
                 Button("Split Side by Side") { store.split(.right) }.keyboardShortcut("d").disabled(!canUseCurrentPane)
                 Button("Split Top and Bottom") { store.split(.down) }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(!canUseCurrentPane)
