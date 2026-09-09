@@ -90,6 +90,11 @@
             surface?.isMouseCaptured ?? false
         }
 
+        /// Destination detected by Ghostty at the current pointer position.
+        public var hoveredLink: String? {
+            surface == nil ? nil : core.bridge.hoveredLink
+        }
+
         public func sendMousePos(
             x: Double,
             y: Double,

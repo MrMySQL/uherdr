@@ -307,8 +307,26 @@ final class HerdrTerminalView: AppTerminalView {
     var canAcceptFileDrop: () -> Bool = { false }
     private var surfaceVisible = true
     private var plainLinkClick = false
+    private var capturedLinkClick: (url: String, event: NSEvent)?
+    private var capturedLinkDragged = false
 
     override func mouseDown(with event: NSEvent) {
+        capturedLinkClick = nil
+        capturedLinkDragged = false
+        if isMouseCaptured, event.clickCount == 1,
+           event.modifierFlags.isDisjoint(with: [.shift, .control, .option]) {
+            // Shift bypasses application capture; Command enables Ghostty's
+            // URL/OSC 8 matcher. Probe before sending a press so a link cannot
+            // leave the application with half of a mouse click.
+            updateLinkPointer(event, modifiers: [.shift, .super_])
+            if let url = hoveredLink {
+                plainLinkClick = false
+                capturedLinkClick = (url, event)
+                window?.makeFirstResponder(self)
+                return
+            }
+            updateLinkPointer(event, modifiers: TerminalInputModifiers(from: event.modifierFlags))
+        }
         plainLinkClick = event.clickCount == 1 && !isMouseCaptured
             && event.modifierFlags.isDisjoint(with: [.shift, .control, .option, .command])
         if plainLinkClick {
@@ -323,11 +341,42 @@ final class HerdrTerminalView: AppTerminalView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if let click = capturedLinkClick {
+            if !capturedLinkDragged {
+                // Start selection only once this becomes a drag. A synthetic
+                // Shift press on a click would extend an existing selection
+                // and make Ghostty misclassify the click as a drag.
+                updateLinkPointer(click.event, modifiers: .shift)
+                sendMouseButton(state: GHOSTTY_MOUSE_PRESS, button: GHOSTTY_MOUSE_LEFT,
+                                modifiers: .shift)
+            }
+            capturedLinkDragged = true
+            let point = convert(event.locationInWindow, from: nil)
+            sendMousePos(x: point.x, y: bounds.height - point.y, modifiers: .shift)
+            return
+        }
         plainLinkClick = false
         super.mouseDragged(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {
+        if let click = capturedLinkClick {
+            capturedLinkClick = nil
+            if capturedLinkDragged {
+                let point = convert(event.locationInWindow, from: nil)
+                sendMousePos(x: point.x, y: bounds.height - point.y, modifiers: .shift)
+                sendMouseButton(state: GHOSTTY_MOUSE_RELEASE, button: GHOSTTY_MOUSE_LEFT,
+                                modifiers: .shift)
+            } else if event.modifierFlags.isDisjoint(with: [.shift, .control, .option]) {
+                updateLinkPointer(event, modifiers: [.shift, .super_])
+                if hoveredLink == click.url {
+                    (delegate as? any TerminalSurfaceOpenURLDelegate)?
+                        .terminalDidRequestOpenURL(click.url, kind: .text)
+                }
+            }
+            updateLinkPointer(event, modifiers: TerminalInputModifiers(from: event.modifierFlags))
+            return
+        }
         defer { plainLinkClick = false }
         guard plainLinkClick, !isMouseCaptured,
               event.modifierFlags.isDisjoint(with: [.shift, .control, .option, .command]) else {
@@ -348,6 +397,12 @@ final class HerdrTerminalView: AppTerminalView {
         // create a selection drag or report movement to a mouse consumer.
         sendMousePos(x: -1, y: -1, modifiers: modifiers)
         sendMousePos(x: x, y: y, modifiers: modifiers)
+    }
+
+    private func updateLinkPointer(_ event: NSEvent, modifiers: TerminalInputModifiers) {
+        let point = convert(event.locationInWindow, from: nil)
+        sendMousePos(x: -1, y: -1, modifiers: modifiers)
+        sendMousePos(x: point.x, y: bounds.height - point.y, modifiers: modifiers)
     }
 
     override var acceptsFirstResponder: Bool { surfaceVisible }
@@ -416,6 +471,7 @@ final class HerdrTerminalView: AppTerminalView {
             .minimumContrast(4.5)
             .windowPaddingX(0).windowPaddingY(0)
             .custom("macos-option-as-alt", "true")
+            .custom("mouse-shift-capture", "never")
             .custom("clipboard-read", "deny")
             .custom("clipboard-write", "allow")
             .custom("keybind", "clear")
