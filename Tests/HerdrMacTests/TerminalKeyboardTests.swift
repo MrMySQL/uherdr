@@ -62,6 +62,9 @@ struct TerminalKeyboardTests {
             ("4", .control, 21), ("5", .control, 23), ("6", .control, 22),
             ("7", .control, 26), ("8", .control, 28), ("9", .control, 25),
             ("=", .command, 24), ("+", [.command, .shift], 24), ("-", .command, 27),
+            ("[", .command, 33), ("]", .command, 30),
+            ("[", [.command, .shift], 33), ("]", [.command, .shift], 30),
+            ("`", .control, 50),
         ]
         for (key, modifiers, keyCode) in shortcuts {
             shortcutMenu.removeAllItems()
@@ -81,7 +84,7 @@ struct TerminalKeyboardTests {
             precondition(capture.bytes.isEmpty, "App shortcut \(key) must not send terminal input")
         }
         NSApp.mainMenu = previousMenu
-        print("PASS: Control-1…9 and Command-plus/equal/minus reach app menus from the terminal")
+        print("PASS: tab, pane, and text size shortcuts reach app menus from the terminal")
 
         func check(_ label: String, keyCode: UInt16 = 36, modifiers: NSEvent.ModifierFlags,
                    repeatPress: Bool = false, type: NSEvent.EventType = .keyDown, expected: String) {

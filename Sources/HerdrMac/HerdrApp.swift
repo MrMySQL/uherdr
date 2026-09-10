@@ -85,7 +85,9 @@ struct HerdrApp: App {
                 Button("Previous Tab") { moveTab(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
                     .disabled(!canNavigateTabs)
                 Divider()
-                Button("Next Pane") { movePane() }.keyboardShortcut("`", modifiers: [.control]).disabled(!canUseCurrentPane)
+                Button("Next Pane") { movePane(1) }.keyboardShortcut("]", modifiers: .command).disabled(!canUseCurrentPane)
+                Button("Previous Pane") { movePane(-1) }.keyboardShortcut("[", modifiers: .command).disabled(!canUseCurrentPane)
+                Button("Next Pane") { movePane(1) }.keyboardShortcut("`", modifiers: [.control]).disabled(!canUseCurrentPane)
                 Button("Show Agents") { devices.sidebarMode = "agents" }.keyboardShortcut("a", modifiers: [.command, .shift])
                 Button("Show Spaces") { devices.sidebarMode = "spaces" }.keyboardShortcut("s", modifiers: [.command, .shift])
             }
@@ -112,11 +114,11 @@ struct HerdrApp: App {
         let index = tabs.firstIndex { $0.id == store.selectedTab } ?? 0
         store.selectTab(tabs[(index + offset + tabs.count) % tabs.count])
     }
-    private func movePane() {
+    private func movePane(_ offset: Int) {
         let panes = store.visiblePanes
         guard !panes.isEmpty else { return }
         let index = panes.firstIndex { $0.id == store.selectedPane } ?? 0
-        store.focusPane(panes[(index + 1) % panes.count].id)
+        store.focusPane(panes[(index + offset + panes.count) % panes.count].id)
     }
 }
 
