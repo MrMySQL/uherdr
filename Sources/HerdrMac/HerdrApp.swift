@@ -28,7 +28,6 @@ struct HerdrApp: App {
                 Button("Increase Text Size") { store.fontSize = min(22, store.fontSize + 1) }
                     .keyboardShortcut("=", modifiers: .command)
                     .disabled(!canInteract || store.fontSize >= 22)
-                    .hidden()
                 Button("Decrease Text Size") { store.fontSize = max(10, store.fontSize - 1) }
                     .keyboardShortcut("-", modifiers: .command)
                     .disabled(!canInteract || store.fontSize <= 10)
