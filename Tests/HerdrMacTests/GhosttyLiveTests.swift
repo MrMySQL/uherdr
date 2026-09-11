@@ -26,7 +26,7 @@ enum GhosttyLiveTests {
         store.selectedPane = pane.id
         let transport = HerdrMac.TerminalController()
         let host = NSHostingView(rootView: AnyView(HerdrMac.TerminalSurface(
-            controller: transport, pane: pane, store: store, dark: true
+            controller: transport, pane: pane, store: store, dark: true, fontSize: store.fontSize, selected: store.selectedPane == pane.id
         )))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 400),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -69,14 +69,14 @@ enum GhosttyLiveTests {
             print("PASS: live Herdr terminal remains interactive after resize")
 
             host.rootView = AnyView(HerdrMac.TerminalSurface(
-                controller: transport, pane: pane, store: store, dark: true, visible: false
+                controller: transport, pane: pane, store: store, dark: true, fontSize: store.fontSize, selected: store.selectedPane == pane.id, visible: false
             ))
             try await Task.sleep(for: .milliseconds(100))
             guard window.firstResponder !== view, !view.acceptsFirstResponder else {
                 throw HerdrError.message("A hidden terminal retained keyboard focus while the next tab loads")
             }
             host.rootView = AnyView(HerdrMac.TerminalSurface(
-                controller: transport, pane: pane, store: store, dark: true
+                controller: transport, pane: pane, store: store, dark: true, fontSize: store.fontSize, selected: store.selectedPane == pane.id
             ))
             try await waitFor { window.firstResponder === view }
             print("PASS: hidden terminals relinquish keyboard focus and regain it when shown")
@@ -180,7 +180,7 @@ enum GhosttyLiveTests {
         remote.selectedPane = pane.id
         let transport = HerdrMac.TerminalController()
         let host = NSHostingView(rootView: AnyView(HerdrMac.TerminalSurface(
-            controller: transport, pane: pane, store: remote, dark: true
+            controller: transport, pane: pane, store: remote, dark: true, fontSize: remote.fontSize, selected: remote.selectedPane == pane.id
         )))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 400),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)

@@ -138,10 +138,10 @@ final class SessionStore: ObservableObject {
         guard !suspended, paneMoveID == nil, refreshingGeneration != connectionGeneration, Date() >= retryAfter else { return }
         let generation = connectionGeneration
         refreshingGeneration = generation
-        connecting = !connected
+        if connecting != !connected { connecting = !connected }
         defer {
             if refreshingGeneration == generation { refreshingGeneration = nil }
-            if connectionGeneration == generation { connecting = false }
+            if connectionGeneration == generation, connecting { connecting = false }
         }
         let revision = selectionRevision
         let expectedLayoutRevision = layoutRevision
@@ -150,7 +150,7 @@ final class SessionStore: ObservableObject {
             if isRemote {
                 path = try await tunnel.connect(profile)
                 guard generation == connectionGeneration, !Task.isCancelled else { return }
-                remoteHome = tunnel.remoteHome
+                if remoteHome != tunnel.remoteHome { remoteHome = tunnel.remoteHome }
             } else { path = (socketPath as NSString).expandingTildeInPath }
             if effectiveSocketPath != path {
                 effectiveSocketPath = path
@@ -160,20 +160,23 @@ final class SessionStore: ObservableObject {
             let response = try await activeClient.request("session.snapshot")
             let snapshot = try response["snapshot"].decode(SessionSnapshot.self)
             guard generation == connectionGeneration, !Task.isCancelled, expectedLayoutRevision == layoutRevision else { return }
-            version = snapshot.version
+            if version != snapshot.version { version = snapshot.version }
             if workspaces != snapshot.workspaces { workspaces = snapshot.workspaces }
             if tabs != snapshot.tabs { tabs = snapshot.tabs }
             if panes != snapshot.panes { panes = snapshot.panes }
             if agents != snapshot.agents { agents = snapshot.agents }
             if revision == selectionRevision {
                 if !workspaces.contains(where: { $0.id == selectedSpace }) {
-                    selectedSpace = snapshot.focusedWorkspaceID ?? workspaces.first?.id
+                    let resolved = snapshot.focusedWorkspaceID ?? workspaces.first?.id
+                    if selectedSpace != resolved { selectedSpace = resolved }
                 }
                 if !visibleTabs.contains(where: { $0.id == selectedTab }) {
-                    selectedTab = currentSpace?.activeTabID ?? visibleTabs.first?.id
+                    let resolved = currentSpace?.activeTabID ?? visibleTabs.first?.id
+                    if selectedTab != resolved { selectedTab = resolved }
                 }
                 if !visiblePanes.contains(where: { $0.id == selectedPane }) {
-                    selectedPane = visiblePanes.first(where: { $0.id == snapshot.focusedPaneID })?.id ?? visiblePanes.first?.id
+                    let resolved = visiblePanes.first(where: { $0.id == snapshot.focusedPaneID })?.id ?? visiblePanes.first?.id
+                    if selectedPane != resolved { selectedPane = resolved }
                 }
             }
             if let tabID = selectedTab {
@@ -181,15 +184,18 @@ final class SessionStore: ObservableObject {
                 let layout = try result["layout"].decode(TabLayout.self)
                 guard generation == connectionGeneration, !Task.isCancelled, expectedLayoutRevision == layoutRevision else { return }
                 if layouts[tabID] != layout { layouts[tabID] = layout }
-                if selectedTab == tabID { selectedPane = layout.resolveSelectedPane(selectedPane) }
+                if selectedTab == tabID {
+                    let resolved = layout.resolveSelectedPane(selectedPane)
+                    if selectedPane != resolved { selectedPane = resolved }
+                }
             }
-            connected = true
-            connectionError = nil
+            if !connected { connected = true }
+            if connectionError != nil { connectionError = nil }
             persistSelection()
         } catch {
             guard generation == connectionGeneration, !Task.isCancelled, expectedLayoutRevision == layoutRevision else { return }
-            connected = false
-            connectionError = error.localizedDescription
+            if connected { connected = false }
+            if connectionError != error.localizedDescription { connectionError = error.localizedDescription }
             if isRemote { retryAfter = Date().addingTimeInterval(10) }
         }
     }

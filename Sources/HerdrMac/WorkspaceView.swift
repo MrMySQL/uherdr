@@ -1,7 +1,7 @@
 import SwiftUI
 import HerdrCore
 
-private let mint = Color(red: 0.34, green: 0.73, blue: 0.58)
+let herdrAccentColor = Color(red: 0.34, green: 0.73, blue: 0.58)
 
 struct WorkspaceView: View {
     @ObservedObject var store: SessionStore
@@ -19,7 +19,6 @@ struct WorkspaceView: View {
                         tabStrip
                         Divider()
                         terminalDeck
-                            .modifier(PaneDragLifecycle())
                             .id(store.connectionGeneration)
                             .padding(8)
                     } else {
@@ -64,8 +63,8 @@ struct WorkspaceView: View {
                 .help("Show or hide sidebar")
             }
         }
-        .tint(mint)
-        .accentColor(mint)
+        .tint(herdrAccentColor)
+        .accentColor(herdrAccentColor)
         .frame(minWidth: 840, minHeight: 520)
         .preferredColorScheme(store.colorScheme)
         .sheet(item: $store.sheet) { sheet in EditorSheet(sheet: sheet, store: store) }
@@ -94,20 +93,8 @@ struct WorkspaceView: View {
     }
 
     private var terminalDeck: some View {
-        // Retain every visited tab, including those in other workspaces. Switching
-        // selection must not tear down Ghostty or reconnect/replay its stream.
         ZStack {
-            ForEach(store.tabs) { tab in
-                if let layout = store.layouts[tab.id] {
-                    let visible = store.selectedTab == tab.id
-                    SplitTree(node: layout.root, tabID: tab.id, path: [], store: store,
-                              zoomedPaneID: layout.zoomed ? layout.resolveSelectedPane(nil) : nil,
-                              visible: visible)
-                        .opacity(visible ? 1 : 0)
-                        .allowsHitTesting(visible)
-                        .accessibilityHidden(!visible)
-                }
-            }
+            TerminalTabDeck(store: store)
             if store.currentLayout == nil {
                 ProgressView("Loading terminals…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -143,7 +130,7 @@ struct WorkspaceView: View {
                             .padding(.horizontal, 10).frame(height: 26)
                             .contentShape(Rectangle())
                             .background(store.selectedTab == tab.id ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
-                            .overlay(alignment: .bottom) { if store.selectedTab == tab.id { Capsule().fill(mint).frame(height: 2).padding(.horizontal, 12) } }
+                            .overlay(alignment: .bottom) { if store.selectedTab == tab.id { Capsule().fill(herdrAccentColor).frame(height: 2).padding(.horizontal, 12) } }
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
@@ -162,7 +149,7 @@ struct WorkspaceView: View {
 
     private var statusBar: some View {
         HStack(spacing: 8) {
-            Circle().fill(store.connected ? mint : Color.orange).frame(width: 6, height: 6)
+            Circle().fill(store.connected ? herdrAccentColor : Color.orange).frame(width: 6, height: 6)
             Text(store.profile.name)
             Text(store.connected ? "Connected to herdr \(store.version)" : store.connecting ? "Connecting…" : "Disconnected")
             Spacer()
@@ -181,7 +168,7 @@ struct WorkspaceView: View {
 
     private var emptySpaces: some View {
         VStack(spacing: 18) {
-            Image(systemName: "square.stack.3d.up").font(.system(size: 42, weight: .ultraLight)).foregroundStyle(mint)
+            Image(systemName: "square.stack.3d.up").font(.system(size: 42, weight: .ultraLight)).foregroundStyle(herdrAccentColor)
             Text("Room for your next idea").font(.system(size: 24, weight: .medium))
             Text("Create a space for a project, then add terminals and agents.").foregroundStyle(.secondary)
             Button("Create a space…") { store.sheet = .space }.buttonStyle(.borderedProminent)
@@ -190,7 +177,7 @@ struct WorkspaceView: View {
 
     private var connectionView: some View {
         VStack(spacing: 18) {
-            Image(systemName: "square.split.2x2").font(.system(size: 50, weight: .ultraLight)).foregroundStyle(mint)
+            Image(systemName: "square.split.2x2").font(.system(size: 50, weight: .ultraLight)).foregroundStyle(herdrAccentColor)
             Text(store.profile.name).font(.system(size: 26, weight: .medium))
             Text(store.isRemote ? "Connect over SSH to see this device’s workspaces." : "Connect to herdr on this Mac to see your workspaces.")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -225,7 +212,7 @@ struct StatusBadge: View {
 }
 extension AgentStatus {
     var color: Color {
-        switch self { case .working: return .cyan; case .blocked: return .orange; case .done: return mint; case .idle: return .secondary; case .unknown: return .secondary }
+        switch self { case .working: return .cyan; case .blocked: return .orange; case .done: return herdrAccentColor; case .idle: return .secondary; case .unknown: return .secondary }
     }
 }
 
