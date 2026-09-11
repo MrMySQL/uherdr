@@ -16,7 +16,8 @@ struct SplitTree: View {
     let node: LayoutNode
     let tabID: String
     let path: [Bool]
-    @ObservedObject var store: SessionStore
+    let store: SessionStore
+    let snapshot: TerminalTabSnapshot
     var zoomedPaneID: String? = nil
     var visible = true
     var body: some View {
@@ -25,8 +26,8 @@ struct SplitTree: View {
     private var content: AnyView {
         switch node {
         case .pane(let id):
-            if let pane = store.panes.first(where: { $0.id == id }) {
-                return AnyView(PaneCard(pane: pane, store: store, zoomed: zoomedPaneID == id,
+            if let pane = snapshot.panes[id] {
+                return AnyView(PaneCard(pane: pane, store: store, snapshot: snapshot, zoomed: zoomedPaneID == id,
                                         visible: visible && (zoomedPaneID == nil || zoomedPaneID == id)).id(pane.terminalID))
             }
             return AnyView(Color.clear)
@@ -38,9 +39,9 @@ struct SplitTree: View {
             }
             return AnyView(ResizablePair(direction: direction, ratio: ratio, expandedFirst: expandedFirst,
                                         onCommit: { store.setRatio(tabID: tabID, path: path, ratio: $0) }) {
-                SplitTree(node: first, tabID: tabID, path: path + [false], store: store, zoomedPaneID: zoomedPaneID, visible: visible)
+                SplitTree(node: first, tabID: tabID, path: path + [false], store: store, snapshot: snapshot, zoomedPaneID: zoomedPaneID, visible: visible)
             } second: {
-                SplitTree(node: second, tabID: tabID, path: path + [true], store: store, zoomedPaneID: zoomedPaneID, visible: visible)
+                SplitTree(node: second, tabID: tabID, path: path + [true], store: store, snapshot: snapshot, zoomedPaneID: zoomedPaneID, visible: visible)
             })
         }
     }
@@ -122,20 +123,21 @@ struct ResizablePair<First: View, Second: View>: View {
 
 struct PaneCard: View {
     let pane: Pane
-    @ObservedObject var store: SessionStore
+    let store: SessionStore
+    let snapshot: TerminalTabSnapshot
     let zoomed: Bool
     var visible = true
     @StateObject private var controller = TerminalController()
     @StateObject private var drop = PaneDropState()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var displayScale
-    private var selected: Bool { store.selectedPane == pane.id }
+    private var selected: Bool { snapshot.selectedPaneID == pane.id }
     private var target: ResourceTarget { ResourceTarget(kind: "pane", id: pane.id, label: pane.displayTitle) }
     var body: some View {
         GeometryReader { geometry in
             card
                 .overlay(alignment: .topLeading) {
-                    if let edge = drop.edge, visible, store.paneDragPayload(for: pane.id) != nil {
+                    if let edge = drop.edge, visible, snapshot.dragPayloads[pane.id] != nil {
                         let rect = edge.preview(in: geometry.size)
                         RoundedRectangle(cornerRadius: 8)
                             .fill(Color.accentColor.opacity(0.25))
@@ -180,7 +182,7 @@ struct PaneCard: View {
             .contentShape(Rectangle()).onTapGesture { store.focusPane(pane.id) }
             Divider().opacity(0.6)
             ZStack {
-                TerminalSurface(controller: controller, pane: pane, store: store, dark: colorScheme == .dark, visible: visible)
+                TerminalSurface(controller: controller, pane: pane, store: store, dark: colorScheme == .dark, fontSize: snapshot.fontSize, selected: selected, visible: visible)
                     .padding(7)
                 if let error = controller.error {
                     VStack(spacing: 12) {
@@ -203,7 +205,7 @@ struct PaneCard: View {
     }
 
     @ViewBuilder private var draggableTitle: some View {
-        if visible, let payload = store.paneDragPayload(for: pane.id) {
+        if visible, let payload = snapshot.dragPayloads[pane.id] {
             paneTitle.draggable(payload) {
                 Label(pane.displayTitle, systemImage: "terminal")
                     .font(.system(size: 12, weight: .medium))

@@ -71,6 +71,7 @@ swift run HerdrCoreTests  # Protocol, layout, selection, and error handling
 ./scripts/test-hotkeys.sh # Command-key hint lifecycle
 bash scripts/test-agent-worktree.sh # Worktree agent launch and failure handling
 bash scripts/test-terminal-keyboard.sh # Real Ghostty rendering, keyboard, paste, resize, and teardown
+bash scripts/test-performance.sh # Polling and terminal publication regressions
 ./scripts/test.sh         # Also starts and cleans up an isolated herdr server
 bash scripts/test-devices.sh # Two isolated servers, overlapping IDs, and forwarded terminal control
 ```

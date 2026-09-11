@@ -23,7 +23,9 @@ final class TerminalController: ObservableObject {
     func start(executable: String, socket: String, pane: String, cols: Int, rows: Int, takeover: Bool = false) {
         stop()
         configuration = (executable, socket, pane)
-        error = nil; ready = false; framing = JSONLineBuffer(); errorText = ""
+        error = nil
+        if ready { ready = false }
+        framing = JSONLineBuffer(); errorText = ""
         generation = UUID()
         let token = generation
         let child = Process()
@@ -52,10 +54,10 @@ final class TerminalController: ObservableObject {
                         let frame = try JSONDecoder().decode(TerminalEnvelope.self, from: line)
                         if frame.type == "terminal.frame" {
                             self.receive?(try frame.decodedBytes())
-                            self.ready = true
+                            if !self.ready { self.ready = true }
                         } else if frame.type == "terminal.closed" {
                             self.error = frame.reason ?? "Terminal connection closed"
-                            self.ready = false
+                            if self.ready { self.ready = false }
                         }
                     }
                 } catch { self.error = error.localizedDescription }
@@ -73,7 +75,7 @@ final class TerminalController: ObservableObject {
         child.terminationHandler = { [weak self] _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 guard let self, self.generation == token else { return }
-                self.ready = false
+                if self.ready { self.ready = false }
                 if self.error == nil { self.error = self.errorText.isEmpty ? "Terminal detached. Reconnect to continue." : self.errorText }
             }
         }
@@ -127,8 +129,10 @@ final class TerminalController: ObservableObject {
 struct TerminalSurface: NSViewRepresentable {
     @ObservedObject var controller: TerminalController
     let pane: Pane
-    @ObservedObject var store: SessionStore
+    let store: SessionStore
     let dark: Bool
+    let fontSize: Double
+    let selected: Bool
     var visible = true
 
     func makeCoordinator() -> Coordinator {
@@ -148,14 +152,24 @@ struct TerminalSurface: NSViewRepresentable {
         view.controller = coordinator.engine
         view.setSurfaceVisible(visible)
         view.onAttach = { [weak coordinator] in coordinator?.focusIfSelected() }
+        view.onRetainedTabVisibility = { [weak coordinator] visible, zoomedPaneID in
+            guard let coordinator, !coordinator.stopped else { return }
+            let paneVisible = visible && (zoomedPaneID == nil || zoomedPaneID == coordinator.paneID)
+            coordinator.visible = paneVisible
+            coordinator.view?.setSurfaceVisible(paneVisible)
+            // A rapid tab round-trip can coalesce away SwiftUI's hidden
+            // snapshot. Keep native visibility and selection bookkeeping in sync.
+            coordinator.wasSelected = paneVisible && coordinator.store?.selectedPane == coordinator.paneID
+            if paneVisible { coordinator.focusIfSelected() }
+        }
         view.canAcceptFileDrop = { [weak coordinator] in
             guard let coordinator, let store = coordinator.store else { return false }
-            return !coordinator.stopped && coordinator.visible && coordinator.controller.ready
+            return !coordinator.stopped && coordinator.visible && coordinator.view?.isHiddenOrHasHiddenAncestor == false && coordinator.controller.ready
                 && coordinator.controller.error == nil && store.sheet == nil && store.pendingClose == nil
         }
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
         controller.receive = { [weak bridge = coordinator.bridge] in bridge?.receive($0) }
-        coordinator.updateAppearance(fontSize: store.fontSize, dark: dark)
+        coordinator.updateAppearance(fontSize: fontSize, dark: dark)
         coordinator.installEvents()
         return view
     }
@@ -163,9 +177,10 @@ struct TerminalSurface: NSViewRepresentable {
     func updateNSView(_ view: HerdrTerminalView, context: Context) {
         let coordinator = context.coordinator
         coordinator.visible = visible
+        view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
         view.setSurfaceVisible(visible)
-        coordinator.updateAppearance(fontSize: store.fontSize, dark: dark)
-        let shouldFocus = visible && store.selectedPane == pane.id
+        coordinator.updateAppearance(fontSize: fontSize, dark: dark)
+        let shouldFocus = visible && selected
         if shouldFocus && !coordinator.wasSelected {
             DispatchQueue.main.async { [weak coordinator] in coordinator?.focusIfSelected() }
         }
@@ -178,6 +193,7 @@ struct TerminalSurface: NSViewRepresentable {
         coordinator.controller.stop()
         coordinator.stopped = true
         view.onAttach = nil
+        view.onRetainedTabVisibility = nil
         view.canAcceptFileDrop = { false }
         view.delegate = nil
         view.setSurfaceVisible(false)
@@ -250,7 +266,7 @@ struct TerminalSurface: NSViewRepresentable {
         }
 
         func focusIfSelected() {
-            guard !stopped, visible, let view, let store, store.selectedPane == paneID,
+            guard !stopped, visible, let view, !view.isHiddenOrHasHiddenAncestor, let store, store.selectedPane == paneID,
                   store.sheet == nil, store.pendingClose == nil else { return }
             view.acquireProgrammaticFocus()
         }
@@ -259,7 +275,7 @@ struct TerminalSurface: NSViewRepresentable {
             // Herdr owns the scrollback represented by its ANSI frames. Keep
             // wheel scrolling on the server, while Ghostty handles keys/mouse.
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown]) { [weak self] event in
-                guard let self, !self.stopped, self.visible, let view = self.view,
+                guard let self, !self.stopped, self.visible, let view = self.view, !view.isHiddenOrHasHiddenAncestor,
                       event.window === view.window,
                       view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return event }
                 if event.type == .leftMouseDown {
@@ -304,6 +320,7 @@ struct TerminalSurface: NSViewRepresentable {
 @MainActor
 final class HerdrTerminalView: AppTerminalView {
     var onAttach: (() -> Void)?
+    var onRetainedTabVisibility: ((Bool, String?) -> Void)?
     var canAcceptFileDrop: () -> Bool = { false }
     private var surfaceVisible = true
     private var plainLinkClick = false
