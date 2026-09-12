@@ -389,5 +389,37 @@ enum GhosttyLiveTests {
             }
         }
         print("PASS: repeated four-edge docking preserves live terminal input, rendering, and focus")
+        let transferTab = try await client.request("tab.create", params: [
+            "workspace_id": .string(workspace.id), "label": .string("Transfer target"), "focus": .bool(false)
+        ])["tab"].decode(HerdrCore.Tab.self)
+        await store.refresh()
+        // Visit both tabs first so the transfer exercises retained renderers.
+        store.selectTab(transferTab)
+        try await waitFor("Transfer target did not load") { !store.busy && store.currentLayout?.tabID == transferTab.id }
+        store.selectTab(originalTab)
+        try await waitFor("Source tab did not load") { store.paneDragPayload(for: pane.id) != nil }
+        for (index, destination) in [transferTab, originalTab].enumerated() {
+            precondition(store.movePane(store.paneDragPayload(for: pane.id)!, toTab: destination.id))
+            try await waitFor("Tab transfer did not finish") { !store.busy }
+            if let error = store.operationError { throw HerdrError.message(error) }
+            try await waitFor("Transferred terminal did not regain keyboard focus") {
+                store.selectedTab == destination.id && store.selectedPane == pane.id
+                    && terminals(in: host).count == 4
+                    && (window.firstResponder as? HerdrTerminalView)?.canAcceptFileDrop() == true
+            }
+            guard let moved = window.firstResponder as? HerdrTerminalView,
+                  case .inMemory(let movedSession) = moved.configuration.backend else {
+                throw HerdrError.message("Missing transferred terminal renderer")
+            }
+            try await waitFor("Tab transfer lost scrollback") {
+                movedSession.readViewportText()?.contains("dock-renderer-3-ok") == true
+            }
+            precondition(moved.paste(text: "printf 'tab-transfer-\(index)-%s\\n' ok"))
+            precondition(moved.sendKey(.enter))
+            try await waitFor("Transferred terminal did not accept input") {
+                movedSession.readViewportText()?.contains("tab-transfer-\(index)-ok") == true
+            }
+        }
+        print("PASS: mounted cross-tab transfers preserve terminal input, rendering, scrollback, and focus")
     }
 }

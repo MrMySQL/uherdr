@@ -9,6 +9,7 @@ struct TerminalTabSnapshot: Equatable {
     let panes: [String: Pane]
     var selectedPaneID: String?
     var dragPayloads: [String: PaneDragPayload]
+    var moveDestinationTabs: [HerdrCore.Tab]
     let fontSize: Double
     let colorScheme: ColorScheme
     let displayScale: CGFloat
@@ -24,6 +25,7 @@ struct TerminalTabSnapshot: Equatable {
             return (pane.id, payload)
         })
         fontSize = store.fontSize
+        moveDestinationTabs = visible ? store.visibleTabs.filter { $0.id != layout.tabID } : []
         self.colorScheme = colorScheme
         self.displayScale = displayScale
         self.visible = visible
@@ -36,6 +38,7 @@ struct TerminalTabSnapshot: Equatable {
         copy.visible = false
         copy.selectedPaneID = nil
         copy.dragPayloads = [:]
+        copy.moveDestinationTabs = []
         return copy
     }
 }
