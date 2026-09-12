@@ -133,6 +133,7 @@ struct WorkspaceView: View {
                             .overlay(alignment: .bottom) { if store.selectedTab == tab.id { Capsule().fill(herdrAccentColor).frame(height: 2).padding(.horizontal, 12) } }
                         }
                         .buttonStyle(.plain)
+                        .modifier(PaneTabDropTarget(tabID: tab.id, store: store))
                         .contextMenu {
                             Button("Rename tab…") { store.sheet = .rename(ResourceTarget(kind: "tab", id: tab.id, label: tab.label)) }
                             Button("Close tab…", role: .destructive) { store.pendingClose = ResourceTarget(kind: "tab", id: tab.id, label: tab.label) }

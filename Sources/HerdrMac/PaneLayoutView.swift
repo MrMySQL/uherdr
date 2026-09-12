@@ -165,6 +165,15 @@ struct PaneCard: View {
                 Menu {
                     Button("Split side by side") { store.split(.right, paneID: pane.id) }
                     Button("Split top and bottom") { store.split(.down, paneID: pane.id) }
+                    Menu("Move to tab") {
+                        ForEach(snapshot.moveDestinationTabs) { tab in
+                            Button(tab.label) {
+                                guard let payload = store.paneDragPayload(for: pane.id) else { return }
+                                store.movePane(payload, toTab: tab.id)
+                            }
+                        }
+                    }
+                    .disabled(snapshot.dragPayloads[pane.id] == nil || snapshot.moveDestinationTabs.isEmpty)
                     Divider()
                     Button("Start agent…") { store.sheet = .agent(pane.id) }
                     Button("Rename pane…") { store.sheet = .rename(target) }
@@ -227,8 +236,8 @@ struct PaneCard: View {
             Spacer(minLength: 4)
         }
         .contentShape(Rectangle())
-        .help("Drag to a pane’s top, bottom, left, or right edge to move it")
-        .accessibilityHint("Drag to a pane’s top, bottom, left, or right edge to move it")
+        .help("Drag to a pane edge or another tab to move it")
+        .accessibilityHint("Drag to a pane edge or another tab to move it")
     }
 }
 
@@ -297,6 +306,36 @@ struct PaneDragLifecycle: ViewModifier {
     }
 }
 
+
+struct PaneTabDropTarget: ViewModifier {
+    let tabID: String
+    @ObservedObject var store: SessionStore
+    @State private var targeted = false
+
+    private var enabled: Bool {
+        store.visiblePanes.contains { pane in
+            guard let source = store.paneDragPayload(for: pane.id) else { return false }
+            return store.canMovePane(source, toTab: tabID)
+        }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                if targeted && enabled {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color.accentColor.opacity(0.2))
+                        .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) }
+                        .allowsHitTesting(false)
+                }
+            }
+            .dropDestination(for: PaneDragPayload.self) { sources, _ in
+                PaneDropState.endDrag()
+                guard sources.count == 1, let source = sources.first else { return false }
+                return store.movePane(source, toTab: tabID)
+            } isTargeted: { targeted = $0 }
+    }
+}
 
 struct PaneDockDropDelegate: DropDelegate {
     let paneID: String

@@ -71,6 +71,7 @@ final class SessionStore: ObservableObject {
     private var selectionRevision = 0
     private var paneMoveID: UUID?
     private var layoutRevision = 0
+    private var pendingLayoutRefresh: Set<String> = []
 
     init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil) {
         self.profile = profile
@@ -121,6 +122,7 @@ final class SessionStore: ObservableObject {
         pollTask?.cancel(); pollTask = nil
         connectionGeneration = UUID()
         paneMoveID = nil
+        pendingLayoutRefresh = []
         tunnel.stop()
         suspended = true; connected = false; connecting = false; busy = false
         if isRemote { effectiveSocketPath = "" }
@@ -179,11 +181,17 @@ final class SessionStore: ObservableObject {
                     if selectedPane != resolved { selectedPane = resolved }
                 }
             }
-            if let tabID = selectedTab {
+            let liveTabIDs = Set(tabs.map(\.id))
+            pendingLayoutRefresh.formIntersection(liveTabIDs)
+            let retainedLayouts = layouts.filter { liveTabIDs.contains($0.key) }
+            if layouts != retainedLayouts { layouts = retainedLayouts }
+            let layoutTabIDs = pendingLayoutRefresh.union(selectedTab.map { [$0] } ?? [])
+            for tabID in layoutTabIDs.sorted() {
                 let result = try await activeClient.request("layout.export", params: ["tab_id": .string(tabID)])
                 let layout = try result["layout"].decode(TabLayout.self)
                 guard generation == connectionGeneration, !Task.isCancelled, expectedLayoutRevision == layoutRevision else { return }
                 if layouts[tabID] != layout { layouts[tabID] = layout }
+                pendingLayoutRefresh.remove(tabID)
                 if selectedTab == tabID {
                     let resolved = layout.resolveSelectedPane(selectedPane)
                     if selectedPane != resolved { selectedPane = resolved }
@@ -292,7 +300,7 @@ final class SessionStore: ObservableObject {
         guard connected, !suspended, !busy, paneMoveID == nil, sheet == nil, pendingClose == nil,
               let pane = panes.first(where: { $0.id == paneID }),
               selectedTab == pane.tabID, let layout = layouts[pane.tabID],
-              !layout.zoomed, layout.root.paneIDs.contains(paneID), layout.root.paneIDs.count > 1 else { return nil }
+              !layout.zoomed, layout.root.paneIDs.contains(paneID) else { return nil }
         return PaneDragPayload(deviceID: profile.id, connectionGeneration: connectionGeneration,
                                tabID: pane.tabID, paneID: paneID)
     }
@@ -300,6 +308,56 @@ final class SessionStore: ObservableObject {
     func canMovePane(_ source: PaneDragPayload, to targetID: String) -> Bool {
         source.paneID != targetID && paneDragPayload(for: source.paneID) == source
             && paneDragPayload(for: targetID)?.tabID == source.tabID
+    }
+
+    func canMovePane(_ source: PaneDragPayload, toTab tabID: String) -> Bool {
+        paneDragPayload(for: source.paneID) == source && source.tabID != tabID
+            && visibleTabs.contains { $0.id == tabID }
+    }
+
+    @discardableResult
+    func movePane(_ source: PaneDragPayload, toTab tabID: String) -> Bool {
+        guard canMovePane(source, toTab: tabID) else { return false }
+        busy = true
+        operationError = nil
+        let activeClient = client, generation = connectionGeneration
+        let moveID = UUID(), revision = selectionRevision
+        paneMoveID = moveID
+        layoutRevision += 1
+        Task {
+            defer {
+                if generation == connectionGeneration, paneMoveID == moveID || paneMoveID == nil { busy = false }
+                if paneMoveID == moveID { paneMoveID = nil }
+            }
+            guard generation == connectionGeneration, connected, !suspended else { return }
+            do {
+                let result = try await activeClient.request("pane.move", params: [
+                    "pane_id": .string(source.paneID), "focus": .bool(true),
+                    "destination": .object(["type": .string("tab"), "tab_id": .string(tabID),
+                                            "split": .string("right"), "ratio": .number(0.5)])
+                ])
+                guard generation == connectionGeneration, !suspended else { return }
+                guard result["move_result"]["changed"] == .bool(true) else {
+                    let message = result["move_result"]["reason"].string == "zoomed_tab"
+                        ? "Restore the split layout in both tabs before moving this pane."
+                        : "Herdr did not move the pane. Refresh and try again."
+                    throw HerdrError.message(message)
+                }
+                if revision == selectionRevision {
+                    selectedTab = tabID
+                    selectedPane = source.paneID
+                }
+            } catch {
+                guard generation == connectionGeneration else { return }
+                operationError = error.localizedDescription
+            }
+            // Reconcile both trees even after an ambiguous transport failure.
+            // Keep this queued if another snapshot is already in flight.
+            pendingLayoutRefresh.formUnion([source.tabID, tabID])
+            if paneMoveID == moveID { paneMoveID = nil }
+            await refresh()
+        }
+        return true
     }
 
     @discardableResult
