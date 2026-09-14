@@ -65,6 +65,7 @@ struct TerminalKeyboardTests {
             ("[", .command, 33), ("]", .command, 30),
             ("[", [.command, .shift], 33), ("]", [.command, .shift], 30),
             ("`", .control, 50),
+            ("f", .command, 3), ("g", .command, 5), ("g", [.command, .shift], 5),
         ]
         for (key, modifiers, keyCode) in shortcuts {
             shortcutMenu.removeAllItems()

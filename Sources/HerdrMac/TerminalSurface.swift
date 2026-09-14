@@ -134,10 +134,14 @@ struct TerminalSurface: NSViewRepresentable {
     let fontSize: Double
     let selected: Bool
     var visible = true
+    var searching = false
+    var dismissSearch: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         let coordinator = Coordinator(controller: controller, store: store, paneID: pane.id)
         coordinator.visible = visible
+        coordinator.searching = searching
+        coordinator.dismissSearch = dismissSearch
         return coordinator
     }
 
@@ -157,6 +161,11 @@ struct TerminalSurface: NSViewRepresentable {
             let paneVisible = visible && (zoomedPaneID == nil || zoomedPaneID == coordinator.paneID)
             coordinator.visible = paneVisible
             coordinator.view?.setSurfaceVisible(paneVisible)
+            if !paneVisible, coordinator.searching {
+                // SwiftUI may coalesce the hidden snapshot on a fast tab
+                // round-trip. Dismiss outside the current view update anyway.
+                DispatchQueue.main.async { [weak coordinator] in coordinator?.dismissSearch?() }
+            }
             // A rapid tab round-trip can coalesce away SwiftUI's hidden
             // snapshot. Keep native visibility and selection bookkeeping in sync.
             coordinator.wasSelected = paneVisible && coordinator.store?.selectedPane == coordinator.paneID
@@ -177,11 +186,14 @@ struct TerminalSurface: NSViewRepresentable {
     func updateNSView(_ view: HerdrTerminalView, context: Context) {
         let coordinator = context.coordinator
         coordinator.visible = visible
+        let wasSearching = coordinator.searching
+        coordinator.searching = searching
+        coordinator.dismissSearch = dismissSearch
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
         view.setSurfaceVisible(visible)
         coordinator.updateAppearance(fontSize: fontSize, dark: dark)
         let shouldFocus = visible && selected
-        if shouldFocus && !coordinator.wasSelected {
+        if shouldFocus && !searching && (!coordinator.wasSelected || wasSearching) {
             DispatchQueue.main.async { [weak coordinator] in coordinator?.focusIfSelected() }
         }
         coordinator.wasSelected = shouldFocus
@@ -232,6 +244,8 @@ struct TerminalSurface: NSViewRepresentable {
         var started = false
         var stopped = false
         var visible = true
+        var searching = false
+        var dismissSearch: (() -> Void)?
         var scrollRemainder: Double = 0
         private var fontSize: Double?
         private var dark: Bool?
@@ -266,7 +280,7 @@ struct TerminalSurface: NSViewRepresentable {
         }
 
         func focusIfSelected() {
-            guard !stopped, visible, let view, !view.isHiddenOrHasHiddenAncestor, let store, store.selectedPane == paneID,
+            guard !stopped, visible, !searching, let view, !view.isHiddenOrHasHiddenAncestor, let store, store.selectedPane == paneID,
                   store.sheet == nil, store.pendingClose == nil else { return }
             view.acquireProgrammaticFocus()
         }
@@ -275,7 +289,7 @@ struct TerminalSurface: NSViewRepresentable {
             // Herdr owns the scrollback represented by its ANSI frames. Keep
             // wheel scrolling on the server, while Ghostty handles keys/mouse.
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown]) { [weak self] event in
-                guard let self, !self.stopped, self.visible, let view = self.view, !view.isHiddenOrHasHiddenAncestor,
+                guard let self, !self.stopped, self.visible, !self.searching, let view = self.view, !view.isHiddenOrHasHiddenAncestor,
                       event.window === view.window,
                       view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return event }
                 if event.type == .leftMouseDown {

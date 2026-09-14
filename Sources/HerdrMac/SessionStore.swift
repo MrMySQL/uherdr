@@ -42,6 +42,7 @@ final class SessionStore: ObservableObject {
     @Published var selectedSpace: String?
     @Published var selectedTab: String?
     @Published var selectedPane: String?
+    @Published var paneSearchRequest: (paneID: String, token: UUID)?
     @Published var connected = false
     @Published var connecting = false
     @Published var busy = false
@@ -99,6 +100,27 @@ final class SessionStore: ObservableObject {
     var currentLayout: TabLayout? { selectedTab.flatMap { layouts[$0] } }
     var attentionCount: Int { agents.filter { $0.agentStatus == .blocked || $0.agentStatus == .done }.count }
     var colorScheme: ColorScheme? { appearance == "dark" ? .dark : appearance == "light" ? .light : nil }
+
+    func searchPane(_ paneID: String? = nil) {
+        guard connected, sheet == nil, pendingClose == nil, operationError == nil,
+              let id = paneID ?? selectedPane, visiblePanes.contains(where: { $0.id == id }) else { return }
+        focusPane(id)
+        paneSearchRequest = (id, UUID())
+    }
+
+    func readPaneForSearch(_ paneID: String) async throws -> (text: String, truncated: Bool) {
+        let generation = connectionGeneration
+        let result = try await client.request("pane.read", params: [
+            "pane_id": .string(paneID), "source": .string("recent_unwrapped"),
+            "lines": .number(10000), "format": .string("text"), "strip_ansi": .bool(true)
+        ])
+        try Task.checkCancellation()
+        guard generation == connectionGeneration else { throw CancellationError() }
+        guard let text = result["read"]["text"].string else {
+            throw HerdrError.message("Herdr returned invalid pane output")
+        }
+        return (text, result["read"]["truncated"] == .bool(true))
+    }
 
     func start() {
         guard pollTask == nil, !suspended else { return }

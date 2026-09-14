@@ -129,6 +129,8 @@ struct PaneCard: View {
     var visible = true
     @StateObject private var controller = TerminalController()
     @StateObject private var drop = PaneDropState()
+    @State private var searching = false
+    @State private var searchFocusToken = UUID()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var displayScale
     private var selected: Bool { snapshot.selectedPaneID == pane.id }
@@ -151,7 +153,16 @@ struct PaneCard: View {
                     paneID: pane.id, size: geometry.size, visible: visible, store: store, state: drop
                 ))
         }
-        .onChange(of: visible) { _, visible in if !visible { drop.reset() } }
+        .onChange(of: visible) { _, visible in if !visible { drop.reset(); searching = false } }
+        .onChange(of: selected) { _, selected in if !selected { searching = false } }
+        .onChange(of: store.connectionGeneration) { _, _ in searching = false }
+        .onChange(of: snapshot.searchToken, initial: true) { _, token in
+            if visible, snapshot.searchPaneID == pane.id, let token {
+                searchFocusToken = token
+                searching = true
+                if store.paneSearchRequest?.token == token { store.paneSearchRequest = nil }
+            }
+        }
         .onDisappear { drop.reset() }
     }
 
@@ -175,6 +186,7 @@ struct PaneCard: View {
                     }
                     .disabled(snapshot.dragPayloads[pane.id] == nil || snapshot.moveDestinationTabs.isEmpty)
                     Divider()
+                    Button("Find in pane…") { store.searchPane(pane.id) }
                     Button("Start agent…") { store.sheet = .agent(pane.id) }
                     Button("Rename pane…") { store.sheet = .rename(target) }
                     Button("Reconnect terminal") { controller.retry() }
@@ -191,8 +203,10 @@ struct PaneCard: View {
             .contentShape(Rectangle()).onTapGesture { store.focusPane(pane.id) }
             Divider().opacity(0.6)
             ZStack {
-                TerminalSurface(controller: controller, pane: pane, store: store, dark: colorScheme == .dark, fontSize: snapshot.fontSize, selected: selected, visible: visible)
+                TerminalSurface(controller: controller, pane: pane, store: store, dark: colorScheme == .dark, fontSize: snapshot.fontSize, selected: selected, visible: visible, searching: searching, dismissSearch: { searching = false })
                     .padding(7)
+                    .allowsHitTesting(!searching)
+                    .accessibilityHidden(searching)
                 if let error = controller.error {
                     VStack(spacing: 12) {
                         Image(systemName: "terminal").font(.title2).foregroundStyle(.secondary)
@@ -205,6 +219,9 @@ struct PaneCard: View {
                                 .help("Replace another client's writable control of this terminal")
                         }.controlSize(.small)
                     }.padding(22).frame(maxWidth: 400).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)).padding(12)
+                }
+                if searching {
+                    PaneSearchView(paneID: pane.id, store: store, focusToken: searchFocusToken) { searching = false }
                 }
             }
             .background(colorScheme == .dark ? Color(red: 0.055, green: 0.065, blue: 0.075) : Color(red: 0.98, green: 0.98, blue: 0.97))

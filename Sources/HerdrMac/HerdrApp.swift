@@ -33,6 +33,9 @@ struct HerdrApp: App {
                     .disabled(!canInteract || store.fontSize <= 10)
             }
             CommandMenu("Pane") {
+                Button("Find in Pane…") { store.searchPane() }
+                    .keyboardShortcut("f", modifiers: .command).disabled(!canUseCurrentPane)
+                Divider()
                 Button("Split Side by Side") { store.split(.right) }.keyboardShortcut("d").disabled(!canUseCurrentPane)
                 Button("Split Top and Bottom") { store.split(.down) }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(!canUseCurrentPane)
                 Divider()
