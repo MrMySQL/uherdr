@@ -96,6 +96,7 @@ enum GhosttyLiveTests {
             let existing = try await client.request("pane.get", params: ["pane_id": .string(pane.id)])
             precondition(existing["pane"]["pane_id"].string == pane.id)
             print("PASS: SwiftUI teardown detaches without closing the server pane")
+            try await checkSearch(store: store, workspace: workspace, pane: pane)
             try await checkZoom(client: client, devices: devices, workspace: workspace, pane: pane)
             try await checkRemote(socket: socket, executable: executable, pane: pane, defaults: defaults)
             _ = try await client.request("workspace.close", params: ["workspace_id": .string(workspace.id)])
@@ -105,6 +106,116 @@ enum GhosttyLiveTests {
             _ = try? await client.request("workspace.close", params: ["workspace_id": .string(workspace.id)])
             throw error
         }
+    }
+
+    @MainActor private static func checkSearch(store: SessionStore, workspace: Workspace, pane: Pane) async throws {
+        await store.refresh()
+        store.selectedSpace = workspace.id
+        store.selectedTab = pane.tabID
+        store.selectedPane = pane.id
+        let snapshot = try await store.readPaneForSearch(pane.id)
+        precondition(snapshot.text.contains("ghostty-live-ok"), "Search must read actual server output")
+        let host = NSHostingView(rootView: TerminalTabDeck(store: store))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 400),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.contentView = nil; window.orderOut(nil) }
+        func descendant<T: NSView>(_ type: T.Type, in root: NSView) -> T? {
+            if let found = root as? T { return found }
+            return root.subviews.compactMap { descendant(type, in: $0) }.first
+        }
+        func waitFor(_ message: String, _ predicate: () -> Bool) async throws {
+            for _ in 0..<100 {
+                if predicate() { return }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            throw HerdrError.message(message)
+        }
+        try await waitFor("Pane terminal did not mount") { descendant(HerdrTerminalView.self, in: host) != nil }
+        let terminal = descendant(HerdrTerminalView.self, in: host)!
+        try await waitFor("Terminal did not acquire focus") { window.firstResponder === terminal }
+        let engine = terminal.controller
+        store.searchPane()
+        try await waitFor("Search did not load server history") {
+            descendant(SearchOutputTextView.self, in: host)?.string.contains("ghostty-live-ok") == true
+        }
+        try await waitFor("Search field did not acquire focus") {
+            (window.firstResponder as? NSTextView)?.isFieldEditor == true
+        }
+        let field = window.firstResponder as! NSTextView
+        field.insertText("ghostty", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await waitFor("Typing a query did not highlight matches") {
+            !(descendant(SearchOutputTextView.self, in: host)?.searchRanges.isEmpty ?? true)
+        }
+        let output = descendant(SearchOutputTextView.self, in: host)!
+        precondition(output.selectedRange().length == 7)
+        precondition(output.searchRanges.count > 1)
+        let first = output.selectedRange()
+        func pressReturn(_ modifiers: NSEvent.ModifierFlags) {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+            NSApp.sendEvent(event)
+        }
+        pressReturn([])
+        try await waitFor("Return did not select the next match") { output.selectedRange() != first }
+        pressReturn(.shift)
+        try await waitFor("Shift-Return did not select the previous match") { output.selectedRange() == first }
+        func pressFindNext(_ modifiers: NSEvent.ModifierFlags) {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "g", charactersIgnoringModifiers: "g", isARepeat: false, keyCode: 5)!
+            NSApp.sendEvent(event)
+        }
+        pressFindNext(.command)
+        try await waitFor("Command-G did not select the next match") { output.selectedRange() != first }
+        pressFindNext([.command, .shift])
+        try await waitFor("Command-Shift-G did not select the previous match") { output.selectedRange() == first }
+        precondition(output.bounds.width > 600, "Search output must fill the viewport width")
+        if let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: ".build/PaneSearch.png"))
+        }
+        precondition(terminal.controller === engine, "Search must preserve the mounted terminal engine")
+        window.makeFirstResponder(output)
+        output.cancelOperation(nil)
+        try await waitFor("Closing search did not restore terminal focus") { window.firstResponder === terminal }
+        precondition(descendant(SearchOutputTextView.self, in: host) == nil)
+        precondition(terminal.controller === engine)
+        store.searchPane()
+        try await waitFor("Reopening search did not focus the query") {
+            (window.firstResponder as? NSTextView)?.isFieldEditor == true
+        }
+        let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+        NSApp.sendEvent(escape)
+        try await waitFor("Escape in the query did not restore terminal focus") { window.firstResponder === terminal }
+        let client = HerdrClient(socketPath: store.effectiveSocketPath)
+        let created = try await client.request("tab.create", params: [
+            "workspace_id": .string(workspace.id), "label": .string("Search tab switch"), "focus": .bool(false)
+        ])
+        let other = try created["tab"].decode(HerdrCore.Tab.self)
+        await store.refresh()
+        store.searchPane()
+        try await waitFor("Search did not reopen before tab switch") {
+            descendant(SearchOutputTextView.self, in: host) != nil
+        }
+        let deck = descendant(TerminalTabDeckView.self, in: host)!
+        // Exercise native visibility callbacks before SwiftUI can render the
+        // intermediate hidden snapshot, as in a rapid tab round-trip.
+        store.selectedTab = other.id
+        store.selectedPane = store.panes.first { $0.tabID == other.id }?.id
+        deck.update(store: store, colorScheme: .light, displayScale: 2)
+        store.selectedTab = pane.tabID
+        store.selectedPane = pane.id
+        deck.update(store: store, colorScheme: .light, displayScale: 2)
+        try await waitFor("Rapid tab switch left search open or keyboard focus stranded") {
+            descendant(SearchOutputTextView.self, in: host) == nil && window.firstResponder === terminal
+        }
+        _ = try await client.request("tab.close", params: ["tab_id": .string(other.id)])
+        print("PASS: pane search reads server history, focuses input, highlights matches, and restores the existing terminal")
     }
 
     @MainActor private static func checkMouse(view: HerdrTerminalView, transport: HerdrMac.TerminalController,

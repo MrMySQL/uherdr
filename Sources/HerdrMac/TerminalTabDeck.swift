@@ -8,6 +8,8 @@ struct TerminalTabSnapshot: Equatable {
     let layout: TabLayout
     let panes: [String: Pane]
     var selectedPaneID: String?
+    var searchPaneID: String?
+    var searchToken: UUID?
     var dragPayloads: [String: PaneDragPayload]
     var moveDestinationTabs: [HerdrCore.Tab]
     let fontSize: Double
@@ -20,6 +22,8 @@ struct TerminalTabSnapshot: Equatable {
         self.layout = layout
         self.panes = Dictionary(uniqueKeysWithValues: panes.map { ($0.id, $0) })
         selectedPaneID = visible ? store.selectedPane : nil
+        searchPaneID = visible ? store.paneSearchRequest?.paneID : nil
+        searchToken = visible ? store.paneSearchRequest?.token : nil
         dragPayloads = Dictionary(uniqueKeysWithValues: panes.compactMap { pane in
             guard visible, let payload = store.paneDragPayload(for: pane.id) else { return nil }
             return (pane.id, payload)
@@ -37,6 +41,8 @@ struct TerminalTabSnapshot: Equatable {
         var copy = self
         copy.visible = false
         copy.selectedPaneID = nil
+        copy.searchPaneID = nil
+        copy.searchToken = nil
         copy.dragPayloads = [:]
         copy.moveDestinationTabs = []
         return copy
