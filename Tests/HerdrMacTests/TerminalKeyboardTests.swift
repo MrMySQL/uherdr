@@ -126,6 +126,18 @@ struct TerminalKeyboardTests {
         precondition(capture.bytes == Array("\u{1b}[200~paste café\u{1b}[201~".utf8))
         print("PASS: explicit paste honors bracketed paste")
 
+        // A paste larger than native input buffers must preserve every byte,
+        // including its opening/closing bracket and the final two lines.
+        let longPaste = (1...400).map { "line \($0): café 世界 " + String(repeating: "x", count: 80) }.joined(separator: "\n")
+            + "\nPENULTIMATE-LINE\nFINAL-LINE"
+        let longExpected = Array(("\u{1b}[200~" + longPaste + "\u{1b}[201~").utf8)
+        capture.clear()
+        precondition(view.paste(text: longPaste))
+        waitUntil { capture.bytes.count >= longExpected.count }
+        precondition(capture.bytes == longExpected,
+                     "Long paste lost bytes: expected \(longExpected.count), received \(capture.bytes.count)")
+        print("PASS: long multiline Unicode paste preserves all bytes and both final lines")
+
         let dropBoard = NSPasteboard.withUniqueName()
         defer { dropBoard.releaseGlobally() }
         let droppedFiles = [URL(fileURLWithPath: "/tmp/project notes.txt"),
@@ -312,7 +324,7 @@ struct TerminalKeyboardTests {
                     exit(1)
                 }
             }
-            let deadline = Date().addingTimeInterval(45)
+            let deadline = Date().addingTimeInterval(ProcessInfo.processInfo.environment["HERDR_TEST_PASTE_AGENTS"] == "1" ? 180 : 45)
             while !finished, Date() < deadline {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.01))
             }

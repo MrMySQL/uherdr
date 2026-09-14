@@ -90,15 +90,45 @@ enum GhosttyLiveTests {
                 try await checkMouse(view: view, transport: transport, session: session, window: window)
             }
 
+            if ProcessInfo.processInfo.environment["HERDR_TEST_PASTE"] == "1" {
+                let capture = "/tmp/herdr-paste-\(UUID().uuidString).bin"
+                defer { try? FileManager.default.removeItem(atPath: capture) }
+                let fixture = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                    .appendingPathComponent("Tests/Fixtures/terminal-paste.py").path
+                precondition(view.paste(text: "python3 '" + fixture + "' '" + capture + "'"))
+                precondition(view.sendKey(.enter))
+                try await waitFor { session.readViewportText()?.contains("paste-fixture-ready") == true }
+                let text = (1...400).map { "line \($0): café 世界 " + String(repeating: "x", count: 80) }
+                    .joined(separator: "\n") + "\nPENULTIMATE-LINE\nFINAL-LINE"
+                precondition(view.paste(text: text))
+                try await waitFor { session.readViewportText()?.contains("paste-fixture-done") == true }
+                let received = try Data(contentsOf: URL(fileURLWithPath: capture))
+                let expected = Data(("\u{1b}[200~" + text + "\u{1b}[201~").utf8)
+                guard received == expected else {
+                    throw HerdrError.message("Live long paste differs: expected \(expected.count) bytes, received \(received.count); prefix \(Array(received.prefix(12)))")
+                }
+                print("PASS: long Unicode paste reaches the PTY intact with bracketed framing and final lines")
+            }
+
+            if ProcessInfo.processInfo.environment["HERDR_TEST_PASTE_AGENTS"] == "1" {
+                try await checkAgentPastes(view: view, session: session)
+            }
+
             host.rootView = AnyView(EmptyView())
             try await Task.sleep(for: .milliseconds(100))
             precondition(view.controller == nil, "SwiftUI teardown must release the engine")
             let existing = try await client.request("pane.get", params: ["pane_id": .string(pane.id)])
             precondition(existing["pane"]["pane_id"].string == pane.id)
             print("PASS: SwiftUI teardown detaches without closing the server pane")
-            try await checkSearch(store: store, workspace: workspace, pane: pane)
-            try await checkZoom(client: client, devices: devices, workspace: workspace, pane: pane)
-            try await checkRemote(socket: socket, executable: executable, pane: pane, defaults: defaults)
+            // Agent and mouse fixtures can clear shell history. Dedicated
+            // fixture runners end here; the ordinary live suite checks
+            // search/layout/remote behavior against its unchanged shell.
+            if ProcessInfo.processInfo.environment["HERDR_TEST_PASTE"] != "1",
+               ProcessInfo.processInfo.environment["HERDR_TEST_MOUSE"] != "1" {
+                try await checkSearch(store: store, workspace: workspace, pane: pane)
+                try await checkZoom(client: client, devices: devices, workspace: workspace, pane: pane)
+                try await checkRemote(socket: socket, executable: executable, pane: pane, defaults: defaults)
+            }
             _ = try await client.request("workspace.close", params: ["workspace_id": .string(workspace.id)])
         } catch {
             host.rootView = AnyView(EmptyView())
@@ -484,9 +514,29 @@ enum GhosttyLiveTests {
             precondition(store.movePane(store.paneDragPayload(for: pane.id)!, to: bottom.id, edge: edge))
             try await waitFor("Pane docking did not finish") { !store.busy }
             if let error = store.operationError { throw HerdrError.message(error) }
+            // The server mutation completes before SwiftUI replaces the old
+            // split tree. Its still-focused view can briefly report ready and
+            // then detach, dropping queued test input. Wait for the mounted
+            // target's identity and geometry to settle before testing input.
+            var candidate: HerdrTerminalView?
+            var candidateFrame = CGRect.zero
+            var stableSince = Date()
             try await waitFor("Docked terminal did not regain keyboard focus") {
-                store.selectedPane == pane.id && terminals(in: host).count == 3
-                    && (window.firstResponder as? HerdrTerminalView)?.canAcceptFileDrop() == true
+                guard store.selectedPane == pane.id, terminals(in: host).count == 3,
+                      let focused = window.firstResponder as? HerdrTerminalView,
+                      terminals(in: host).contains(where: { $0 === focused }),
+                      focused.controller != nil, focused.canAcceptFileDrop() else {
+                    candidate = nil
+                    return false
+                }
+                let frame = focused.convert(focused.bounds, to: host)
+                if candidate !== focused || candidateFrame != frame {
+                    candidate = focused
+                    candidateFrame = frame
+                    stableSince = Date()
+                    return false
+                }
+                return Date().timeIntervalSince(stableSince) >= 0.15
             }
             guard let moved = window.firstResponder as? HerdrTerminalView,
                   case .inMemory(let movedSession) = moved.configuration.backend else {
@@ -533,4 +583,80 @@ enum GhosttyLiveTests {
         }
         print("PASS: mounted cross-tab transfers preserve terminal input, rendering, scrollback, and focus")
     }
+    @MainActor private static func checkAgentPastes(view: HerdrTerminalView,
+                                                   session: InMemoryTerminalSession) async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("herdr-paste-agents-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let editor = root.appendingPathComponent("editor.sh")
+        // External-editor export observes the agent's entire draft, including
+        // collapsed paste blocks. Clear it on return so nothing is submitted.
+        try "#!/bin/sh\ncp \"$1\" \"$HERDR_PASTE_EXPORT.tmp\"\nmv \"$HERDR_PASTE_EXPORT.tmp\" \"$HERDR_PASTE_EXPORT\"\n: > \"$1\"\n".write(to: editor, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: editor.path)
+        func screen() -> String { session.readViewportText() ?? "" }
+        func wait(_ description: String, _ predicate: () -> Bool) async throws {
+            for _ in 0..<600 {
+                if predicate() { return }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            throw HerdrError.message("Timed out: \(description)\n\(screen())")
+        }
+        let text = "FIRST-LINE\n" + (1...400).map {
+            "line \($0): café 世界 " + String(repeating: "x", count: 80)
+        }.joined(separator: "\n") + "\nPENULTIMATE-LINE\nFINAL-LINE"
+        for agent in ["claude", "codex"] {
+            let export = root.appendingPathComponent("\(agent).txt")
+            let command = "cd '\(root.path)' && EDITOR='\(editor.path)' VISUAL='\(editor.path)' HERDR_PASTE_EXPORT='\(export.path)' \(agent)"
+            precondition(view.paste(text: command))
+            precondition(view.sendKey(.enter))
+            try await wait("\(agent) trust screen") {
+                screen().contains(agent == "claude" ? "Yes, I trust" : "Yes, continue")
+            }
+            // The CLI can paint its trust prompt before its startup input
+            // guard expires. Let that guard settle before selecting an option.
+            try await Task.sleep(for: .milliseconds(1000))
+            if agent == "claude", screen().contains("❯ No, exit") {
+                precondition(view.sendKey(.arrowDown))
+                try await wait("Claude trust selection") { screen().contains("❯ Yes, I trust") }
+            }
+            precondition(view.sendKey(.enter))
+            try await wait("\(agent) input ready") {
+                let value = screen()
+                return agent == "claude" ? value.contains("/effort") : value.contains("/model to change") && !value.contains("loading")
+            }
+            // Exercise the same Ghostty clipboard action as Command-V.
+            let board = NSPasteboard.general
+            let saved = (board.pasteboardItems ?? []).map { item in
+                item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+            }
+            do {
+                defer {
+                    board.clearContents()
+                    let items = saved.map { entries -> NSPasteboardItem in
+                        let item = NSPasteboardItem()
+                        for (type, data) in entries { item.setData(data, forType: type) }
+                        return item
+                    }
+                    board.writeObjects(items)
+                }
+                board.clearContents()
+                board.setString(text, forType: .string)
+                precondition(view.performBindingAction("paste_from_clipboard"))
+                try await wait("\(agent) collapsed paste") { screen().contains("[Pasted") }
+            }
+            precondition(view.sendKey(.g, modifiers: .ctrl))
+            try await wait("\(agent) external-editor export") { FileManager.default.fileExists(atPath: export.path) }
+            let actual = try String(contentsOf: export, encoding: .utf8)
+            guard actual.utf8.elementsEqual(text.utf8) else {
+                throw HerdrError.message("\(agent) draft mismatch: expected \(text.utf8.count) bytes, got \(actual.utf8.count); suffix \(actual.suffix(80))")
+            }
+            print("PASS: \(agent) clipboard paste preserves all \(text.utf8.count) UTF-8 bytes and final two lines in its exported draft")
+            try await Task.sleep(for: .milliseconds(300))
+            precondition(view.sendKey(.c, modifiers: .ctrl))
+            try await Task.sleep(for: .milliseconds(500))
+            precondition(view.sendKey(.c, modifiers: .ctrl))
+            try await Task.sleep(for: .milliseconds(1000))
+        }
+    }
+
 }
