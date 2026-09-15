@@ -23,6 +23,7 @@ enum GhosttyLiveTests {
         ])
         let store = devices.activeSession
         defer { devices.stop() }
+        await store.refresh()
         store.selectedPane = pane.id
         let transport = HerdrMac.TerminalController()
         let host = NSHostingView(rootView: AnyView(HerdrMac.TerminalSurface(
@@ -85,33 +86,53 @@ enum GhosttyLiveTests {
             try await waitFor { transport.ready }
             try await waitFor { session.readViewportText()?.contains("ghostty-live-ok") == true }
             print("PASS: reconnect preserves the server pane and its output")
+            let connectionBeforePastes = transport.generation
 
             if ProcessInfo.processInfo.environment["HERDR_TEST_MOUSE"] == "1" {
                 try await checkMouse(view: view, transport: transport, session: session, window: window)
             }
 
             if ProcessInfo.processInfo.environment["HERDR_TEST_PASTE"] == "1" {
-                let capture = "/tmp/herdr-paste-\(UUID().uuidString).bin"
-                defer { try? FileManager.default.removeItem(atPath: capture) }
-                let fixture = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                    .appendingPathComponent("Tests/Fixtures/terminal-paste.py").path
-                precondition(view.paste(text: "python3 '" + fixture + "' '" + capture + "'"))
-                precondition(view.sendKey(.enter))
-                try await waitFor { session.readViewportText()?.contains("paste-fixture-ready") == true }
-                let text = (1...400).map { "line \($0): café 世界 " + String(repeating: "x", count: 80) }
-                    .joined(separator: "\n") + "\nPENULTIMATE-LINE\nFINAL-LINE"
-                precondition(view.paste(text: text))
-                try await waitFor { session.readViewportText()?.contains("paste-fixture-done") == true }
-                let received = try Data(contentsOf: URL(fileURLWithPath: capture))
-                let expected = Data(("\u{1b}[200~" + text + "\u{1b}[201~").utf8)
-                guard received == expected else {
-                    throw HerdrError.message("Live long paste differs: expected \(expected.count) bytes, received \(received.count); prefix \(Array(received.prefix(12)))")
+                for mode in ["on", "off"] {
+                    let capture = "/tmp/herdr-paste-\(UUID().uuidString).bin"
+                    defer { try? FileManager.default.removeItem(atPath: capture) }
+                    let fixture = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                        .appendingPathComponent("Tests/Fixtures/terminal-paste.py").path
+                    precondition(view.paste(text: "python3 '" + fixture + "' '" + capture + "' " + mode))
+                    precondition(view.sendKey(.enter))
+                    try await waitFor { session.readViewportText()?.contains("paste-fixture-ready-" + mode) == true }
+                    let text = (1...400).map { "line \($0): café 世界 " + String(repeating: "x", count: 80) }
+                        .joined(separator: "\n") + "\nPENULTIMATE-LINE\nFINAL-LINE"
+                    precondition(view.sendKey(.p))
+                    precondition(view.paste(text: text))
+                    precondition(view.paste(text: "SECOND"))
+                    precondition(view.sendKey(.enter))
+                    try await waitFor { session.readViewportText()?.contains("paste-fixture-done-" + mode) == true }
+                    let received = try Data(contentsOf: URL(fileURLWithPath: capture))
+                    let contents = mode == "on"
+                        ? "\u{1b}[200~" + text + "\u{1b}[201~\u{1b}[200~SECOND\u{1b}[201~"
+                        : text + "SECOND"
+                    let expected = Data(("p" + contents + "\r").utf8)
+                    guard received == expected else {
+                        throw HerdrError.message("Live long paste differs: expected \(expected.count) bytes, received \(received.count); prefix \(Array(received.prefix(12)))")
+                    }
+                    precondition(transport.generation == connectionBeforePastes, "Pasting must not reconnect the control stream")
+                    print("PASS: long paste, consecutive paste, preceding key and immediate Enter stay ordered with PTY paste mode \(mode), without reconnecting")
                 }
-                print("PASS: long Unicode paste reaches the PTY intact with bracketed framing and final lines")
+                precondition(view.paste(text: String(repeating: "x", count: TerminalPasteBuffer.limit)))
+                precondition(view.sendKey(.enter))
+                try await waitFor { transport.pasteError != nil }
+                transport.resumeInputAfterRejectedPaste()
+                precondition(transport.generation == connectionBeforePastes, "Dismissing a paste error must not reconnect")
+                precondition(view.paste(text: "printf 'after-paste-rejection-%s\\n' ok"))
+                precondition(view.sendKey(.enter))
+                try await waitFor { session.readViewportText()?.contains("after-paste-rejection-ok") == true }
+                print("PASS: oversized paste is reported and input resumes on the same connection")
             }
 
             if ProcessInfo.processInfo.environment["HERDR_TEST_PASTE_AGENTS"] == "1" {
                 try await checkAgentPastes(view: view, session: session)
+                precondition(transport.generation == connectionBeforePastes, "Agent pastes must not reconnect")
             }
 
             host.rootView = AnyView(EmptyView())

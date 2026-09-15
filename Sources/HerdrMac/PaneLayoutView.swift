@@ -228,6 +228,14 @@ struct PaneCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1) }
+        .alert("Paste not sent", isPresented: Binding(
+            get: { controller.pasteError != nil },
+            set: { if !$0 { controller.resumeInputAfterRejectedPaste() } }
+        )) {
+            Button("OK") { controller.resumeInputAfterRejectedPaste() }
+        } message: {
+            Text(controller.pasteError ?? "")
+        }
     }
 
     @ViewBuilder private var draggableTitle: some View {

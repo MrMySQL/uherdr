@@ -7,15 +7,17 @@ import HerdrCore
 @MainActor
 final class TerminalController: ObservableObject {
     @Published var error: String?
+    @Published var pasteError: String?
     @Published var ready = false
     var receive: ((Data) -> Void)?
+    var resetInput: (() -> Void)?
     private var process: Process?
     private var input: FileHandle?
     private var output: FileHandle?
     private var errors: FileHandle?
     private var framing = JSONLineBuffer()
     private var errorText = ""
-    private var generation = UUID()
+    private(set) var generation = UUID()
     private var lastSize = (0, 0)
     private let writer = DispatchQueue(label: "dev.herdr.native.terminal-input")
     private var configuration: (String, String, String)?
@@ -89,6 +91,7 @@ final class TerminalController: ObservableObject {
     }
 
     func send(_ data: Data) {
+        guard error == nil, pasteError == nil else { return }
         write(["type": .string("terminal.input"), "bytes": .string(data.base64EncodedString())])
     }
     func resize(cols: Int, rows: Int) {
@@ -115,6 +118,8 @@ final class TerminalController: ObservableObject {
         }
     }
     func stop() {
+        resetInput?()
+        pasteError = nil
         generation = UUID()
         output?.readabilityHandler = nil
         errors?.readabilityHandler = nil
@@ -123,6 +128,11 @@ final class TerminalController: ObservableObject {
         if process?.isRunning == true { process?.terminate() }
         try? output?.close(); try? errors?.close()
         input = nil; output = nil; errors = nil; process = nil
+    }
+
+    func resumeInputAfterRejectedPaste() {
+        resetInput?()
+        pasteError = nil
     }
 }
 
@@ -177,7 +187,13 @@ struct TerminalSurface: NSViewRepresentable {
                 && coordinator.controller.error == nil && store.sheet == nil && store.pendingClose == nil
         }
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
-        controller.receive = { [weak bridge = coordinator.bridge] in bridge?.receive($0) }
+        controller.receive = { [weak coordinator] data in
+            guard let coordinator else { return }
+            coordinator.bridge.receive(data, semanticPastes: GhosttyStreamBridge.supportsSemanticPastes(
+                serverVersion: coordinator.store?.version ?? ""
+            ))
+        }
+        controller.resetInput = { [weak bridge = coordinator.bridge] in bridge?.resetInput() }
         coordinator.updateAppearance(fontSize: fontSize, dark: dark)
         coordinator.installEvents()
         return view
@@ -203,6 +219,7 @@ struct TerminalSurface: NSViewRepresentable {
         coordinator.removeEvents()
         coordinator.controller.receive = nil
         coordinator.controller.stop()
+        coordinator.controller.resetInput = nil
         coordinator.stopped = true
         view.onAttach = nil
         view.onRetainedTabVisibility = nil
@@ -226,7 +243,7 @@ struct TerminalSurface: NSViewRepresentable {
                 dark: TerminalConfiguration().background("#0e1113").foreground("#dbe3de")
             )
         )
-        lazy var bridge = GhosttyStreamBridge(
+        lazy var bridge: GhosttyStreamBridge = GhosttyStreamBridge(
             input: { [weak self] data in
                 DispatchQueue.main.async { [weak self] in
                     guard let self, !self.stopped else { return }
@@ -236,6 +253,12 @@ struct TerminalSurface: NSViewRepresentable {
             resize: { [weak self] viewport in
                 DispatchQueue.main.async { [weak self] in
                     self?.resize(cols: Int(viewport.columns), rows: Int(viewport.rows))
+                }
+            },
+            pasteRejected: { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.stopped, self.bridge.hasRejectedPaste else { return }
+                    self.controller.pasteError = "The paste exceeds the 1 MiB input limit. Use a smaller selection."
                 }
             }
         )

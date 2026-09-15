@@ -15,6 +15,7 @@ struct TerminalKeyboardTests {
             print("PASS: packaged Ghostty resources resolve inside the app")
             return
         }
+        checkPastePackets()
         func waitUntil(_ predicate: () -> Bool) {
             let deadline = Date().addingTimeInterval(3)
             while !predicate(), Date() < deadline {
@@ -136,6 +137,7 @@ struct TerminalKeyboardTests {
         waitUntil { capture.bytes.count >= longExpected.count }
         precondition(capture.bytes == longExpected,
                      "Long paste lost bytes: expected \(longExpected.count), received \(capture.bytes.count)")
+        precondition(capture.packets == [Data(longExpected)], "Herdr requires one complete paste packet; got callback sizes \(capture.packets.map(\.count))")
         print("PASS: long multiline Unicode paste preserves all bytes and both final lines")
 
         let dropBoard = NSPasteboard.withUniqueName()
@@ -331,6 +333,44 @@ struct TerminalKeyboardTests {
             precondition(finished, "Live Ghostty integration timed out")
         }
     }
+
+    @MainActor private static func checkPastePackets() {
+        let capture = StreamCapture()
+        let rejection = StreamCapture()
+        let buffer = TerminalPasteBuffer(write: { capture.append($0) }, reject: { rejection.append(Data([1])) })
+        let start = TerminalPasteBuffer.start, end = TerminalPasteBuffer.end
+        buffer.append(Data([0x1b]))
+        precondition(capture.packets == [Data([0x1b])], "Escape must dispatch immediately")
+        capture.clear()
+        let text = Data("café 世界\nlast line".utf8)
+        buffer.append(Data([0xff, 0x00]) + start)
+        for byte in text { buffer.append(Data([byte])) }
+        for byte in end.dropLast() { buffer.append(Data([byte])) }
+        precondition(capture.packets == [Data([0xff, 0x00])], "An unfinished paste must not reach Herdr")
+        buffer.append(Data(end.suffix(1)) + Data([13]) + start + Data("next".utf8) + end)
+        precondition(capture.packets == [Data([0xff, 0x00]), start + text + end, Data([13]), start + Data("next".utf8) + end])
+        capture.clear()
+        buffer.append(start + Data(repeating: 120, count: TerminalPasteBuffer.limit - 12) + end)
+        precondition(capture.packets.count == 1 && capture.packets[0].count == TerminalPasteBuffer.limit)
+        capture.clear()
+        buffer.append(start + Data(repeating: 120, count: TerminalPasteBuffer.limit - 11) + end)
+        buffer.append(Data([13]))
+        precondition(capture.bytes.isEmpty && rejection.packets.count == 1, "Oversized paste and trailing Enter must not be sent")
+        precondition(buffer.isBlocked)
+        buffer.reset()
+        precondition(!buffer.isBlocked, "A queued rejection must be ignored after reset")
+        buffer.append(start + Data("incomplete".utf8))
+        buffer.reset()
+        buffer.append(Data("new session".utf8))
+        precondition(capture.packets == [Data("new session".utf8)], "Reconnect must discard unfinished paste")
+        for version in ["0.8.2", "0.8.99", "0.9.0-rc.1", "", "unknown"] {
+            precondition(!GhosttyStreamBridge.supportsSemanticPastes(serverVersion: version))
+        }
+        for version in ["0.9.0", "0.10.0", "1.0.0"] {
+            precondition(GhosttyStreamBridge.supportsSemanticPastes(serverVersion: version))
+        }
+        print("PASS: paste packets preserve binary keys, fragmented payloads, ordering, size limits, resets and server version gating")
+    }
 }
 
 @MainActor
@@ -342,12 +382,14 @@ private final class ShortcutTarget: NSObject {
 private final class StreamCapture: @unchecked Sendable {
     private let lock = NSLock()
     private var data: [UInt8] = []
+    private var writes: [Data] = []
     private var size: InMemoryTerminalViewport?
     var bytes: [UInt8] { lock.withLock { data } }
+    var packets: [Data] { lock.withLock { writes } }
     var viewport: InMemoryTerminalViewport? { lock.withLock { size } }
-    func append(_ value: Data) { lock.withLock { data.append(contentsOf: value) } }
+    func append(_ value: Data) { lock.withLock { data.append(contentsOf: value); writes.append(value) } }
     func resize(_ value: InMemoryTerminalViewport) { lock.withLock { size = value } }
-    func clear() { lock.withLock { data = [] } }
+    func clear() { lock.withLock { data = []; writes = [] } }
 }
 
 @MainActor

@@ -1,0 +1,69 @@
+# Native clipboard paste
+
+Use the native app with an official Herdr **0.9.0 or newer server and CLI**.
+No custom server build is required. Clipboard input uses the existing terminal
+control connection, without reconnecting or calling a separate paste API.
+
+Claude Code enables bracketed paste in a native terminal. Herdr's reconstructed
+ANSI frames do not forward that mode, so the embedded terminal otherwise sends
+clipboard newlines as ordinary input. Codex can recognize some unframed pastes,
+which can hide the missing mode.
+
+The app enables bracketed paste on the outer Ghostty surface when the running
+server's snapshot reports version 0.9.0 or newer. Ghostty still handles clipboard
+reading and sanitization. Its opener, payload and closer callbacks are collected
+into one `terminal.input` message, with surrounding keys sent separately in order.
+The official server recognizes that complete packet and applies the application's
+actual paste mode. A program with bracketed paste disabled receives plain text.
+
+The control connection, terminal surface and agent process stay in place. Older
+servers retain their previous mode behavior; they must be upgraded for this fix.
+Checking only the CLI version is insufficient when an older server is still running.
+
+Herdr limits input messages to 1 MiB, including the 12 paste delimiter bytes.
+An oversized paste is rejected before transmission. Subsequent input is stopped
+until the user dismisses the error, so an Enter intended for the rejected paste
+cannot submit an earlier draft. Dismissing the error resumes the same connection.
+
+## Verification
+
+```sh
+HERDR_BIN=/path/to/official/herdr bash scripts/test-terminal-paste.sh
+HERDR_TEST_PASTE_AGENTS=1 HERDR_BIN=/path/to/official/herdr bash scripts/test-terminal-paste.sh
+```
+
+The runner creates and removes a disposable server. It checks native Ghostty
+clipboard input, raw PTY bytes with paste mode enabled and disabled, consecutive
+pastes, a preceding key, immediate Enter, and unchanged control connection identity.
+The optional agent check launches actual Claude Code and Codex CLIs in temporary
+folders and exports their full drafts using Ctrl-G. The temporary editor clears
+the draft on return; no prompt is submitted. Clipboard contents are restored.
+
+To test a private example locally, also set
+`HERDR_TEST_PASTE_TEXT_FILE=/absolute/path/to/example.txt`. The example is not
+added to the repository. Without it, the agent check uses 41,530 UTF-8 bytes of
+numbered Unicode text, including explicit final two lines.
+
+The native packet checks cover payload/closer fragmentation, arbitrary raw bytes,
+immediate Escape, input limits and discarding unfinished paste on reconnect.
+
+Upstream references: [0.9.0 release](https://github.com/herdrdev/herdr/releases/tag/v0.9.0),
+[direct terminal input](https://github.com/herdrdev/herdr/blob/v0.9.0/src/server/pane_input.rs),
+[paste encoding](https://github.com/herdrdev/herdr/blob/v0.9.0/src/pane.rs).
+
+## Upgrade compatibility
+
+Verified with the official macOS arm64 0.9.0 binary, Claude Code 2.1.272 and
+Codex CLI 0.154.0. Both agents preserved the 41,530-byte generated example and
+a private 1,212-byte reproduction exactly. Native PTY tests also verified paste
+mode on/off, input ordering, size-error recovery and unchanged control connection.
+
+Stock 0.9.0 still omits application mouse modes from the JSON terminal stream.
+The opt-in mouse-forwarding regression fails on that release. Replacing a custom
+runtime containing the historical mouse patch would therefore lose that behavior.
+This paste change does not automatically install or replace a running server.
+
+A disposable 0.8.2-to-0.9.0 live handoff preserved the shell PID. A one-time
+runtime upgrade is separate from paste handling; pasting never performs a handoff.
+The broad test suite still reaches the existing performance fixture's
+`Timed out: reveal and catch up` failure, previously reproduced with the old runtime.
