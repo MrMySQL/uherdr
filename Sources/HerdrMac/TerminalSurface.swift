@@ -7,16 +7,20 @@ import HerdrCore
 @MainActor
 final class TerminalController: ObservableObject {
     @Published var error: String?
+    @Published var pasteError: String?
     @Published var ready = false
     var receive: ((Data) -> Void)?
+    var resetInput: (() -> Void)?
     private var process: Process?
     private var input: FileHandle?
     private var output: FileHandle?
     private var errors: FileHandle?
     private var framing = JSONLineBuffer()
     private var errorText = ""
-    private var generation = UUID()
+    private(set) var generation = UUID()
     private var lastSize = (0, 0)
+    private var visible = true
+    private var repaintTask: Task<Void, Never>?
     private let writer = DispatchQueue(label: "dev.herdr.native.terminal-input")
     private var configuration: (String, String, String)?
 
@@ -54,7 +58,10 @@ final class TerminalController: ObservableObject {
                         let frame = try JSONDecoder().decode(TerminalEnvelope.self, from: line)
                         if frame.type == "terminal.frame" {
                             self.receive?(try frame.decodedBytes())
-                            if !self.ready { self.ready = true }
+                            if !self.ready {
+                                self.ready = true
+                                self.scheduleRepaint()
+                            }
                         } else if frame.type == "terminal.closed" {
                             self.error = frame.reason ?? "Terminal connection closed"
                             if self.ready { self.ready = false }
@@ -89,12 +96,40 @@ final class TerminalController: ObservableObject {
     }
 
     func send(_ data: Data) {
+        guard error == nil, pasteError == nil else { return }
         write(["type": .string("terminal.input"), "bytes": .string(data.base64EncodedString())])
     }
     func resize(cols: Int, rows: Int) {
         guard cols > 1, rows > 1, (cols, rows) != lastSize else { return }
         lastSize = (cols, rows)
-        write(["type": .string("terminal.resize"), "cols": .number(Double(cols)), "rows": .number(Double(rows))])
+        writeResize()
+        scheduleRepaint()
+    }
+    func setVisible(_ visible: Bool) {
+        guard self.visible != visible else { return }
+        self.visible = visible
+        scheduleRepaint()
+    }
+    private func writeResize() {
+        write(["type": .string("terminal.resize"), "cols": .number(Double(lastSize.0)), "rows": .number(Double(lastSize.1))])
+    }
+    private func scheduleRepaint() {
+        repaintTask?.cancel()
+        repaintTask = nil
+        guard visible else { return }
+        let token = generation
+        // Ghostty reports host-managed resize before resizing its own cells.
+        // A fast server frame can be parsed against the old grid, leaving its
+        // diff baseline out of sync. After geometry settles, ask for a full
+        // frame on the existing stream. Herdr repaints identical-size resize
+        // requests without resizing the PTY or sending another SIGWINCH.
+        repaintTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self, self.generation == token,
+                  self.visible, self.ready, self.error == nil else { return }
+            self.repaintTask = nil
+            self.writeResize()
+        }
     }
     func scroll(delta: Double) {
         guard abs(delta) >= 1 else { return }
@@ -115,6 +150,10 @@ final class TerminalController: ObservableObject {
         }
     }
     func stop() {
+        repaintTask?.cancel()
+        repaintTask = nil
+        resetInput?()
+        pasteError = nil
         generation = UUID()
         output?.readabilityHandler = nil
         errors?.readabilityHandler = nil
@@ -123,6 +162,11 @@ final class TerminalController: ObservableObject {
         if process?.isRunning == true { process?.terminate() }
         try? output?.close(); try? errors?.close()
         input = nil; output = nil; errors = nil; process = nil
+    }
+
+    func resumeInputAfterRejectedPaste() {
+        resetInput?()
+        pasteError = nil
     }
 }
 
@@ -155,12 +199,14 @@ struct TerminalSurface: NSViewRepresentable {
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(coordinator.bridge.session))
         view.controller = coordinator.engine
         view.setSurfaceVisible(visible)
+        controller.setVisible(visible)
         view.onAttach = { [weak coordinator] in coordinator?.focusIfSelected() }
         view.onRetainedTabVisibility = { [weak coordinator] visible, zoomedPaneID in
             guard let coordinator, !coordinator.stopped else { return }
             let paneVisible = visible && (zoomedPaneID == nil || zoomedPaneID == coordinator.paneID)
             coordinator.visible = paneVisible
             coordinator.view?.setSurfaceVisible(paneVisible)
+            coordinator.controller.setVisible(paneVisible)
             if !paneVisible, coordinator.searching {
                 // SwiftUI may coalesce the hidden snapshot on a fast tab
                 // round-trip. Dismiss outside the current view update anyway.
@@ -177,7 +223,13 @@ struct TerminalSurface: NSViewRepresentable {
                 && coordinator.controller.error == nil && store.sheet == nil && store.pendingClose == nil
         }
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
-        controller.receive = { [weak bridge = coordinator.bridge] in bridge?.receive($0) }
+        controller.receive = { [weak coordinator] data in
+            guard let coordinator else { return }
+            coordinator.bridge.receive(data, semanticPastes: GhosttyStreamBridge.supportsSemanticPastes(
+                serverVersion: coordinator.store?.version ?? ""
+            ))
+        }
+        controller.resetInput = { [weak bridge = coordinator.bridge] in bridge?.resetInput() }
         coordinator.updateAppearance(fontSize: fontSize, dark: dark)
         coordinator.installEvents()
         return view
@@ -191,6 +243,7 @@ struct TerminalSurface: NSViewRepresentable {
         coordinator.dismissSearch = dismissSearch
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
         view.setSurfaceVisible(visible)
+        controller.setVisible(visible)
         coordinator.updateAppearance(fontSize: fontSize, dark: dark)
         let shouldFocus = visible && selected
         if shouldFocus && !searching && (!coordinator.wasSelected || wasSearching) {
@@ -203,6 +256,7 @@ struct TerminalSurface: NSViewRepresentable {
         coordinator.removeEvents()
         coordinator.controller.receive = nil
         coordinator.controller.stop()
+        coordinator.controller.resetInput = nil
         coordinator.stopped = true
         view.onAttach = nil
         view.onRetainedTabVisibility = nil
@@ -226,7 +280,7 @@ struct TerminalSurface: NSViewRepresentable {
                 dark: TerminalConfiguration().background("#0e1113").foreground("#dbe3de")
             )
         )
-        lazy var bridge = GhosttyStreamBridge(
+        lazy var bridge: GhosttyStreamBridge = GhosttyStreamBridge(
             input: { [weak self] data in
                 DispatchQueue.main.async { [weak self] in
                     guard let self, !self.stopped else { return }
@@ -236,6 +290,12 @@ struct TerminalSurface: NSViewRepresentable {
             resize: { [weak self] viewport in
                 DispatchQueue.main.async { [weak self] in
                     self?.resize(cols: Int(viewport.columns), rows: Int(viewport.rows))
+                }
+            },
+            pasteRejected: { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.stopped, self.bridge.hasRejectedPaste else { return }
+                    self.controller.pasteError = "The paste exceeds the 1 MiB input limit. Use a smaller selection."
                 }
             }
         )

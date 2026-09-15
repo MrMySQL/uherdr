@@ -8,7 +8,7 @@ A native SwiftUI + AppKit client for the herdr runtime. Spaces map to herdr work
 
 - macOS 14 or newer.
 - Swift command-line tools (Swift 6.0 or newer) to build.
-- herdr 0.8.2 or newer with `herdr terminal session control` support.
+- herdr 0.9.0 or newer with `herdr terminal session control` support.
 
 ## Build and run
 
@@ -42,6 +42,7 @@ Connection errors appear under the affected device and in its detail view. Faile
 - Panes: Command-D splits side by side; Command-Shift-D stacks panes; Command-Return toggles zoom for the focused pane. Command-[ selects the previous pane and Command-] selects the next pane in the current tab, wrapping at either end. Control-backtick also selects the next pane. Drag the divider to resize. Drag a pane’s header to the top, bottom, left, or right edge of another pane in the same tab. A translucent rectangle previews its half of the new split. Dropping moves the pane there and collapses its old split. To move between tabs, drop the pane header onto another tab in the same space, or choose **Move to tab** in the pane’s actions menu. The destination opens with the moved pane in a side-by-side split. Moving a tab’s last pane removes the empty tab; running shells and agents are preserved. Restore the split layout in both tabs before moving a pane between them. Use the pane header to focus, zoom, rename, start an agent, or close.
 - Start an agent: creates a Git worktree from the pane’s repository, opens it in a new space, and launches the selected agent there. Herdr generates the branch name. The selected agent CLI must be installed. If launching fails, the new space stays available for retrying in its terminal.
 - Terminal: normal keyboard input, Shift-Enter for a new line in Claude Code and Codex, native text selection, Command-C/Command-V, and mouse-wheel scrolling. Command-plus (or Command-equals) increases text size; Command-minus decreases it, in one-point steps from 10 to 22 pt. The size is saved with your appearance preferences.
+- Long multiline paste uses the existing input connection with stock Herdr 0.9.0 or newer. No custom server patch or reconnect on paste is needed; see [paste handling](docs/terminal-paste.md).
 - Find in pane: Command-F or the pane actions menu opens a searchable output snapshot, including up to 10,000 recent scrollback lines. Matching is literal and case-insensitive. Return / Shift-Return or Command-G / Command-Shift-G navigate highlighted matches with wraparound. Refresh reads new output; Escape closes search and returns keyboard focus to the running terminal. Truncated history is labeled.
 - Links: click a web URL or labeled hyperlink in terminal output to open it in your default browser, including in mouse-enabled applications such as Claude Code. Command-click also works; dragging selects text, and clicks outside links still reach the application.
 - File drops: drag one or more files from Finder onto an agent’s terminal pane to paste their quoted paths. The target pane gains keyboard focus; press Enter when your prompt is ready.
@@ -72,6 +73,7 @@ swift run HerdrCoreTests  # Protocol, layout, selection, and error handling
 ./scripts/test-hotkeys.sh # Command-key hint lifecycle
 bash scripts/test-agent-worktree.sh # Worktree agent launch and failure handling
 bash scripts/test-terminal-keyboard.sh # Real Ghostty rendering, keyboard, paste, resize, and teardown
+bash scripts/test-terminal-paste.sh # End-to-end long paste (stock Herdr 0.9.0+)
 bash scripts/test-performance.sh # Polling and terminal publication regressions
 ./scripts/test.sh         # Also starts and cleans up an isolated herdr server
 bash scripts/test-devices.sh # Two isolated servers, overlapping IDs, and forwarded terminal control

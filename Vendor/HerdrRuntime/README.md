@@ -103,3 +103,8 @@ limitation. No new scan across inactive panes is added.
 Remove this patch when an upstream runtime preserves session mouse state and
 passes the same native regression. Do not automatically apply it to a different
 Herdr version.
+
+## Native paste handling
+
+Long paste uses the native app and stock Herdr 0.9.0 or newer; it does not
+require this historical mouse patch. See [paste handling](../../docs/terminal-paste.md).
