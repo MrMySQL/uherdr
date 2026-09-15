@@ -30,7 +30,12 @@ final class GhosttyStreamBridge {
         // ANSI blit encoder, not an arbitrary PTY/pipe read. Its control
         // sequences are complete, so this is a safe boundary for reassertion.
         let mode = semanticPastes ? "\u{1b}[?2004h" : wasSemantic ? "\u{1b}[?2004l" : ""
-        session.receive(data + Data(mode.utf8))
+        // Herdr's blit encoder assumes the host has DECAWM disabled (its
+        // interactive client does this in TerminalGuard). JSON control does
+        // not initialize our surface. In-flight frames can be wider than the
+        // grid during resize; wrapping them corrupts adjacent rows and can
+        // scroll the whole viewport, invalidating subsequent partial frames.
+        session.receive(Data("\u{1b}[?7l".utf8) + data + Data(mode.utf8))
     }
 
     func resetInput() { pasteBuffer.reset() }

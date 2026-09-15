@@ -52,6 +52,25 @@ struct TerminalKeyboardTests {
         precondition(capture.viewport!.columns > originalColumns)
         print("PASS: resizing reports the actual terminal grid")
 
+        // Herdr blits absolute screen cells with host autowrap disabled.
+        // An in-flight frame can still use the previous, wider grid during
+        // resize. It must not wrap into the next row or scroll the viewport.
+        let columns = Int(capture.viewport!.columns)
+        let rows = Int(capture.viewport!.rows)
+        bridge.receive(Data(("\u{1b}[2J\u{1b}[Htop-anchor"
+            + "\u{1b}[2;1H" + String(repeating: "x", count: columns + 5)
+            + "\u{1b}[\(rows);1H" + String(repeating: "y", count: columns + 5)
+            + "\u{1b}[H").utf8))
+        bridge.session.waitForPendingOutput()
+        let frameRows = bridge.session.readViewportText()!.components(separatedBy: "\n")
+        precondition(frameRows[0].trimmingCharacters(in: .whitespaces) == "top-anchor",
+                     "An overwide server frame must not scroll away the top row")
+        precondition(frameRows[2].trimmingCharacters(in: .whitespaces).isEmpty,
+                     "An overwide server frame must not leave wrapped fragments on the next row")
+        print("PASS: overwide server frames neither wrap nor scroll during resize")
+        bridge.receive(Data("\u{1b}[2J\u{1b}[HGhostty café 世界\r\n".utf8))
+        bridge.session.waitForPendingOutput()
+
         // App shortcuts must reach the menu before Ghostty's own bindings.
         let previousMenu = NSApp.mainMenu
         let shortcutMenu = NSMenu()
