@@ -65,5 +65,32 @@ This paste change does not automatically install or replace a running server.
 
 A disposable 0.8.2-to-0.9.0 live handoff preserved the shell PID. A one-time
 runtime upgrade is separate from paste handling; pasting never performs a handoff.
-The broad test suite still reaches the existing performance fixture's
-`Timed out: reveal and catch up` failure, previously reproduced with the old runtime.
+The retained-tab performance fixture now resizes relative to its restored window
+size, avoiding a no-op resize when macOS restores the previous test dimensions.
+The live performance checks pass against both 0.8.2 and official 0.9.0.
+
+## Rendering after resize and tab switches
+
+The replay surface disables autowrap because server frames position cells
+explicitly. A separate race can still leave stale cells: pinned Ghostty calls
+the host resize callback before resizing its terminal grid, so a fast server
+frame can be parsed at the old dimensions. Later partial frames then assume a
+screen that the native terminal never received intact.
+
+After 150 ms without another resize, the controller repeats the latest
+`terminal.resize` request. Herdr sends a full repaint for an identical-size
+request without resizing the PTY or delivering another SIGWINCH. Initial
+readiness and revealing a retained pane also schedule recovery. Hiding or
+stopping the pane cancels pending work, and ordinary output does not schedule
+additional repaints. This uses the existing control connection.
+
+The delay allows native resizing to settle; it is not a native completion
+barrier. An unusually long native stall could outlast it. The current native
+API reports requested dimensions and exposes no resize-completion barrier.
+
+`bash scripts/test-performance.sh` includes a native regression that holds the
+Ghostty resize callback long enough for a new-size frame to arrive first. Before
+recovery, the bottom eight rows remain blank; afterward all rows match without
+scrolling. It also checks coalescing, visibility and teardown cancellation.
+`HERDR_BIN=/path/to/herdr bash scripts/test.sh` adds live retained-tab checks,
+including restoring deliberately stale native cells when a pane is revealed.

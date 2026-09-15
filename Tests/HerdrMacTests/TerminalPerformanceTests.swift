@@ -14,7 +14,11 @@ import HerdrCore
         Task { @MainActor in
             do {
                 let args = CommandLine.arguments.dropFirst().filter { $0 != "--retention-only" }
-                if !CommandLine.arguments.contains("--retention-only") { try await publications() }
+                if !CommandLine.arguments.contains("--retention-only") {
+                    try await resizeReplayRecovery()
+                    try await repaintRequests()
+                    try await publications()
+                }
                 if args.count == 2 {
                     try await retention(socket: args[0], executable: args[1])
                 }
@@ -113,7 +117,10 @@ import HerdrCore
         let hidden = views[firstPane.id]!
         let oldSize = hidden.bounds.size
         let oldConfig = hidden.controller!.renderedConfig
-        window.setContentSize(NSSize(width: 1400, height: 900))
+        // The window accessor may restore an autosaved size after creation.
+        // Grow from the actual starting size so this always exercises resize.
+        window.setContentSize(NSSize(width: window.contentLayoutRect.width + 200,
+                                     height: window.contentLayoutRect.height + 100))
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(200))
         guard hidden.bounds.size == oldSize else {
@@ -129,6 +136,15 @@ import HerdrCore
         }
         _ = try await client.request("pane.send_input", params: ["pane_id": .string(firstPane.id), "text": .string("printf 'hidden-output-kept-END\\n'"), "keys": .array([.string("enter")])])
         try await wait("hidden terminal still receives output") { viewport(hidden).contains("hidden-output-kept-END") }
+        // Emulate a stale replay baseline left by native reflow. Revealing
+        // the real retained tab must repair it without a scroll gesture.
+        if case .inMemory(let session) = hidden.configuration.backend {
+            session.receive("\u{1b}[Hstale-renderer-baseline")
+            session.waitForPendingOutput()
+        }
+        guard viewport(hidden).contains("stale-renderer-baseline") else {
+            throw HerdrError.message("Could not prepare the retained renderer recovery fixture")
+        }
         guard let deck = descendants(host).compactMap({ $0 as? TerminalTabDeckView }).first else {
             throw HerdrError.message("Missing terminal deck")
         }
@@ -144,6 +160,9 @@ import HerdrCore
                 && hidden.controller!.renderedConfig != oldConfig
                 && hidden.accessibilityLabel()?.contains("Renamed hidden pane") == true
                 && hidden.appearance?.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+        try await wait("reveal repairs stale terminal cells") {
+            !viewport(hidden).contains("stale-renderer-baseline") && viewport(hidden).contains("hidden-output-kept-END")
         }
         guard Set(terminals(host).map(ObjectIdentifier.init)) == originalIDs else {
             throw HerdrError.message("Switching recreated terminals")

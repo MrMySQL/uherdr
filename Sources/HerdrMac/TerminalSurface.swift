@@ -19,6 +19,8 @@ final class TerminalController: ObservableObject {
     private var errorText = ""
     private(set) var generation = UUID()
     private var lastSize = (0, 0)
+    private var visible = true
+    private var repaintTask: Task<Void, Never>?
     private let writer = DispatchQueue(label: "dev.herdr.native.terminal-input")
     private var configuration: (String, String, String)?
 
@@ -56,7 +58,10 @@ final class TerminalController: ObservableObject {
                         let frame = try JSONDecoder().decode(TerminalEnvelope.self, from: line)
                         if frame.type == "terminal.frame" {
                             self.receive?(try frame.decodedBytes())
-                            if !self.ready { self.ready = true }
+                            if !self.ready {
+                                self.ready = true
+                                self.scheduleRepaint()
+                            }
                         } else if frame.type == "terminal.closed" {
                             self.error = frame.reason ?? "Terminal connection closed"
                             if self.ready { self.ready = false }
@@ -97,7 +102,34 @@ final class TerminalController: ObservableObject {
     func resize(cols: Int, rows: Int) {
         guard cols > 1, rows > 1, (cols, rows) != lastSize else { return }
         lastSize = (cols, rows)
-        write(["type": .string("terminal.resize"), "cols": .number(Double(cols)), "rows": .number(Double(rows))])
+        writeResize()
+        scheduleRepaint()
+    }
+    func setVisible(_ visible: Bool) {
+        guard self.visible != visible else { return }
+        self.visible = visible
+        scheduleRepaint()
+    }
+    private func writeResize() {
+        write(["type": .string("terminal.resize"), "cols": .number(Double(lastSize.0)), "rows": .number(Double(lastSize.1))])
+    }
+    private func scheduleRepaint() {
+        repaintTask?.cancel()
+        repaintTask = nil
+        guard visible else { return }
+        let token = generation
+        // Ghostty reports host-managed resize before resizing its own cells.
+        // A fast server frame can be parsed against the old grid, leaving its
+        // diff baseline out of sync. After geometry settles, ask for a full
+        // frame on the existing stream. Herdr repaints identical-size resize
+        // requests without resizing the PTY or sending another SIGWINCH.
+        repaintTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self, self.generation == token,
+                  self.visible, self.ready, self.error == nil else { return }
+            self.repaintTask = nil
+            self.writeResize()
+        }
     }
     func scroll(delta: Double) {
         guard abs(delta) >= 1 else { return }
@@ -118,6 +150,8 @@ final class TerminalController: ObservableObject {
         }
     }
     func stop() {
+        repaintTask?.cancel()
+        repaintTask = nil
         resetInput?()
         pasteError = nil
         generation = UUID()
@@ -165,12 +199,14 @@ struct TerminalSurface: NSViewRepresentable {
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(coordinator.bridge.session))
         view.controller = coordinator.engine
         view.setSurfaceVisible(visible)
+        controller.setVisible(visible)
         view.onAttach = { [weak coordinator] in coordinator?.focusIfSelected() }
         view.onRetainedTabVisibility = { [weak coordinator] visible, zoomedPaneID in
             guard let coordinator, !coordinator.stopped else { return }
             let paneVisible = visible && (zoomedPaneID == nil || zoomedPaneID == coordinator.paneID)
             coordinator.visible = paneVisible
             coordinator.view?.setSurfaceVisible(paneVisible)
+            coordinator.controller.setVisible(paneVisible)
             if !paneVisible, coordinator.searching {
                 // SwiftUI may coalesce the hidden snapshot on a fast tab
                 // round-trip. Dismiss outside the current view update anyway.
@@ -207,6 +243,7 @@ struct TerminalSurface: NSViewRepresentable {
         coordinator.dismissSearch = dismissSearch
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
         view.setSurfaceVisible(visible)
+        controller.setVisible(visible)
         coordinator.updateAppearance(fontSize: fontSize, dark: dark)
         let shouldFocus = visible && selected
         if shouldFocus && !searching && (!coordinator.wasSelected || wasSearching) {
