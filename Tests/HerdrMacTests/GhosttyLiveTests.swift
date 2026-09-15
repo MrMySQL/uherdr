@@ -601,9 +601,15 @@ enum GhosttyLiveTests {
             }
             throw HerdrError.message("Timed out: \(description)\n\(screen())")
         }
-        let text = "FIRST-LINE\n" + (1...400).map {
+        let generatedText = "FIRST-LINE\n" + (1...400).map {
             "line \($0): café 世界 " + String(repeating: "x", count: 80)
         }.joined(separator: "\n") + "\nPENULTIMATE-LINE\nFINAL-LINE"
+        let text: String
+        if let path = ProcessInfo.processInfo.environment["HERDR_TEST_PASTE_TEXT_FILE"] {
+            text = try String(contentsOfFile: path, encoding: .utf8)
+        } else {
+            text = generatedText
+        }
         for agent in ["claude", "codex"] {
             let export = root.appendingPathComponent("\(agent).txt")
             let command = "cd '\(root.path)' && EDITOR='\(editor.path)' VISUAL='\(editor.path)' HERDR_PASTE_EXPORT='\(export.path)' \(agent)"

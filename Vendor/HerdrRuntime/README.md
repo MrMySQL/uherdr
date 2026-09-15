@@ -102,6 +102,9 @@ Ghostty's actual clipboard action, then exports the full draft with Ctrl-G.
 The temporary editor copies the draft and clears it; no prompt is submitted.
 The clipboard is restored afterward. The test checks the exported draft byte
 for byte, so a collapsed paste indicator alone cannot produce a pass.
+Set `HERDR_TEST_PASTE_TEXT_FILE=/absolute/path/to/example.txt` alongside
+`HERDR_TEST_PASTE_AGENTS=1` to check a specific UTF-8 example instead of the
+generated text. The file is read locally and is not added to the repository.
 
 Verified on 2026-09-14 with Claude Code 2.1.265 and Codex CLI 0.154.0:
 both exported all 41,530 UTF-8 bytes from the native clipboard test, including
@@ -110,6 +113,12 @@ the final two lines. The raw PTY regression failed on the original runtime
 unframed Claude probe retained only the final 732 of 19,128 characters; Codex
 inferred a paste successfully in the direct-input probes, so those probes did
 not independently reproduce truncation in Codex.
+
+A user-provided 1,212-byte example was also verified on 2026-09-15. Pasting it
+into Claude Code through the running native app retained only 190 bytes with
+the stock server. After a live handoff to the patched server, the same Claude
+process exported all 1,212 bytes exactly. The isolated native clipboard check
+also preserved the example byte for byte in both Claude Code and Codex.
 
 The 268 server tests and the native paste/keyboard checks pass. The broad
 `scripts/test.sh` run reaches the existing performance fixture's
