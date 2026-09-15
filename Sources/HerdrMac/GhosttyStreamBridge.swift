@@ -26,7 +26,9 @@ final class GhosttyStreamBridge {
         // This is the outer terminal's paste mode, not the application's.
         // Stock Herdr 0.9+ recognizes framed input as a semantic paste and
         // applies the real PTY mode itself, on the same ordered connection.
-        // Reassert after every reconstructed frame (including resets).
+        // The caller supplies a complete JSON terminal.frame from Herdr's
+        // ANSI blit encoder, not an arbitrary PTY/pipe read. Its control
+        // sequences are complete, so this is a safe boundary for reassertion.
         let mode = semanticPastes ? "\u{1b}[?2004h" : wasSemantic ? "\u{1b}[?2004l" : ""
         session.receive(data + Data(mode.utf8))
     }

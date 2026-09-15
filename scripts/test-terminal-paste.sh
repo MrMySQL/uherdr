@@ -1,7 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-HERDR_TEST_BIN="${HERDR_BIN:-$(command -v herdr)}"
+HERDR_TEST_BIN="${HERDR_BIN:-$(command -v herdr || true)}"
+if [ -z "$HERDR_TEST_BIN" ]; then
+    printf 'Install herdr or set HERDR_BIN to its executable.\n' >&2
+    exit 1
+fi
 if [ "${HERDR_TEST_PASTE_AGENTS:-0}" = "1" ]; then
     command -v claude >/dev/null
     command -v codex >/dev/null

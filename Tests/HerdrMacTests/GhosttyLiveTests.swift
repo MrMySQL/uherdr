@@ -38,8 +38,9 @@ enum GhosttyLiveTests {
             window.orderOut(nil)
         }
 
-        func waitFor(_ predicate: () -> Bool) async throws {
-            for _ in 0..<100 {
+        func waitFor(timeout: TimeInterval = 5, _ predicate: () -> Bool) async throws {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
                 if predicate() { return }
                 if let error = transport.error { throw HerdrError.message(error) }
                 try await Task.sleep(for: .milliseconds(50))
@@ -98,27 +99,32 @@ enum GhosttyLiveTests {
                     defer { try? FileManager.default.removeItem(atPath: capture) }
                     let fixture = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                         .appendingPathComponent("Tests/Fixtures/terminal-paste.py").path
-                    precondition(view.paste(text: "python3 '" + fixture + "' '" + capture + "' " + mode))
-                    precondition(view.sendKey(.enter))
-                    try await waitFor { session.readViewportText()?.contains("paste-fixture-ready-" + mode) == true }
                     let text = (1...400).map { "line \($0): café 世界 " + String(repeating: "x", count: 80) }
                         .joined(separator: "\n") + "\nPENULTIMATE-LINE\nFINAL-LINE"
-                    precondition(view.sendKey(.p))
-                    precondition(view.paste(text: text))
-                    precondition(view.paste(text: "SECOND"))
-                    precondition(view.sendKey(.enter))
-                    try await waitFor { session.readViewportText()?.contains("paste-fixture-done-" + mode) == true }
-                    let received = try Data(contentsOf: URL(fileURLWithPath: capture))
                     let contents = mode == "on"
                         ? "\u{1b}[200~" + text + "\u{1b}[201~\u{1b}[200~SECOND\u{1b}[201~"
                         : text + "SECOND"
                     let expected = Data(("p" + contents + "\r").utf8)
+                    precondition(view.paste(text: "python3 '" + fixture + "' '" + capture + "' " + mode + " \(expected.count)"))
+                    precondition(view.sendKey(.enter))
+                    try await waitFor { session.readViewportText()?.contains("paste-fixture-ready-" + mode) == true }
+                    precondition(view.sendKey(.p))
+                    precondition(view.paste(text: text))
+                    precondition(view.paste(text: "SECOND"))
+                    precondition(view.sendKey(.enter))
+                    try await waitFor(timeout: 12) {
+                        let output = session.readViewportText() ?? ""
+                        return output.contains("paste-fixture-done-" + mode) || output.contains("paste-fixture-failed-" + mode)
+                    }
+                    let received = try Data(contentsOf: URL(fileURLWithPath: capture))
                     guard received == expected else {
                         throw HerdrError.message("Live long paste differs: expected \(expected.count) bytes, received \(received.count); prefix \(Array(received.prefix(12)))")
                     }
                     precondition(transport.generation == connectionBeforePastes, "Pasting must not reconnect the control stream")
                     print("PASS: long paste, consecutive paste, preceding key and immediate Enter stay ordered with PTY paste mode \(mode), without reconnecting")
                 }
+                // PTY mode may be off; the outer Ghostty surface remains in
+                // paste mode, so this still exercises framed size rejection.
                 precondition(view.paste(text: String(repeating: "x", count: TerminalPasteBuffer.limit)))
                 precondition(view.sendKey(.enter))
                 try await waitFor { transport.pasteError != nil }
@@ -668,7 +674,9 @@ enum GhosttyLiveTests {
                 }
                 board.clearContents()
                 board.setString(text, forType: .string)
-                precondition(view.performBindingAction("paste_from_clipboard"))
+                guard view.performBindingAction("paste_from_clipboard") else {
+                    throw HerdrError.message("\(agent) clipboard paste action was rejected")
+                }
                 try await wait("\(agent) collapsed paste") { screen().contains("[Pasted") }
             }
             precondition(view.sendKey(.g, modifiers: .ctrl))
