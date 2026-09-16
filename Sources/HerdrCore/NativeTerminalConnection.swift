@@ -167,7 +167,9 @@ public final class NativeTerminalConnection: @unchecked Sendable {
                 let current = state(takeCommands: false)
                 // Preserve all input order while the focused clipboard endpoint is becoming
                 // ready, so a first mouse release cannot outrun its OSC 52 recipient.
-                if direct.welcomed && (!current.0 || (shell?.clipboardReady == true && shell?.generation == current.1)) {
+                // Each accepted batch fits the lane limit only once the previous batch
+                // has drained. Keep new commands queued while a slow peer catches up.
+                if direct.welcomed && direct.outgoing.isEmpty && (!current.0 || (shell?.clipboardReady == true && shell?.generation == current.1)) {
                     for packet in state(takeCommands: true, clipboardGeneration: shell?.clipboardReady == true ? shell?.generation : nil).4 { try direct.appendPacket(packet) }
                 }
                 if let active = shell, !current.0 || active.generation != current.1 { shell = nil }

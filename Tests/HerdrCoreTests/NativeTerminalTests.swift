@@ -51,6 +51,52 @@ private final class NativeEventLog: @unchecked Sendable {
 }
 
 extension NativeTerminalTests {
+    static func runSocketBackpressure() throws {
+        let root = "/tmp/hn-\(UUID().uuidString.prefix(8))"
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let fixture = try NativeSocketFixture(path: root + "/herdr-client.sock")
+        let log = NativeEventLog()
+        let connection = NativeTerminalConnection(socketPath: root + "/herdr.api", pane: "w1:p1", cols: 80, rows: 24, takeover: false) { log.append($0) }
+        defer { connection.stop() }
+        let first = Data(repeating: 65, count: 1_048_576)
+        let second = Data(repeating: 66, count: 1_048_560)
+        let third = Data(repeating: 67, count: 1_048_560)
+        connection.send(first)
+        connection.start()
+        let direct = try fixture.accept()
+        defer { Darwin.close(direct) }
+        var receiveBuffer: Int32 = 4096
+        XCTAssertEqual(setsockopt(direct, SOL_SOCKET, SO_RCVBUF, &receiveBuffer, socklen_t(MemoryLayout.size(ofValue: receiveBuffer))), 0)
+        XCTAssertEqual(try fixture.receive(direct), Data([0,22,80,24,0,0,0]))
+        try fixture.send(direct, [0,22,1,0])
+        XCTAssertEqual(try fixture.receive(direct), Data([8,5,119,49,58,112,49,0]))
+        // Leave the first input unread so it cannot fit in the kernel socket buffer.
+        XCTAssertTrue(fixture.readable(direct, milliseconds: 1000))
+        connection.send(second)
+        connection.send(third)
+        // Round trips let the worker process the newly accepted batch while the peer
+        // still withholds reads, without relying on a sleep or private queue state.
+        for marker: UInt8 in [88, 89] {
+            try fixture.send(direct, [1,0,80,24,1,1,marker])
+            try log.wait {
+                if case .frame(let bytes) = $0 { return bytes == Data([marker]) }
+                if case .error = $0 { return true }
+                return false
+            }
+            if log.contains({ if case .error = $0 { return true }; return false }) {
+                throw HerdrError.message("Native terminal dropped accepted input under socket backpressure")
+            }
+        }
+        for expected in [first, second, third] {
+            var message = NativeTerminalWire.Reader(data: try fixture.receive(direct))
+            XCTAssertEqual(try message.uint(), 1)
+            XCTAssertEqual(try message.blob(), expected)
+        }
+        XCTAssertTrue(!log.contains { if case .error = $0 { return true }; return false })
+        print("PASS: native socket backpressure preserves every accepted input byte in order")
+    }
+
     static func runSocketLifecycle() throws {
         let root = "/tmp/hn-\(UUID().uuidString.prefix(8))"
         try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)

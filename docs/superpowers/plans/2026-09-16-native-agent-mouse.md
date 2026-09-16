@@ -17,8 +17,8 @@
 - [x] Add `Sources/HerdrCore/NativeTerminalConnection.swift` and `Tests/HerdrCoreTests/NativeTerminalTests.swift`.
 - [x] Test known varint messages, fragmented frames, malformed/truncated data, oversized frames, and mouse event conversion.
 - [x] Implement `NativeTerminalConnection(socketPath:pane:cols:rows:takeover:onEvent:)`, `start()`, `send(Data)`, `resize(cols:rows:)`, `scroll(delta:)`, `setFocused(Bool)`, and `stop()`.
-- [x] Events: `.frame(Data)`, `.mouseCapture(Bool)`, `.clipboard(Data)`, `.error(String)`. Callbacks may arrive off-main; native coordinator uses generation checks.
-- [x] Match real stock-server messages. Check clipboard via endpoint shell; direct connection controls sizing throughout.
+- [x] Events: `.frame(Data)`, `.mouseCapture(Bool)`, `.clipboard(Data)`, `.clipboardReady(Bool)`, `.error(String)`. Callbacks may arrive off-main; native coordinator uses generation checks and waits for clipboard readiness before accepting OSC 52 events.
+- [x] Match real stock-server messages. Check clipboard via endpoint shell; the direct connection controls sizing for its attached pane, while the client-shell endpoint may resize tabs without direct resize locks on stock Herdr.
 
 ## Task 2: Native integration and live regression
 - [x] Add server protocol storage and choose native transport for protocol 22 in `TerminalController`.

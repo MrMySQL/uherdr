@@ -29,6 +29,16 @@ foreground-window or actual Claude Code check. Wire and Unix-socket lifecycle
 tests passed, including fragmented messages, malformed data, input ordering,
 custom API socket names and graceful detach before reconnect.
 
+PR #22 follow-up verification: the slow-peer Unix-socket regression reproduced
+accepted input loss when a new command batch joined a partially written batch.
+Waiting for the outgoing batch to drain fixes it; the test checks all three large
+inputs arrive intact and in order. `swift run HerdrCoreTests` passed. The native
+mouse suite also passed again, including the pinned Ghostty core's
+`copy-on-select = clipboard` behavior through the Shift-drag pasteboard assertion
+in `Tests/HerdrMacTests/GhosttyLiveTests.swift`. This run used the installed macOS
+26.5 SDK and SwiftPM native build system; the selected macOS 27 Command Line Tools
+lacked the SwiftUI macro plugin. Actual Claude Code selection remains untested.
+
 The repository regression components passed after targeted reruns: core/live API,
 hotkeys, search, agent-worktree fixtures, pane transfers, native keyboard/paste,
 retained-tab performance, terminal stream and SSH forwarding. The first full run
