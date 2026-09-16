@@ -7,6 +7,17 @@ struct TerminalKeyboardTests {
     @MainActor static func main() {
         _ = NSApplication.shared
         setbuf(stdout, nil)
+        if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--agent-drops" {
+            var finished = false
+            Task { @MainActor in
+                do {
+                    try await AgentFileDropTests.run(socket: CommandLine.arguments[2], executable: CommandLine.arguments[3])
+                    finished = true
+                } catch { print("FAIL: agent file drops: \(error)"); exit(1) }
+            }
+            while !finished { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            return
+        }
         if CommandLine.arguments.contains("--bundled-resources") {
             for url in [GhosttyRuntimeResources.directoryURL, GhosttyRuntimeResources.terminfoDirectoryURL] {
                 precondition(url?.path.hasPrefix(Bundle.main.bundleURL.path + "/Contents/Resources/") == true,
@@ -176,6 +187,57 @@ struct TerminalKeyboardTests {
         waitUntil { capture.bytes == Array(expectedDrop.utf8) }
         precondition(capture.bytes == Array(expectedDrop.utf8), "Drop must paste quoted file paths without submitting: \(String(decoding: capture.bytes, as: UTF8.self).debugDescription)")
         print("PASS: multiple file drops preserve quoting, Unicode, and bracketed paste")
+
+        // A remote drop must wait for upload completion and paste its returned
+        // path through Ghostty, preserving bracketed paste and never submitting.
+        capture.clear()
+        var finishUpload: CheckedContinuation<[String], Error>?
+        var uploadError: String?
+        view.resolveFileDrop = { urls in
+            precondition(urls == droppedFiles)
+            return try await withCheckedThrowingContinuation { finishUpload = $0 }
+        }
+        view.onFileDropError = { uploadError = $0.localizedDescription }
+        precondition(view.performDragOperation(drop))
+        waitUntil { finishUpload != nil }
+        precondition(capture.bytes.isEmpty, "Local paths must never be pasted while uploading")
+        precondition(!view.performDragOperation(drop), "Concurrent drops must not reorder uploads")
+        finishUpload!.resume(returning: ["/tmp/remote/project notes.txt"])
+        finishUpload = nil
+        waitUntil { !capture.bytes.isEmpty }
+        precondition(String(decoding: capture.bytes, as: UTF8.self) == "\u{1b}[200~'/tmp/remote/project notes.txt' \u{1b}[201~")
+        precondition(uploadError == nil)
+
+        capture.clear()
+        precondition(view.performDragOperation(drop))
+        waitUntil { finishUpload != nil }
+        finishUpload!.resume(throwing: NSError(domain: "upload", code: 1))
+        finishUpload = nil
+        waitUntil { uploadError != nil }
+        precondition(capture.bytes.isEmpty, "Failed uploads must not paste a local or partial path")
+
+        uploadError = nil
+        precondition(view.performDragOperation(drop))
+        waitUntil { finishUpload != nil }
+        view.canAcceptFileDrop = { false }
+        finishUpload!.resume(returning: ["/tmp/remote/ready.txt"])
+        finishUpload = nil
+        waitUntil { uploadError != nil }
+        precondition(uploadError != nil && capture.bytes.isEmpty, "A completed upload must report when a dialog prevents pasting")
+        view.canAcceptFileDrop = { true }
+
+        precondition(view.performDragOperation(drop))
+        waitUntil { finishUpload != nil }
+        view.setSurfaceVisible(false)
+        view.setSurfaceVisible(true)
+        finishUpload!.resume(returning: ["/tmp/remote/stale.txt"])
+        finishUpload = nil
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        precondition(capture.bytes.isEmpty, "Hiding and showing a pane must invalidate an in-flight drop")
+        view.resolveFileDrop = nil
+        view.onFileDropError = nil
+        view.acquireProgrammaticFocus()
+        print("PASS: remote drops wait for upload, reject duplicates, report failures and discard stale completion")
 
         view.canAcceptFileDrop = { false }
         capture.clear()
@@ -422,7 +484,7 @@ private final class SurfaceCapture: TerminalSurfaceLifecycleDelegate, TerminalSu
 
 // AppKit supplies this object during a drag; the pasteboard and terminal are real.
 @MainActor
-private final class FileDragInfo: NSObject, NSDraggingInfo {
+final class FileDragInfo: NSObject, NSDraggingInfo {
     let draggingPasteboard: NSPasteboard
     let draggingDestinationWindow: NSWindow?
     var draggingSourceOperationMask: NSDragOperation = .copy

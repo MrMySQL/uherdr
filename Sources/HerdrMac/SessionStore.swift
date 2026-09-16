@@ -64,6 +64,7 @@ final class SessionStore: ObservableObject {
     var defaultDirectory: String { isRemote ? remoteHome ?? "/tmp" : NSHomeDirectory() }
     private let defaults: UserDefaults
     private let tunnel: SSHTunnel
+    private let fileTransfer: RemoteFileTransfer
     private var retryAfter = Date.distantPast
     private var client: any HerdrRequesting
     private var pollTask: Task<Void, Never>?
@@ -74,10 +75,11 @@ final class SessionStore: ObservableObject {
     private var layoutRevision = 0
     private var pendingLayoutRefresh: Set<String> = []
 
-    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil) {
+    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil, fileTransfer: RemoteFileTransfer? = nil) {
         self.profile = profile
         self.defaults = defaults
         self.tunnel = tunnel ?? SSHTunnel()
+        self.fileTransfer = fileTransfer ?? RemoteFileTransfer()
         let socket = profile.kind == .local ? (profile.socketPath as NSString).expandingTildeInPath : ""
         effectiveSocketPath = socket
         appearance = defaults.string(forKey: "appearance") ?? "system"
@@ -106,6 +108,19 @@ final class SessionStore: ObservableObject {
               let id = paneID ?? selectedPane, visiblePanes.contains(where: { $0.id == id }) else { return }
         focusPane(id)
         paneSearchRequest = (id, UUID())
+    }
+
+    func prepareDroppedFiles(_ urls: [URL]) async throws -> [String] {
+        let generation = connectionGeneration
+        do {
+            let paths = isRemote ? try await fileTransfer.upload(urls, to: profile) : urls.map(\.path)
+            try Task.checkCancellation()
+            guard generation == connectionGeneration else { throw CancellationError() }
+            return paths
+        } catch {
+            guard generation == connectionGeneration else { throw CancellationError() }
+            throw error
+        }
     }
 
     func readPaneForSearch(_ paneID: String) async throws -> (text: String, truncated: Bool) {

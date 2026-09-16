@@ -9,8 +9,10 @@ final class TerminalController: ObservableObject {
     @Published var error: String?
     @Published var pasteError: String?
     @Published var ready = false
+    @Published var uploadingFiles = false
     var receive: ((Data) -> Void)?
     var resetInput: (() -> Void)?
+    var cancelFileDrop: (() -> Void)?
     private var process: Process?
     private var input: FileHandle?
     private var output: FileHandle?
@@ -155,6 +157,7 @@ final class TerminalController: ObservableObject {
         resetInput?()
         pasteError = nil
         generation = UUID()
+        cancelFileDrop?()
         output?.readabilityHandler = nil
         errors?.readabilityHandler = nil
         // Only the CLI stream is terminated. Herdr owns and retains the shell process.
@@ -220,8 +223,30 @@ struct TerminalSurface: NSViewRepresentable {
         view.canAcceptFileDrop = { [weak coordinator] in
             guard let coordinator, let store = coordinator.store else { return false }
             return !coordinator.stopped && coordinator.visible && coordinator.view?.isHiddenOrHasHiddenAncestor == false && coordinator.controller.ready
-                && coordinator.controller.error == nil && store.sheet == nil && store.pendingClose == nil
+                && coordinator.controller.error == nil && coordinator.controller.pasteError == nil && !coordinator.controller.uploadingFiles
+                && !coordinator.searching && store.sheet == nil && store.pendingClose == nil
         }
+        view.resolveFileDrop = { [weak coordinator] urls in
+            guard let coordinator, let store = coordinator.store else { throw CancellationError() }
+            let connection = store.connectionGeneration
+            let terminal = coordinator.controller.generation
+            coordinator.controller.uploadingFiles = store.isRemote
+            defer { coordinator.controller.uploadingFiles = false }
+            do {
+                let paths = try await store.prepareDroppedFiles(urls)
+                try Task.checkCancellation()
+                guard !coordinator.stopped, store.connectionGeneration == connection,
+                      coordinator.controller.generation == terminal else { throw CancellationError() }
+                return paths
+            } catch {
+                guard coordinator.controller.generation == terminal else { throw CancellationError() }
+                throw error
+            }
+        }
+        view.onFileDropError = { [weak coordinator] error in
+            coordinator?.store?.operationError = "Could not upload files: \(error.localizedDescription)"
+        }
+        controller.cancelFileDrop = { [weak view] in view?.cancelFileDrop() }
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
         controller.receive = { [weak coordinator] data in
             guard let coordinator else { return }
@@ -257,7 +282,9 @@ struct TerminalSurface: NSViewRepresentable {
         coordinator.controller.receive = nil
         coordinator.controller.stop()
         coordinator.controller.resetInput = nil
+        coordinator.controller.cancelFileDrop = nil
         coordinator.stopped = true
+        view.cancelFileDrop()
         view.onAttach = nil
         view.onRetainedTabVisibility = nil
         view.canAcceptFileDrop = { false }
@@ -396,6 +423,10 @@ final class HerdrTerminalView: AppTerminalView {
     var onAttach: (() -> Void)?
     var onRetainedTabVisibility: ((Bool, String?) -> Void)?
     var canAcceptFileDrop: () -> Bool = { false }
+    var resolveFileDrop: (([URL]) async throws -> [String])?
+    var onFileDropError: ((Error) -> Void)?
+    private var fileDropTask: Task<Void, Never>?
+    private var fileDropGeneration = UUID()
     private var surfaceVisible = true
     private var plainLinkClick = false
     private var capturedLinkClick: (url: String, event: NSEvent)?
@@ -504,6 +535,7 @@ final class HerdrTerminalView: AppTerminalView {
     }
 
     override func setSurfaceVisible(_ visible: Bool) {
+        if !visible { cancelFileDrop() }
         surfaceVisible = visible
         super.setSurfaceVisible(visible)
         // A destination tab may still be loading. Do not leave keyboard input
@@ -519,7 +551,7 @@ final class HerdrTerminalView: AppTerminalView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        fileDropText(sender) == nil ? [] : .copy
+        fileDropURLs(sender) == nil ? [] : .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -527,17 +559,49 @@ final class HerdrTerminalView: AppTerminalView {
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        fileDropText(sender) != nil
+        fileDropURLs(sender) != nil
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let text = fileDropText(sender), paste(text: text) else { return false }
+        guard let urls = fileDropURLs(sender) else { return false }
+        guard let resolveFileDrop else {
+            guard paste(text: Self.fileDropText(urls.map(\.path))) else { return false }
+            acquireProgrammaticFocus()
+            return true
+        }
         acquireProgrammaticFocus()
+        let token = fileDropGeneration
+        fileDropTask = Task { [weak self] in
+            do {
+                let paths = try await resolveFileDrop(urls)
+                try Task.checkCancellation()
+                guard let self, self.fileDropGeneration == token else { return }
+                defer { self.fileDropTask = nil }
+                guard self.canAcceptFileDrop(), self.surfaceVisible, self.window != nil,
+                      !self.isHiddenOrHasHiddenAncestor, self.controller != nil else {
+                    throw HerdrError.message("The pane is no longer ready to paste. Close any dialog or search, then drop the files again.")
+                }
+                guard !paths.isEmpty, paths.allSatisfy({ !$0.isEmpty && $0.rangeOfCharacter(from: .controlCharacters) == nil }),
+                      self.paste(text: Self.fileDropText(paths)) else {
+                    throw HerdrError.message("The terminal could not accept the uploaded paths.")
+                }
+            } catch {
+                guard let self, self.fileDropGeneration == token else { return }
+                self.fileDropTask = nil
+                if !(error is CancellationError), !Task.isCancelled { self.onFileDropError?(error) }
+            }
+        }
         return true
     }
 
-    private func fileDropText(_ sender: NSDraggingInfo) -> String? {
-        guard canAcceptFileDrop(), controller != nil, window != nil, !isHiddenOrHasHiddenAncestor,
+    func cancelFileDrop() {
+        fileDropGeneration = UUID()
+        fileDropTask?.cancel()
+        fileDropTask = nil
+    }
+
+    private func fileDropURLs(_ sender: NSDraggingInfo) -> [URL]? {
+        guard fileDropTask == nil, surfaceVisible, canAcceptFileDrop(), controller != nil, window != nil, !isHiddenOrHasHiddenAncestor,
               sender.draggingSourceOperationMask.contains(.copy),
               let urls = sender.draggingPasteboard.readObjects(
                 forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
@@ -548,6 +612,10 @@ final class HerdrTerminalView: AppTerminalView {
         guard urls.allSatisfy(\.isFileURL), paths.allSatisfy({
             !$0.isEmpty && $0.rangeOfCharacter(from: .controlCharacters) == nil
         }) else { return nil }
+        return urls
+    }
+
+    private static func fileDropText(_ paths: [String]) -> String {
         // POSIX single quoting keeps shell metacharacters literal; close and
         // reopen the quote around apostrophes. Leave room for the next word.
         return paths.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
