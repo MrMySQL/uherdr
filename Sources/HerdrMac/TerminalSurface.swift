@@ -10,9 +10,14 @@ final class TerminalController: ObservableObject {
     @Published var pasteError: String?
     @Published var ready = false
     @Published var uploadingFiles = false
+    private(set) var clipboardReady = false
     var receive: ((Data) -> Void)?
     var resetInput: (() -> Void)?
     var cancelFileDrop: (() -> Void)?
+    private var nativeConnection: NativeTerminalConnection?
+    private var focused = false
+    private var mouseCaptured = false
+    private var clipboardActive = false
     private var process: Process?
     private var input: FileHandle?
     private var output: FileHandle?
@@ -24,16 +29,51 @@ final class TerminalController: ObservableObject {
     private var visible = true
     private var repaintTask: Task<Void, Never>?
     private let writer = DispatchQueue(label: "dev.herdr.native.terminal-input")
-    private var configuration: (String, String, String)?
+    private var configuration: (String, String, String, Int?)?
 
-    func start(executable: String, socket: String, pane: String, cols: Int, rows: Int, takeover: Bool = false) {
+    func start(executable: String, socket: String, pane: String, cols: Int, rows: Int, takeover: Bool = false, serverProtocol: Int? = nil) {
         stop()
-        configuration = (executable, socket, pane)
+        configuration = (executable, socket, pane, serverProtocol)
         error = nil
         if ready { ready = false }
         framing = JSONLineBuffer(); errorText = ""
         generation = UUID()
         let token = generation
+        lastSize = (max(2, cols), max(2, rows))
+        if serverProtocol == 22 {
+            let connection = NativeTerminalConnection(socketPath: (socket as NSString).expandingTildeInPath,
+                pane: pane, cols: lastSize.0, rows: lastSize.1, takeover: takeover) { [weak self] event in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.generation == token else { return }
+                    switch event {
+                    case .frame(let data):
+                        self.receive?(data)
+                        if !self.ready {
+                            self.ready = true
+                            self.scheduleRepaint()
+                        }
+                    case .mouseCapture(let enabled):
+                        self.updateMouseCapture(enabled)
+                    case .clipboardReady(let ready):
+                        self.clipboardReady = ready
+                    case .clipboard(let data):
+                        guard self.focused, self.visible, self.clipboardActive, self.error == nil,
+                              let text = String(data: data, encoding: .utf8) else { return }
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                    case .error(let message):
+                        self.error = message
+                        self.ready = false
+                        self.updateMouseCapture(false)
+                        self.nativeConnection?.stop()
+                    }
+                }
+            }
+            nativeConnection = connection
+            connection.start()
+            syncClipboardFocus()
+            return
+        }
         let child = Process()
         let stdinPipe = Pipe(), stdoutPipe = Pipe(), stderrPipe = Pipe()
         child.executableURL = URL(fileURLWithPath: (executable as NSString).expandingTildeInPath)
@@ -93,12 +133,13 @@ final class TerminalController: ObservableObject {
     }
 
     func retry(takeover: Bool = false) {
-        guard let (exe, socket, pane) = configuration else { return }
-        start(executable: exe, socket: socket, pane: pane, cols: lastSize.0, rows: lastSize.1, takeover: takeover)
+        guard let (exe, socket, pane, serverProtocol) = configuration else { return }
+        start(executable: exe, socket: socket, pane: pane, cols: lastSize.0, rows: lastSize.1, takeover: takeover, serverProtocol: serverProtocol)
     }
 
     func send(_ data: Data) {
         guard error == nil, pasteError == nil else { return }
+        if let nativeConnection { nativeConnection.send(data); return }
         write(["type": .string("terminal.input"), "bytes": .string(data.base64EncodedString())])
     }
     func resize(cols: Int, rows: Int) {
@@ -110,9 +151,31 @@ final class TerminalController: ObservableObject {
     func setVisible(_ visible: Bool) {
         guard self.visible != visible else { return }
         self.visible = visible
+        syncClipboardFocus()
         scheduleRepaint()
     }
+    func setFocused(_ focused: Bool) {
+        self.focused = focused
+        syncClipboardFocus()
+    }
+    private func syncClipboardFocus() {
+        // Activate only when an application needs mouse input. Keep the endpoint
+        // for this focus epoch so a final OSC 52 can arrive after mouse mode ends;
+        // those messages travel on independent sockets and may arrive out of order.
+        clipboardActive = focused && visible && (mouseCaptured || clipboardActive)
+        nativeConnection?.setFocused(clipboardActive)
+    }
+    private func updateMouseCapture(_ enabled: Bool) {
+        guard mouseCaptured != enabled else { return }
+        mouseCaptured = enabled
+        syncClipboardFocus()
+        // Ask Ghostty for cell-coordinate reports. Herdr re-encodes structured
+        // mouse events using the application's real tracking/encoding modes.
+        let reset = "\u{1b}[?9;1000;1002;1003;1005;1006;1015;1016l"
+        receive?(Data((reset + (enabled ? "\u{1b}[?1003h\u{1b}[?1006h" : "")).utf8))
+    }
     private func writeResize() {
+        if let nativeConnection { nativeConnection.resize(cols: lastSize.0, rows: lastSize.1); return }
         write(["type": .string("terminal.resize"), "cols": .number(Double(lastSize.0)), "rows": .number(Double(lastSize.1))])
     }
     private func scheduleRepaint() {
@@ -135,6 +198,7 @@ final class TerminalController: ObservableObject {
     }
     func scroll(delta: Double) {
         guard abs(delta) >= 1 else { return }
+        if let nativeConnection { nativeConnection.scroll(delta: delta); return }
         write(["type": .string("terminal.scroll"), "direction": .string(delta > 0 ? "up" : "down"), "lines": .number(min(100, max(1, abs(delta)))), "source": .string("wheel")])
     }
     private func write(_ object: [String: JSONValue]) {
@@ -157,6 +221,11 @@ final class TerminalController: ObservableObject {
         resetInput?()
         pasteError = nil
         generation = UUID()
+        nativeConnection?.stop()
+        nativeConnection = nil
+        clipboardReady = false
+        clipboardActive = false
+        updateMouseCapture(false)
         cancelFileDrop?()
         output?.readabilityHandler = nil
         errors?.readabilityHandler = nil
@@ -204,6 +273,7 @@ struct TerminalSurface: NSViewRepresentable {
         view.setSurfaceVisible(visible)
         controller.setVisible(visible)
         view.onAttach = { [weak coordinator] in coordinator?.focusIfSelected() }
+        view.onFocusChanged = { [weak coordinator] in coordinator?.syncInputFocus() }
         view.onRetainedTabVisibility = { [weak coordinator] visible, zoomedPaneID in
             guard let coordinator, !coordinator.stopped else { return }
             let paneVisible = visible && (zoomedPaneID == nil || zoomedPaneID == coordinator.paneID)
@@ -278,6 +348,7 @@ struct TerminalSurface: NSViewRepresentable {
             DispatchQueue.main.async { [weak coordinator] in coordinator?.focusIfSelected() }
         }
         coordinator.wasSelected = shouldFocus
+        coordinator.syncInputFocus()
     }
 
     static func dismantleNSView(_ view: HerdrTerminalView, coordinator: Coordinator) {
@@ -289,6 +360,7 @@ struct TerminalSurface: NSViewRepresentable {
         coordinator.stopped = true
         view.cancelFileDrop()
         view.onAttach = nil
+        view.onFocusChanged = nil
         view.onRetainedTabVisibility = nil
         view.canAcceptFileDrop = { false }
         view.delegate = nil
@@ -363,7 +435,7 @@ struct TerminalSurface: NSViewRepresentable {
             if !started {
                 started = true
                 controller.start(executable: store.executable, socket: store.effectiveSocketPath,
-                                 pane: paneID, cols: cols, rows: rows)
+                                 pane: paneID, cols: cols, rows: rows, serverProtocol: store.protocolVersion)
             } else {
                 controller.resize(cols: cols, rows: rows)
             }
@@ -375,7 +447,24 @@ struct TerminalSurface: NSViewRepresentable {
             view.acquireProgrammaticFocus()
         }
 
+        private var focusObservers: [NSObjectProtocol] = []
+
+        func syncInputFocus() {
+            guard !stopped, let view else { controller.setFocused(false); return }
+            controller.setFocused(visible && !searching && !view.isHiddenOrHasHiddenAncestor
+                && view.window?.isKeyWindow == true && view.window?.firstResponder === view)
+        }
+
         func installEvents() {
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+                focusObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                    MainActor.assumeIsolated {
+                        guard let self, let window = notification.object as? NSWindow,
+                              window === self.view?.window else { return }
+                        self.syncInputFocus()
+                    }
+                })
+            }
             // Herdr owns the scrollback represented by its ANSI frames. Keep
             // wheel scrolling on the server, while Ghostty handles keys/mouse.
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown]) { [weak self] event in
@@ -397,6 +486,8 @@ struct TerminalSurface: NSViewRepresentable {
         }
 
         func removeEvents() {
+            focusObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            focusObservers.removeAll()
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
         }
@@ -428,6 +519,7 @@ struct TerminalSurface: NSViewRepresentable {
 @MainActor
 final class HerdrTerminalView: AppTerminalView {
     var onAttach: (() -> Void)?
+    var onFocusChanged: (() -> Void)?
     var onRetainedTabVisibility: ((Bool, String?) -> Void)?
     var canAcceptFileDrop: () -> Bool = { false }
     var resolveFileDrop: (([URL]) async throws -> PreparedFileDrop)?
@@ -538,7 +630,15 @@ final class HerdrTerminalView: AppTerminalView {
 
     override func becomeFirstResponder() -> Bool {
         guard surfaceVisible else { return false }
-        return super.becomeFirstResponder()
+        let accepted = super.becomeFirstResponder()
+        DispatchQueue.main.async { [weak self] in self?.onFocusChanged?() }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        DispatchQueue.main.async { [weak self] in self?.onFocusChanged?() }
+        return accepted
     }
 
     override func setSurfaceVisible(_ visible: Bool) {
@@ -686,6 +786,8 @@ final class HerdrTerminalView: AppTerminalView {
             .custom("mouse-shift-capture", "never")
             .custom("clipboard-read", "deny")
             .custom("clipboard-write", "allow")
+            // The embedded wrapper discards selection-clipboard writes.
+            .custom("copy-on-select", "clipboard")
             .custom("keybind", "clear")
             .custom("keybind", "super+c=copy_to_clipboard")
             .custom("keybind", "super+v=paste_from_clipboard")

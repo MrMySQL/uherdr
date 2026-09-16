@@ -84,9 +84,20 @@ Codex CLI 0.154.0. Both agents preserved the 41,530-byte generated example and
 a private 1,212-byte reproduction exactly. Native PTY tests also verified paste
 mode on/off, input ordering, size-error recovery and unchanged control connection.
 
-Stock 0.9.0 still omits application mouse modes from the JSON terminal stream.
-The opt-in mouse-forwarding regression fails on that release. Replacing a custom
-runtime containing the historical mouse patch would therefore lose that behavior.
+Stock 0.9.0 omits mouse modes and application clipboard events from its JSON
+terminal stream. For protocol 22, uherdr uses the stock binary terminal protocol
+and a focused client-shell connection to carry these events without server patches.
+Application-owned selection can write the macOS clipboard; Shift-drag retains
+native local selection and automatic copying. Other protocol versions retain
+the CLI transport and native local copy-on-selection. Herdr routes clipboard
+writes from all panes to its foreground client and does not identify the source
+pane; uherdr accepts those writes only while that native terminal retains keyboard focus. The connection opens when
+an application captures the mouse and stays until focus leaves, allowing a final
+copy to arrive after the application disables mouse reporting.
+The required client-shell connection also participates in stock Herdr's layout:
+when it is the sole shell client, tabs without a directly attached native terminal
+can be resized to its viewport. Directly attached panes keep their own dimensions.
+Protocol 22 offers no independent clipboard-only subscription.
 This paste change does not automatically install or replace a running server.
 
 A disposable 0.8.2-to-0.9.0 live handoff preserved the shell PID. A one-time

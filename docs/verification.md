@@ -1,35 +1,60 @@
 # Verification — 2026-09-07
 
-## Agent tool-call clicks — 2026-09-08
+## Native copy-on-selection — 2026-09-16
 
-Implemented a local Herdr 0.8.2 runtime patch in
-[Vendor/HerdrRuntime](../Vendor/HerdrRuntime/README.md). Session control/observe
-streams now preserve mouse modes in ANSI frames, including mode-only updates,
-initial state, reconnect, disable and output-queue retries. Interactive CLI
-attach and full-app mouse capture retain their previous behavior. No native app
-implementation change was needed.
+Automatic copying uses the native client's Ghostty configuration:
+`copy-on-select = clipboard`. The embedded wrapper advertises a selection
+clipboard but discards writes to it, so the default setting selects text without
+updating the macOS clipboard. Explicitly choosing `clipboard` sends the selected
+text to the system pasteboard on release. No server customization is required.
 
-- The new stream capability probe fails on stock 0.8.2 because mouse modes are
-  omitted, then passes on the patched runtime.
-- `HERDR_BIN="$PWD/dist/herdr-runtime/herdr" bash scripts/test-terminal-mouse.sh`
-  passes. Injected AppKit events
-  through the mounted production SwiftUI/Ghostty bridge expand a raw-mode
-  fixture's tool result, deliver the release, and collapse after reconnect.
-  Mode changes without drawing and application exit correctly update capture.
-- `HERDR_BIN=... bash scripts/test.sh` passes against the final patched binary,
-  including keyboard, paste, links, file drops, live pane layouts and remote
-  forwarding checks.
-- Five focused runtime tests pass. A stock-CLI wheel-capture regression was
-  reproduced during review and fixed by limiting projection to session requests.
-- An isolated live handoff from stock to patched 0.8.2 preserved shell and
-  foreground application process IDs, restored mouse state and accepted a click
-  that expanded the fixture result.
-- The saved patch reverse-applies cleanly to the tested runtime checkout.
+A temporary native probe linked against the rebuilt app verified drag selection,
+automatic clipboard contents, explicit copy, and selection surviving unrelated
+output and same-text redraws. The keyboard, paste, file-drop and URL checks in
+the native harness passed. The release app built and its strict signature check
+passed.
 
-The build and activation instructions, exact base commit, binary checksum and
-pixel/overlapping-mode limitations are recorded alongside the patch. Actual
-agent UI clicking has not been manually checked; the end-to-end fixture tests
-the same mouse transport mechanism.
+Application mouse and clipboard events are available in stock Herdr 0.9.0's
+binary protocol 22, although its JSON terminal stream discards them. The native
+client now uses that protocol and a focused client-shell connection. The optional
+`scripts/test-terminal-mouse.sh` exercises application press/drag/release,
+OSC 52 clipboard delivery, Shift-drag local copying, PTY dimensions, reconnect,
+and mode-only changes against a disposable stock server.
+
+The native mouse suite passed on stock Herdr 0.9.0 (protocol 22), including final
+clipboard delivery when the application exits and disables mouse reporting.
+The AppKit harness supplies deterministic key-window state and injects mouse
+handlers into the production SwiftUI/Ghostty bridge; it does not claim a manual
+foreground-window or actual Claude Code check. Wire and Unix-socket lifecycle
+tests passed, including fragmented messages, malformed data, input ordering,
+custom API socket names and graceful detach before reconnect.
+
+PR #22 follow-up verification: the slow-peer Unix-socket regression reproduced
+accepted input loss when a new command batch joined a partially written batch.
+Waiting for the outgoing batch to drain fixes it; the test checks all three large
+inputs arrive intact and in order. `swift run HerdrCoreTests` passed. The native
+mouse suite also passed again, including the pinned Ghostty core's
+`copy-on-select = clipboard` behavior through the Shift-drag pasteboard assertion
+in `Tests/HerdrMacTests/GhosttyLiveTests.swift`. This run used the installed macOS
+26.5 SDK and SwiftPM native build system; the selected macOS 27 Command Line Tools
+lacked the SwiftUI macro plugin. Actual Claude Code selection remains untested.
+
+The repository regression components passed after targeted reruns: core/live API,
+hotkeys, search, agent-worktree fixtures, pane transfers, native keyboard/paste,
+retained-tab performance, terminal stream and SSH forwarding. The first full run
+hit an intermittent pane-transfer shell-environment assertion; both the committed
+baseline and this branch passed isolated reruns. Performance validation caught an
+extra mouse-reset sequence on legacy startup; resetting only when capture changes
+restored the existing exact-byte check. No authenticated agent tests ran.
+The release app build, strict signature verification, plist validation and
+`git diff --check` passed. Packaging builds the `Herdr` product explicitly,
+leaving debug-only test executables out of the release build.
+
+Stock clipboard messages lack originating-pane identity. The necessary active
+client-shell endpoint can also resize tabs without direct resize locks; see
+[paste compatibility](terminal-paste.md#upgrade-compatibility). It starts only
+after mouse capture is requested and closes on blur, hide or disconnect.
+
 
 ## Multi-device SSH — 2026-09-08
 

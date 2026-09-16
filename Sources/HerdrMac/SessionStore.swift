@@ -50,6 +50,7 @@ final class SessionStore: ObservableObject {
     @Published var connectionError: String?
     @Published var operationError: String?
     @Published var version = ""
+    @Published private(set) var protocolVersion: Int?
     @Published var sheet: AppSheet?
     @Published var pendingClose: ResourceTarget?
     @Published var connectionGeneration = UUID()
@@ -284,6 +285,7 @@ final class SessionStore: ObservableObject {
             let snapshot = try response["snapshot"].decode(SessionSnapshot.self)
             guard generation == connectionGeneration, !Task.isCancelled, expectedLayoutRevision == layoutRevision else { return }
             if version != snapshot.version { version = snapshot.version }
+            if protocolVersion != snapshot.protocolVersion { protocolVersion = snapshot.protocolVersion }
             if workspaces != snapshot.workspaces { workspaces = snapshot.workspaces }
             if tabs != snapshot.tabs { tabs = snapshot.tabs }
             if panes != snapshot.panes { panes = snapshot.panes }
