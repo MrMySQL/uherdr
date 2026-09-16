@@ -687,6 +687,8 @@ final class HerdrTerminalView: AppTerminalView {
             .custom("mouse-shift-capture", "never")
             .custom("clipboard-read", "deny")
             .custom("clipboard-write", "allow")
+            // The embedded wrapper discards selection-clipboard writes.
+            .custom("copy-on-select", "clipboard")
             .custom("keybind", "clear")
             .custom("keybind", "super+c=copy_to_clipboard")
             .custom("keybind", "super+v=paste_from_clipboard")

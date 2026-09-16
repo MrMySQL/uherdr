@@ -1,35 +1,24 @@
 # Verification — 2026-09-07
 
-## Agent tool-call clicks — 2026-09-08
+## Native copy-on-selection — 2026-09-16
 
-Implemented a local Herdr 0.8.2 runtime patch in
-[Vendor/HerdrRuntime](../Vendor/HerdrRuntime/README.md). Session control/observe
-streams now preserve mouse modes in ANSI frames, including mode-only updates,
-initial state, reconnect, disable and output-queue retries. Interactive CLI
-attach and full-app mouse capture retain their previous behavior. No native app
-implementation change was needed.
+Automatic copying uses the native client's Ghostty configuration:
+`copy-on-select = clipboard`. The embedded wrapper advertises a selection
+clipboard but discards writes to it, so the default setting selects text without
+updating the macOS clipboard. Explicitly choosing `clipboard` sends the selected
+text to the system pasteboard on release. No server customization is required.
 
-- The new stream capability probe fails on stock 0.8.2 because mouse modes are
-  omitted, then passes on the patched runtime.
-- `HERDR_BIN="$PWD/dist/herdr-runtime/herdr" bash scripts/test-terminal-mouse.sh`
-  passes. Injected AppKit events
-  through the mounted production SwiftUI/Ghostty bridge expand a raw-mode
-  fixture's tool result, deliver the release, and collapse after reconnect.
-  Mode changes without drawing and application exit correctly update capture.
-- `HERDR_BIN=... bash scripts/test.sh` passes against the final patched binary,
-  including keyboard, paste, links, file drops, live pane layouts and remote
-  forwarding checks.
-- Five focused runtime tests pass. A stock-CLI wheel-capture regression was
-  reproduced during review and fixed by limiting projection to session requests.
-- An isolated live handoff from stock to patched 0.8.2 preserved shell and
-  foreground application process IDs, restored mouse state and accepted a click
-  that expanded the fixture result.
-- The saved patch reverse-applies cleanly to the tested runtime checkout.
+A temporary native probe linked against the rebuilt app verified drag selection,
+automatic clipboard contents, explicit copy, and selection surviving unrelated
+output and same-text redraws. The keyboard, paste, file-drop and URL checks in
+the native harness passed. The release app built and its strict signature check
+passed.
 
-The build and activation instructions, exact base commit, binary checksum and
-pixel/overlapping-mode limitations are recorded alongside the patch. Actual
-agent UI clicking has not been manually checked; the end-to-end fixture tests
-the same mouse transport mechanism.
+Application mouse forwarding is a separate server capability. Stock Herdr 0.9.0
+omits application mouse modes from JSON terminal frames, so application clicks
+such as expanding tool calls are unavailable through that stream. The optional
+`scripts/test-terminal-mouse.sh` capability check is retained for future upstream
+support; it is expected to fail on stock 0.9.0 and is not part of the default suite.
 
 ## Multi-device SSH — 2026-09-08
 

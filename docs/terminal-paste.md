@@ -85,8 +85,9 @@ a private 1,212-byte reproduction exactly. Native PTY tests also verified paste
 mode on/off, input ordering, size-error recovery and unchanged control connection.
 
 Stock 0.9.0 still omits application mouse modes from the JSON terminal stream.
-The opt-in mouse-forwarding regression fails on that release. Replacing a custom
-runtime containing the historical mouse patch would therefore lose that behavior.
+The opt-in mouse-forwarding capability check fails on that release. Application
+click forwarding requires upstream support. Native text selection and automatic
+copying use the client clipboard and do not require application mouse modes.
 This paste change does not automatically install or replace a running server.
 
 A disposable 0.8.2-to-0.9.0 live handoff preserved the shell PID. A one-time

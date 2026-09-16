@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euo pipefail
+# Optional upstream capability check, not needed for local selection/copy.
+# Stock Herdr 0.9.0 omits application mouse modes and is expected to fail.
 cd "$(dirname "$0")/.."
 HERDR_TEST_BIN="${HERDR_BIN:-$(command -v herdr || true)}"
 if [ -z "$HERDR_TEST_BIN" ]; then
