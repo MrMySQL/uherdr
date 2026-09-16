@@ -63,9 +63,10 @@ import HerdrCore
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = AppearanceStore(defaults: defaults)
-        let host = NSHostingView(rootView: AppearanceSettingsView(store: store).padding(28)
+        let session = SessionStore(profile: DeviceProfile(name: "Settings fixture", executable: "/unused"), defaults: defaults, appearanceStore: store)
+        let host = NSHostingView(rootView: EditorSheet(sheet: .settings, store: session)
             .background(Color(nsColor: .windowBackgroundColor)))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 680),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 770),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host
         window.orderBack(nil)
@@ -78,7 +79,7 @@ import HerdrCore
                 auto_switch = true
                 light_name = "catppuccin-latte"
                 [ui.sidebar.spaces]
-                rows = [["workspace"]]
+                rows = [[{token="workspace",rules=[{contains="prod",fg="#ff8040",bold=true,hide=false}]}]]
                 """))
             }
             try await Task.sleep(for: .milliseconds(150))
@@ -101,7 +102,23 @@ import HerdrCore
                 }
             }
         }
-        print("PASS: all three mounted native preset controls remain enabled for Native and Herdr config sources")
+        guard let scroll = descendants(host).compactMap({ $0 as? NSScrollView }).max(by: { $0.frame.height < $1.frame.height }),
+              let document = scroll.documentView, document.frame.height > scroll.contentSize.height else {
+            throw HerdrError.message("Full Settings must scroll to the sidebar editor and preview")
+        }
+        for position in ["middle", "bottom"] {
+            let maximum = document.frame.height - scroll.contentSize.height
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: position == "middle" ? maximum / 2 : maximum))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await Task.sleep(for: .milliseconds(150))
+            guard scroll.contentView.bounds.origin.y > 0 else { throw HerdrError.message("Settings scrolling did not move") }
+            if let directory = ProcessInfo.processInfo.environment["HERDR_SETTINGS_CAPTURE_DIR"],
+               let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory + "/settings-" + position + "-native-cache.png"))
+            }
+        }
+        print("PASS: full 480-point Settings scrolls through rules to preview; all three native preset controls remain enabled for Native and Herdr config sources")
     }
 
     @MainActor static func retainedAppearance(socket: String, executable: String) async throws {
@@ -250,6 +267,53 @@ import HerdrCore
         store.appearance = "light"; update(.light)
         guard hidden.controller!.renderedConfig == oldConfig else { throw HerdrError.message("Light Ghostty theme did not restore in place") }
         print("PASS: UI palette preserves native/controller identity, stream, fixed Ghostty theme and ANSI/RGB output; hidden roots match baseline and catch up before reveal; light/dark updates in place")
+        // Exercise real shell continuity beyond the existing viewport/identity checks.
+        let pasteboard = NSPasteboard.general
+        let savedClipboard = (pasteboard.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        }
+        defer {
+            pasteboard.clearContents()
+            pasteboard.writeObjects(savedClipboard.map { values in
+                let item = NSPasteboardItem()
+                for (type, data) in values { item.setData(data, forType: type) }
+                return item
+            })
+        }
+        precondition(hidden.paste(text: "printf 'THEME_PID=%s\\n' $$; printf 'SCROLLBACK_SENTINEL_%s\\n' before; for i in {1..120}; do printf 'history-line-%s\\n' $i; done; printf 'SELECTION_SENTINEL_%s\\n' ready"))
+        precondition(hidden.sendKey(.enter))
+        try await wait("selection fixture output") { viewport(hidden).contains("SELECTION_SENTINEL_ready") }
+        let beforeHistory = try await store.readPaneForSearch(first.id).text
+        let pidLine = beforeHistory.components(separatedBy: "\n").first { $0.hasPrefix("THEME_PID=") && Int($0.dropFirst(10)) != nil }
+        guard let pidLine, beforeHistory.contains("SCROLLBACK_SENTINEL_before") else { throw HerdrError.message("Missing live shell PID/scrollback sentinel") }
+        precondition(hidden.performBindingAction("select_all"))
+        func selection() throws -> String {
+            pasteboard.clearContents()
+            guard hidden.performBindingAction("copy_to_clipboard"), let value = pasteboard.string(forType: .string), value.contains("SELECTION_SENTINEL_ready") else {
+                throw HerdrError.message("Theme change lost native terminal selection")
+            }
+            return value
+        }
+        let selectedText = try selection()
+        for (mode, preset) in [("light", "one-light"), ("dark", "nord"), ("light", "uherdr")] {
+            store.appearance = mode
+            try store.appearanceStore.setPreset(preset)
+            update(mode == "dark" ? .dark : .light)
+            try await Task.sleep(for: .milliseconds(100))
+            guard try selection() == selectedText, hidden.controller === controllers[first.id],
+                  delegates[first.id]!.controller.generation == generations[first.id] else {
+                throw HerdrError.message("Theme change replaced selection, renderer, or writable controller")
+            }
+        }
+        precondition(hidden.paste(text: "printf 'AFTER_THEME_PID=%s\\n' $$; printf 'INPUT_CONTINUES_%s\\n' yes"))
+        precondition(hidden.sendKey(.enter))
+        try await wait("input after theme changes") { viewport(hidden).contains("INPUT_CONTINUES_yes") }
+        let afterHistory = try await store.readPaneForSearch(first.id).text
+        guard afterHistory.contains("AFTER_" + pidLine), afterHistory.contains("SCROLLBACK_SENTINEL_before"),
+              afterHistory.contains("history-line-1"), afterHistory.contains("history-line-120") else {
+            throw HerdrError.message("Shell PID or server scrollback changed across themes")
+        }
+        print("PASS: live \(pidLine), output sentinel, exact native selection, 120-line scrollback, subsequent input, renderer and writable controller survive light/dark and UI theme changes")
         if let directory = ProcessInfo.processInfo.environment["HERDR_APPEARANCE_CAPTURE_DIR"] {
             // Optional manual QA uses the real workspace and disposable shells.
             // No agent processes are started; the footer previews native status badges.
@@ -263,9 +327,15 @@ import HerdrCore
             window.setContentSize(NSSize(width: 1200, height: 800))
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-            for (name, mode, preset) in [("default-light", "light", "uherdr"), ("default-dark", "dark", "uherdr"), ("nord-dark", "dark", "nord"), ("one-light-search", "light", "one-light")] {
+            for (name, mode, preset) in [("default-light", "light", "uherdr"), ("default-dark", "dark", "uherdr"), ("conditional-dark", "dark", "nord"), ("conditional-light-search", "light", "one-light")] {
                 store.appearance = mode
                 try store.appearanceStore.setPreset(preset)
+                if name.hasPrefix("conditional") {
+                    let config = try HerdrAppearanceConfig.parse(String(contentsOf: URL(fileURLWithPath: "docs/appearance-example.toml"), encoding: .utf8))
+                    try store.appearanceStore.setNativeSidebar(config.sidebar)
+                    _ = try await client.request("workspace.rename", params: ["workspace_id": .string(space.id), "label": .string("production")])
+                    await store.refresh()
+                }
                 if name.contains("search") { store.paneSearchRequest = (first.id, UUID()) }
                 try await Task.sleep(for: .milliseconds(800))
                 if name.contains("search"), let field = window.firstResponder as? NSTextView {

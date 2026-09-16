@@ -1,0 +1,11 @@
+[theme]
+name = "one-dark"
+auto_switch = true
+light_name = "one-light"
+dark_name = "nord"
+
+[theme.custom.light]
+accent = "#286b45"
+
+[ui.sidebar.spaces]
+rows = [["state_icon", { token = "workspace", rules = [{ contains = "prod", fg = "#a87a40", bold = true }] }]]

@@ -117,3 +117,129 @@ survive, and verifies restored split sizes, retained output, and subsequent inpu
 The regression reproduced terminal recreation before the fix.
 `bash scripts/build-app.sh`, the strict code-signature check, and the app plist
 check passed for the updated `dist/Herdr.app`.
+
+## Coloring acceptance — 2026-09-16
+
+The coloring work was checked with macOS 26.6.2 (25G83), Apple Swift 6.4
+(`swiftlang-6.4.0.34.1`), the process-local
+`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`, and installed
+Herdr 0.9.0. macOS 14 and Swift 6.0 remain the minimum documented requirements;
+this run does not claim execution on those older versions. No system toolchain
+selection or license settings were changed.
+
+All final commands below exited 0 after code changes settled. Every live check
+used disposable `/tmp` sockets; `HERDR_TEST_PASTE_AGENTS` was unset, and no paid
+agent sessions were started.
+
+| Command | Result |
+| --- | --- |
+| `swift build --product Herdr` | Passed |
+| `swift run HerdrCoreTests` | Passed; catalog, TOML, rule, protocol and metadata fixtures |
+| `bash scripts/test-appearance.sh` | Passed; migration, import, caching, settings, native and live appearance |
+| `bash scripts/test-hotkeys.sh` | Passed |
+| `bash scripts/test-performance.sh` | Passed; publication and repaint regressions |
+| `bash scripts/test-terminal-keyboard.sh` | Passed |
+| `bash scripts/test-devices.sh` | Passed; two disposable servers and forwarded stream |
+| `./scripts/test.sh` | Passed; full live shell, layout, keyboard, search, performance and tunnel suite |
+| `./scripts/build-app.sh` | Passed; release app packaged |
+| `git diff --check` | Passed |
+
+Output is not pristine: existing Command Line Tools linker warnings about
+missing `Developer/usr/lib` and `Developer/Library/Frameworks` search paths
+remain. Earlier dependency-build Swift/C++ warnings from pinned TOMLKit are
+also a known toolchain limitation, not a claim of clean Swift 6.0 compilation.
+An extra benchmark attempted during import development built successfully but
+timed out waiting for a foreground window before collecting metrics; it is not
+part of the passing required checks above.
+
+The final appearance fixture printed `THEME_PID=51546`, selected the actual
+terminal text through Ghostty's public select/copy bindings, and compared the
+exact selection after One Light, Nord dark and uherdr light changes. It then
+sent input through the existing native terminal, observed the same PID and
+`INPUT_CONTINUES_yes`, and read back the original output sentinel plus the first/last lines of the
+120-line history fixture from server scrollback. The native view, renderer,
+writable-controller object and connection generation stayed unchanged. The
+clipboard's original item data was restored after the test. Existing checks
+also preserve the Ghostty theme/config for UI-only edits and ANSI/RGB output.
+
+Hidden-tab publication counts match Task 3's measured baseline exactly:
+**0 across 3 metadata updates; 0 across 3 UI palette updates**. Reveal publishes
+one current snapshot and applies the pending native/terminal appearance before
+visibility. No threshold was raised and no eager hidden update was added.
+
+### Native visual inspection
+
+The catalog remains pinned to Herdr
+`18061191fdc019498610aee81f0df93f6c2ebd31`; see
+[theme provenance](theme-provenance.md). Inspected all 17 concrete upstream
+presets, the native uherdr default, and the imported symbolic terminal source
+in actual production WorkspaceView/DeviceSidebarView renders. Search showed
+two ANSI matches; tabs included selected and inactive states; panes included
+focused and unfocused headers/borders; the footer used production status badges
+with fixture values. The uherdr light/dark renders retain the prior native
+surfaces, green accent, status colors and terminal palettes before selecting
+another preset.
+
+Normal and explicit AppKit `accessibilityHighContrastAqua` /
+`accessibilityHighContrastDarkAqua` host appearances were rendered. This checks
+native high-contrast appearances without changing global preferences; it is
+not a live system-wide Increase Contrast toggle test. Explicit upstream RGB
+roles remain fixed in that appearance. Selected-tab underlines, focused pane
+borders, selected folder icons, textual statuses and accessibility selection
+labels remain alongside color.
+
+| Presets inspected | Observations |
+| --- | --- |
+| Catppuccin, Catppuccin Latte, Dracula | Legible primary text, distinct matches, tab/focus geometry and status labels; some secondary roles are softer. |
+| Gruvbox, Gruvbox Light | Legible warm text; selected tab and search remain apparent. Light mustard/green status roles are softer than primary text. |
+| Kanagawa, Kanagawa Lotus | Text/search and selection geometry remain apparent; dark red/green status roles are relatively muted. |
+| Nord, One Dark, One Light | Primary content and matches readable; inactive borders and secondary text are subtle. |
+| Rose Pine, Rose Pine Dawn | Primary text/search readable; dark Rose Pine's Done color is weak against the dark background. Dawn has subtle inactive borders. |
+| Solarized, Solarized Light | Lower contrast primary/secondary text and inactive chrome; Solarized Light text/panel is approximately 4.13:1. |
+| Tokyo Night, Tokyo Night Day | Text, search and active tab/focus remain apparent; Day uses blue text with softer secondary chrome. |
+| Vesper, uherdr, terminal | Primary text readable, geometry retained; muted secondary/reset roles depend on native system backgrounds. |
+
+These observations are not a blanket accessibility or WCAG conformance claim.
+Exact upstream values are preserved. Settings now warns about preview pairs
+below 4.5:1 and about fixed sidebar foregrounds (including dim opacity) against
+sidebar/active-row backgrounds. Warnings never change colors. System material
+backgrounds are estimates, so an advisory ratio does not certify every state.
+
+Production Settings was checked at its actual 480-point width, including
+scrolling through overrides/rules to the preview and fixed Done/Cancel footer.
+Native preset controls remain reachable under both sources, imported controls
+are disabled/read-only, and a visible Row gap label now explains its numeric
+field. [Middle](images/appearance/settings-middle-native-cache.png) and
+[bottom](images/appearance/settings-bottom-native-cache.png) renders preserve
+this evidence, including contrast diagnostics.
+
+Deliverable [light/dark theme and conditional sidebar examples](appearance.md#native-rendering-examples)
+and [default light](images/appearance/default-light-native-cache.png) /
+[default dark](images/appearance/default-dark-native-cache.png) renders are
+committed under `docs/images/appearance`. Representative high-contrast
+[Search/Solarized Light](images/appearance/solarized-light-increased-native-cache.png)
+and [Rose Pine](images/appearance/rose-pine-increased-native-cache.png) renders
+show the catalog limitations above.
+
+`/usr/sbin/screencapture -l` could not create a window image in this environment.
+All delivered PNGs are actual AppKit `cacheDisplay` renders, not desktop
+screenshots or synthetic mockups. The material sidebar is blank in the main
+window cache, so separate images render the production sidebar in a plain native
+host. The terminal's Metal content was present on this machine. Other platforms
+may omit it from view caches.
+
+### Compatibility and scope
+
+The committed `snapshot-0.9-live.json` is a real installed-server response.
+Newer optional metadata fixtures are derived from the pinned public schema;
+no newer live binary was available or built. Deterministic next-snapshot
+metadata removal/expiry, old-server missing fields, legacy title fallback and
+device-overlapping IDs are covered. Newer live-server TTL timing is untested.
+The [fixture provenance](../Tests/Fixtures/sidebar-snapshot-provenance.md)
+explicitly identifies the matching legacy/newer fixture names.
+
+No runtime/vendor edits, remote config writes, automatic file watcher,
+cross-machine preference sync, individual resource colors or new terminal
+palette controls were added. The [tested minimal TOML](appearance-example.toml)
+is exercised by the default appearance runner. Historical verification sections
+above describe earlier work and have been preserved.

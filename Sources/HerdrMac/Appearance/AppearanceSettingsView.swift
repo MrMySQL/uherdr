@@ -107,8 +107,16 @@ struct AppearanceSettingsView: View {
             }
             .frame(height: 210)
 
+            let warnings = NativePalette(palette: paletteForDisplayedSection).contrastWarnings(colorScheme: displayedColorScheme)
+            if !warnings.isEmpty {
+                Label("Low contrast in preview (below 4.5:1). Colors are kept as chosen.", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                Text(warnings.joined(separator: " • ")).font(.caption).textSelection(.enabled)
+            }
+
             Divider()
             SidebarRulesEditor(store: store)
+                .environment(\.resolvedAppearance, store.resolvedSnapshot)
 
             Text("Theme changes preview immediately. Terminal programs keep their existing ANSI colors.")
                 .font(.caption)
@@ -174,6 +182,15 @@ struct AppearanceSettingsView: View {
                 )
             }
         )
+    }
+
+    private var displayedColorScheme: ColorScheme {
+        switch overrideScope {
+        case .light: .light
+        case .dark: .dark
+        case .common:
+            store.mode == .system ? colorScheme : (store.mode == .dark ? .dark : .light)
+        }
     }
 
     private var paletteForDisplayedSection: ThemePalette {

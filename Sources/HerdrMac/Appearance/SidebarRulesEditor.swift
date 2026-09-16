@@ -1,8 +1,10 @@
+import AppKit
 import HerdrCore
 import SwiftUI
 
 struct SidebarRulesEditor: View {
     @ObservedObject var store: AppearanceStore
+    @Environment(\.colorScheme) private var colorScheme
     @State private var draft = SidebarConfiguration()
     @State private var target = "spaces"
     @State private var agent = ""
@@ -40,9 +42,13 @@ struct SidebarRulesEditor: View {
                     Button("Add row") { var next = rows ?? []; next.append([SidebarOccurrence(token: target == "spaces" ? "workspace" : "agent")]); setRows(next) }
                         .disabled((rows?.count ?? 0) >= 16)
                 }
-                TextField("Row gap (0–65535)", value: Binding(get: { Int(section.rowGap) }, set: { value in
-                    guard let value = UInt16(exactly: value) else { return }; var next = section; next.rowGap = value; setSection(next)
-                }), format: .number)
+                HStack {
+                    Text("Row gap")
+                    TextField("Row gap (0–65535)", value: Binding(get: { Int(section.rowGap) }, set: { value in
+                        guard let value = UInt16(exactly: value) else { return }; var next = section; next.rowGap = value; setSection(next)
+                    }), format: .number)
+                        .accessibilityLabel("Row gap (0–65535)")
+                }
                 ForEach((rows ?? []).indices, id: \.self) { index in rowEditor(index) }
                 Button("Save native sidebar") { perform { try store.setNativeSidebar(draft); load() } }
             }.disabled(readOnly)
@@ -53,12 +59,30 @@ struct SidebarRulesEditor: View {
             SidebarRowView(rows: preview, rowGap: section.rowGap)
                 .padding(8).frame(maxWidth: .infinity, alignment: .leading)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            if !previewContrastWarnings.isEmpty {
+                Label("Low contrast sidebar preview (below 4.5:1): " + previewContrastWarnings.joined(separator: ", ") + ". Colors are kept as chosen.", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+            }
             Text("Preview applies the sample to every text token before truncation. Save applies valid edits to all devices.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .onAppear(perform: load)
         .onChange(of: store.themeSource) { _, _ in load() }
         .onChange(of: store.sidebarConfiguration) { _, _ in load() }
+    }
+
+    private var previewContrastWarnings: [String] {
+        let palette = NativePalette(snapshot: store.resolvedSnapshot, colorScheme: colorScheme)
+        let scheme: ColorScheme = store.mode == .system ? colorScheme : (store.mode == .dark ? .dark : .light)
+        return Array(Set(preview.flatMap { $0 }.compactMap { run -> String? in
+            guard case .rgb(let r, let g, let b) = run.style.foreground else { return nil }
+            let foreground = NSColor(srgbRed: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255,
+                                     alpha: run.style.dim == true ? 0.55 : 1)
+            let low = ["sidebar_bg", "active_row"].contains {
+                NativePalette.contrastRatio(foreground: foreground, background: palette.nsColor($0), colorScheme: scheme) < 4.5
+            }
+            return low ? run.token : nil
+        })).sorted()
     }
 
     private func rowEditor(_ index: Int) -> some View {

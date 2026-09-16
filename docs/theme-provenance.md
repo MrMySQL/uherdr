@@ -76,3 +76,22 @@ when the base is also reset. The `uherdr` preset similarly preserves current
 dynamic system surfaces and text through reset values while recording the
 current literal accent (`0.34`, `0.73`, `0.58`, converted to 8-bit sRGB as
 `87, 186, 148`) and current status color literals.
+
+## Import and acceptance boundary
+
+Sidebar matching and optional metadata models use the same pinned upstream
+revision. The package version at that revision is not evidence that every
+0.9.0 binary supplies optional metadata. The installed 0.9.0 server was tested
+live; newer metadata was exercised with schema-derived fixtures, including
+next-snapshot removal. No newer live runtime is claimed.
+
+TOMLKit is pinned exactly to 0.5.0. Its MIT license, transitive toml++ MIT
+license, and upstream Herdr Apache-2.0 notice are included by
+`scripts/build-app.sh`. No vendor terminal code was changed for coloring.
+
+Native adaptations and preview contrast warnings are described in
+[Appearance](appearance.md). Exact upstream palette values are retained even
+where low-contrast text/status colors merit a warning; the catalog is not a
+claim of WCAG conformance. In particular, Solarized Light's main text/panel
+pair is approximately 4.13:1. See the dated
+[acceptance record](verification.md#coloring-acceptance--2026-09-16).

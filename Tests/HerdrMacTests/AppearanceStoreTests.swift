@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import Combine
 import Darwin
 import Foundation
@@ -8,6 +10,8 @@ import HerdrCore
 struct AppearanceStoreTests {
     @MainActor
     static func main() async throws {
+        try testDocumentedConfig()
+        try testContrastPreview()
         try testSidebarPaneTitleFallback()
         try testSidebarCopyAndDeviceCache()
         testLegacyMigrationAndSecondInitialization()
@@ -20,6 +24,37 @@ struct AppearanceStoreTests {
         try await testSuspendedImportCannotOverrideNativeSelection()
         try testExplicitNamesAndTerminalSource()
         print("PASS: appearance migration, import atomicity, bounded regular-file loading, unchanged TOML, offline persistence, source precedence, terminal palette, shared publication, and device isolation")
+    }
+
+    @MainActor
+    private static func testDocumentedConfig() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("docs/appearance-example.toml")
+        let imported = try HerdrAppearanceConfig.parse(String(contentsOf: url, encoding: .utf8))
+        precondition(imported.autoSwitch && imported.lightName == "one-light" && imported.darkName == "nord")
+        let matching = imported.sidebar!.spaces!.resolve(values: ["workspace": "production"], status: .idle)
+        let other = imported.sidebar!.spaces!.resolve(values: ["workspace": "development"], status: .idle)
+        precondition(matching[0][1].style.foreground == .rgb(168, 122, 64) && matching[0][1].style.bold == true)
+        precondition(other[0][1].style.foreground == nil && other[0][1].style.bold == nil)
+        print("PASS: documented TOML imports, auto-switches named presets, and styles only matching workspace text")
+    }
+
+    @MainActor
+    private static func testContrastPreview() throws {
+        let suite = "uherdr.contrast.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AppearanceStore(defaults: defaults)
+        store.setNativeOverride(.rgb(128, 128, 128), for: "text", scope: .common)
+        store.setNativeOverride(.rgb(128, 128, 128), for: "panel_bg", scope: .common)
+        let original = store.resolvedSnapshot
+        let palette = NativePalette(palette: original.light)
+        precondition(palette.contrastWarnings(colorScheme: .light).contains { $0.hasPrefix("text / panel_bg:") }, "Low contrast preview must warn for custom foreground/background pairs")
+        precondition(store.resolvedSnapshot == original, "Contrast warnings must never rewrite colors")
+        precondition(abs(NativePalette.contrastRatio(foreground: .black, background: .white, colorScheme: .light) - 21) < 0.01)
+        precondition(abs(NativePalette.contrastRatio(foreground: .gray, background: .gray, colorScheme: .dark) - 1) < 0.01)
+        let readable = NativePalette(palette: ThemePalette(colors: ["text": .rgb(0, 0, 0), "panel_bg": .rgb(255, 255, 255)]))
+        precondition(!readable.contrastWarnings(colorScheme: .light).contains { $0.hasPrefix("text / panel_bg:") })
+        print("PASS: low-contrast preview warns without modifying custom colors; contrast endpoints and readable pair verified")
     }
 
     @MainActor
