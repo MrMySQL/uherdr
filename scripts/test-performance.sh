@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 swift build --product Herdr
 PERFORMANCE_BUILD="$(swift build --show-bin-path)"
 swiftc -parse-as-library -I "$PERFORMANCE_BUILD/Modules" \
-    Sources/HerdrMac/SessionStore.swift Tests/HerdrMacTests/SessionPublicationTests.swift \
+    Sources/HerdrMac/Appearance/AppearanceStore.swift Sources/HerdrMac/SessionStore.swift Tests/HerdrMacTests/SessionPublicationTests.swift \
     "$PERFORMANCE_BUILD"/HerdrCore.build/*.swift.o -o "$PERFORMANCE_BUILD/SessionPublicationTests"
 "$PERFORMANCE_BUILD/SessionPublicationTests"
 PERFORMANCE_OBJECTS=()

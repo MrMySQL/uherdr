@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import HerdrCore
 
 struct PaneDragPayload: Codable, Equatable, Sendable {
@@ -56,8 +57,19 @@ final class SessionStore: ObservableObject {
     @Published private(set) var effectiveSocketPath: String
     @Published private(set) var remoteHome: String?
     @Published private(set) var suspended = false
-    @Published var appearance: String { didSet { defaults.set(appearance, forKey: "appearance") } }
-    @Published var fontSize: Double { didSet { defaults.set(fontSize, forKey: "fontSize") } }
+    let appearanceStore: AppearanceStore
+    private(set) var appearanceRevision: Int
+    var appearance: String {
+        get { appearanceStore.mode.rawValue }
+        set {
+            guard let mode = AppearanceMode(rawValue: newValue) else { return }
+            appearanceStore.setMode(mode)
+        }
+    }
+    var fontSize: Double {
+        get { appearanceStore.fontSize }
+        set { appearanceStore.setFontSize(newValue) }
+    }
     var socketPath: String { profile.socketPath }
     var executable: String { profile.executable }
     var isRemote: Bool { profile.kind == .ssh }
@@ -75,19 +87,26 @@ final class SessionStore: ObservableObject {
     private var paneMoveID: UUID?
     private var layoutRevision = 0
     private var pendingLayoutRefresh: Set<String> = []
+    private var appearanceSubscription: AnyCancellable?
 
-    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil, fileTransfer: RemoteFileTransfer? = nil) {
+    init(profile: DeviceProfile, defaults: UserDefaults = .standard, appearanceStore: AppearanceStore? = nil, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil, fileTransfer: RemoteFileTransfer? = nil) {
         self.profile = profile
         self.defaults = defaults
+        let appearance = appearanceStore ?? AppearanceStore(defaults: defaults)
+        self.appearanceStore = appearance
+        appearanceRevision = appearance.revision
         self.tunnel = tunnel ?? SSHTunnel()
         self.fileTransfer = fileTransfer ?? RemoteFileTransfer()
         let socket = profile.kind == .local ? (profile.socketPath as NSString).expandingTildeInPath : ""
         effectiveSocketPath = socket
-        appearance = defaults.string(forKey: "appearance") ?? "system"
-        fontSize = defaults.object(forKey: "fontSize") as? Double ?? 13
         self.client = client ?? HerdrClient(socketPath: socket)
         selectedSpace = defaults.string(forKey: "selectedSpace:\(profile.id.uuidString)")
         selectedTab = defaults.string(forKey: "selectedTab:\(profile.id.uuidString)")
+        appearanceSubscription = appearance.objectWillChange.sink { [weak self, weak appearance] in
+            guard let self, let appearance else { return }
+            appearanceRevision = appearance.revision
+            objectWillChange.send()
+        }
     }
 
     static func findExecutable() -> String {

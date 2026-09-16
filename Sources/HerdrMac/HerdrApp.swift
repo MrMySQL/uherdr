@@ -4,8 +4,15 @@ import AppKit
 @main
 struct HerdrApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var devices = DeviceStore()
+    @StateObject private var appearance: AppearanceStore
+    @StateObject private var devices: DeviceStore
     private var store: SessionStore { devices.activeSession }
+
+    init() {
+        let appearance = AppearanceStore()
+        _appearance = StateObject(wrappedValue: appearance)
+        _devices = StateObject(wrappedValue: DeviceStore(appearance: appearance))
+    }
     var body: some Scene {
         Window("Herdr", id: "main") {
             WorkspaceView(store: store, devices: devices)

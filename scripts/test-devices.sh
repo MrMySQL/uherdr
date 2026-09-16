@@ -30,5 +30,5 @@ done
 test -S "$SOCKET_A"
 test -S "$SOCKET_B"
 swift build --target HerdrCore
-swiftc -parse-as-library -I .build/debug/Modules Sources/HerdrMac/SessionStore.swift Sources/HerdrMac/DeviceStore.swift Tests/HerdrMacTests/DeviceStoreTests.swift .build/debug/HerdrCore.build/*.o -o .build/DeviceStoreTests
+swiftc -parse-as-library -I .build/debug/Modules Sources/HerdrMac/Appearance/AppearanceStore.swift Sources/HerdrMac/SessionStore.swift Sources/HerdrMac/DeviceStore.swift Tests/HerdrMacTests/DeviceStoreTests.swift .build/debug/HerdrCore.build/*.o -o .build/DeviceStoreTests
 .build/DeviceStoreTests "$SOCKET_A" "$SOCKET_B" "$HERDR_TEST_BIN"

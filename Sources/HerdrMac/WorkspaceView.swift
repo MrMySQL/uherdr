@@ -6,6 +6,7 @@ let herdrAccentColor = Color(red: 0.34, green: 0.73, blue: 0.58)
 struct WorkspaceView: View {
     @ObservedObject var store: SessionStore
     @ObservedObject var devices: DeviceStore
+    @Environment(\.colorScheme) private var systemColorScheme
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
     var body: some View {
         NavigationSplitView(columnVisibility: $sidebarVisibility) {
@@ -63,8 +64,9 @@ struct WorkspaceView: View {
                 .help("Show or hide sidebar")
             }
         }
-        .tint(herdrAccentColor)
-        .accentColor(herdrAccentColor)
+        .tint(NativePalette(snapshot: store.appearanceStore.resolvedSnapshot, colorScheme: systemColorScheme).color("accent"))
+        .accentColor(NativePalette(snapshot: store.appearanceStore.resolvedSnapshot, colorScheme: systemColorScheme).color("accent"))
+        .environment(\.resolvedAppearance, store.appearanceStore.resolvedSnapshot)
         .frame(minWidth: 840, minHeight: 520)
         .preferredColorScheme(store.colorScheme)
         .sheet(item: $store.sheet) { sheet in EditorSheet(sheet: sheet, store: store) }

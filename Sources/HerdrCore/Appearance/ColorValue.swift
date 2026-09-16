@@ -1,12 +1,12 @@
 import Foundation
 
-public enum AppearanceMode: String, Codable, Sendable {
+public enum AppearanceMode: String, Codable, Hashable, Sendable {
     case system
     case light
     case dark
 }
 
-public enum ThemeVariant: String, Codable, Sendable {
+public enum ThemeVariant: String, Codable, Hashable, Sendable {
     case light
     case dark
 }

@@ -9,14 +9,20 @@ final class DeviceStore: ObservableObject {
     @Published var editor: DeviceEditorTarget?
     @Published var pendingRemoval: UUID?
     @Published var sidebarMode = "spaces"
+    let appearance: AppearanceStore
     private let defaults: UserDefaults
     private var subscriptions: [AnyCancellable] = []
+    private var observedAppearanceRevisions: [ObjectIdentifier: Int] = [:]
+    private var lastAppearanceRevision: Int
 
-    init(defaults: UserDefaults = .standard, profiles: [DeviceProfile]? = nil) {
+    init(defaults: UserDefaults = .standard, profiles: [DeviceProfile]? = nil, appearance: AppearanceStore? = nil) {
         self.defaults = defaults
+        let sharedAppearance = appearance ?? AppearanceStore(defaults: defaults)
+        self.appearance = sharedAppearance
+        lastAppearanceRevision = sharedAppearance.revision
         let profiles = profiles ?? DeviceProfile.load(from: defaults, environment: ProcessInfo.processInfo.environment, home: NSHomeDirectory(), executable: SessionStore.findExecutable())
         precondition(!profiles.isEmpty)
-        sessions = profiles.map { SessionStore(profile: $0, defaults: defaults) }
+        sessions = profiles.map { SessionStore(profile: $0, defaults: defaults, appearanceStore: sharedAppearance) }
         let savedID = defaults.string(forKey: "selectedDeviceID").flatMap(UUID.init(uuidString:))
         selectedDeviceID = profiles.first(where: { $0.id == savedID })?.id ?? profiles[0].id
         observeSessions()
@@ -34,9 +40,6 @@ final class DeviceStore: ObservableObject {
 
     func select(_ session: SessionStore, workspace: Workspace? = nil) {
         guard sessions.contains(where: { $0 === session }) else { return }
-        // Keep appearance shared while each device retains its own navigation state.
-        session.appearance = activeSession.appearance
-        session.fontSize = activeSession.fontSize
         selectedDeviceID = session.profile.id
         defaults.set(selectedDeviceID.uuidString, forKey: "selectedDeviceID")
         if let workspace { session.selectSpace(workspace) }
@@ -47,7 +50,7 @@ final class DeviceStore: ObservableObject {
         if let existing = sessions.first(where: { $0.profile.id == profile.id }) {
             existing.updateProfile(profile)
         } else {
-            let session = SessionStore(profile: profile, defaults: defaults)
+            let session = SessionStore(profile: profile, defaults: defaults, appearanceStore: appearance)
             sessions.append(session)
             observeSessions()
             session.start()
@@ -65,8 +68,21 @@ final class DeviceStore: ObservableObject {
     }
 
     private func observeSessions() {
+        observedAppearanceRevisions = Dictionary(uniqueKeysWithValues: sessions.map {
+            (ObjectIdentifier($0), $0.appearanceRevision)
+        })
         subscriptions = sessions.map { session in
-            session.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+            session.objectWillChange.sink { [weak self, weak session] _ in
+                guard let self, let session else { return }
+                let id = ObjectIdentifier(session)
+                let revision = session.appearanceRevision
+                if observedAppearanceRevisions[id] != revision {
+                    observedAppearanceRevisions[id] = revision
+                    guard lastAppearanceRevision != revision else { return }
+                    lastAppearanceRevision = revision
+                }
+                objectWillChange.send()
+            }
         }
     }
 
