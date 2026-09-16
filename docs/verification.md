@@ -328,3 +328,12 @@ handling, retained-tab performance, terminal streaming, and multi-device/SSH
 routing. Tests used disposable local sessions with `HERDR_TEST_PASTE_AGENTS`
 unset. `git diff --check` passed, and independent code review found no remaining
 source issues.
+
+The next automated review found two follow-ups. Native workspace text now
+announces every status, including idle/unknown, while the separate status dot is
+hidden from accessibility to avoid duplicate announcements; tab/pane counts and
+shortcut children remain available. The Settings wait now checks the rendered
+Native/Herdr-config segmented control's selected segment in addition to enabled
+preset controls, preventing the previous source's UI from satisfying the wait.
+The complete appearance suite passed again after both changes; independent
+review and whitespace validation passed as well.

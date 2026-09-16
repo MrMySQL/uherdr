@@ -116,7 +116,11 @@ import HerdrCore
                 host.layoutSubtreeIfNeeded()
                 let pickers = descendants(host).compactMap { $0 as? NSPopUpButton }
                     .filter { $0.itemTitles.contains("Nord") }
-                return pickers.count == 3 && pickers.allSatisfy(\.isEnabled)
+                let sourcePicker = descendants(host).compactMap { $0 as? NSSegmentedControl }.first {
+                    $0.segmentCount == 2 && $0.label(forSegment: 0) == "Native" && $0.label(forSegment: 1) == "Herdr config"
+                }
+                return sourcePicker?.selectedSegment == (source == .native ? 0 : 1)
+                    && pickers.count == 3 && pickers.allSatisfy(\.isEnabled)
             }
             if let directory = ProcessInfo.processInfo.environment["HERDR_SETTINGS_CAPTURE_DIR"],
                let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {

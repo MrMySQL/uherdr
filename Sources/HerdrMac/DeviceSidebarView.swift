@@ -132,8 +132,11 @@ struct DeviceSidebarView: View {
                         HStack(spacing: 6) {
                             Image(systemName: selected ? "folder.fill" : "folder").foregroundStyle(selected ? palette.color("accent") : palette.color("secondary_text"))
                             Text(space.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                .accessibilityLabel("\(space.label), \(space.agentStatus.label)")
                             Spacer(minLength: 0)
-                            if space.agentStatus == .working || space.agentStatus == .blocked || space.agentStatus == .done { StatusDot(status: space.agentStatus) }
+                            if space.agentStatus == .working || space.agentStatus == .blocked || space.agentStatus == .done {
+                                StatusDot(status: space.agentStatus).accessibilityHidden(true)
+                            }
                             if let shortcut {
                                 Text("⌘\(shortcut + 1)").font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(palette.color("accent")).opacity(commandKey.isHeld ? 1 : 0)
