@@ -1,5 +1,6 @@
 import Foundation
 import HerdrCore
+@testable import HerdrMac
 
 @main struct AgentWorktreeTests {
     @MainActor static func main() async throws {

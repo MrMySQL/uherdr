@@ -377,10 +377,7 @@ struct TerminalSurface: NSViewRepresentable {
         weak var view: HerdrTerminalView?
         let engine = GhosttyTerminal.TerminalController(
             configuration: HerdrTerminalView.baseConfiguration,
-            theme: TerminalTheme(
-                light: TerminalConfiguration.alabaster.background("#fafaf7").foreground("#212926"),
-                dark: TerminalConfiguration().background("#0e1113").foreground("#dbe3de")
-            )
+            theme: EmbeddedTerminalPalette.theme
         )
         lazy var bridge: GhosttyStreamBridge = GhosttyStreamBridge(
             input: { [weak self] data in
@@ -419,6 +416,8 @@ struct TerminalSurface: NSViewRepresentable {
             self.paneID = paneID
         }
 
+        // UI palette edits stay in the native hosting tree. Only the existing
+        // font and light/dark settings may reconfigure this retained renderer.
         func updateAppearance(fontSize: Double, dark: Bool) {
             if self.fontSize != fontSize {
                 engine.setTerminalConfiguration(TerminalConfiguration().fontSize(Float(fontSize)))

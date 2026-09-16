@@ -1,12 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-TEST_BUILD="$PWD/.build/pane-drag-tests"
-mkdir -p "$TEST_BUILD"
-swiftc -emit-library -emit-module -module-name HerdrCore Sources/HerdrCore/*.swift \
-    -emit-module-path "$TEST_BUILD/HerdrCore.swiftmodule" -o "$TEST_BUILD/libHerdrCore.dylib"
-swiftc -parse-as-library -I "$TEST_BUILD" -L "$TEST_BUILD" -lHerdrCore \
-    -Xlinker -rpath -Xlinker "$TEST_BUILD" \
-    Sources/HerdrMac/SessionStore.swift Tests/HerdrMacTests/PaneDragTests.swift \
-    -o "$TEST_BUILD/PaneDragTests"
-"$TEST_BUILD/PaneDragTests" "$@"
+# Test runners import app internals and replace its entry point. Release builds
+# therefore need testable modules and separate objects, like benchmark-panes.sh.
+swift build -c "${APP_TEST_CONFIGURATION:-debug}" --product Herdr \
+    -Xswiftc -enable-testing -Xswiftc -no-whole-module-optimization
+source scripts/app-test-link.sh
+app_test_compile Tests/HerdrMacTests/PaneDragTests.swift -o "$APP_TEST_BUILD/PaneDragTests"
+"$APP_TEST_BUILD/PaneDragTests" "$@"

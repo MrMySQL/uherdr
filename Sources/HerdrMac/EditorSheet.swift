@@ -32,7 +32,7 @@ struct EditorSheet: View {
         VStack(alignment: .leading, spacing: 22) {
             Text(title).font(.system(size: 21, weight: .semibold))
             switch sheet {
-            case .settings: settingsFields
+            case .settings: AppearanceSettingsView(store: store.appearanceStore)
             case .agent: agentFields
             default:
                 VStack(alignment: .leading, spacing: 7) {
@@ -81,20 +81,6 @@ struct EditorSheet: View {
             }
             TextField("Agent name", text: $label).textFieldStyle(.roundedBorder).focused($fieldFocused)
             Text("Use a unique lowercase name. This pane’s folder must be in a Git repository. Install the selected agent CLI first.").font(.caption).foregroundStyle(.secondary)
-        }
-    }
-    private var settingsFields: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("Manage connections using the menu beside each device in the sidebar.").font(.callout).foregroundStyle(.secondary)
-            Picker("Appearance", selection: $store.appearance) {
-                Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark")
-            }.pickerStyle(.segmented)
-            HStack {
-                Text("Terminal text").font(.callout)
-                Slider(value: $store.fontSize, in: 10...22, step: 1)
-                Text("\(Int(store.fontSize)) pt").font(.system(size: 11, design: .monospaced)).frame(width: 38)
-            }
-            Text("Quitting detaches the client. Your herdr sessions continue running.").font(.caption).foregroundStyle(.secondary)
         }
     }
     private func chooseFolder() {

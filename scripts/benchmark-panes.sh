@@ -12,19 +12,10 @@ cleanup() {
 trap cleanup EXIT
 # Separate objects let the harness replace the app's @main entry point.
 swift build -c release --product Herdr -Xswiftc -enable-testing -Xswiftc -no-whole-module-optimization
-PERF_BUILD="$(swift build -c release --show-bin-path)"
-PERF_OBJECTS=()
-while IFS= read -r object; do
-    case "$object" in
-        */HerdrApp.swift.o) ;;
-        *) PERF_OBJECTS+=("$object") ;;
-    esac
-done < "$PERF_BUILD/Herdr.product/Objects.LinkFileList"
-swiftc -O -parse-as-library -I "$PERF_BUILD/Modules" \
-    -I .build/artifacts/ghosttyterminal/libghostty/GhosttyKit.xcframework/macos-arm64_x86_64/Headers \
-    -L "$PERF_BUILD" -lghostty -lc++ -framework Carbon \
-    Tests/HerdrMacTests/PanePerformanceTests.swift "${PERF_OBJECTS[@]}" \
-    -o "$PERF_BUILD/PanePerformanceTests"
+APP_TEST_CONFIGURATION=release
+source scripts/app-test-link.sh
+PERF_BUILD="$APP_TEST_BUILD"
+app_test_compile -O Tests/HerdrMacTests/PanePerformanceTests.swift -o "$PERF_BUILD/PanePerformanceTests"
 mkdir -p "$PERF_ROOT/config" "$PERF_ROOT/state"
 env -u HERDR_SOCKET_PATH -u HERDR_SESSION XDG_CONFIG_HOME="$PERF_ROOT/config" XDG_STATE_HOME="$PERF_ROOT/state" \
     "$PERF_HERDR" --session native-client-test server > "$PERF_ROOT/server.log" 2>&1 &

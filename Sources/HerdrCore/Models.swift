@@ -11,10 +11,22 @@ public struct Workspace: Decodable, Identifiable, Equatable, Sendable {
     public let paneCount: Int
     public let tabCount: Int
     public let agentStatus: AgentStatus
+    public let tokens: [String: String]
     public var id: String { workspaceID }
     enum CodingKeys: String, CodingKey {
+        case tokens
         case workspaceID = "workspace_id", label, activeTabID = "active_tab_id"
         case paneCount = "pane_count", tabCount = "tab_count", agentStatus = "agent_status"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        workspaceID = try c.decode(String.self, forKey: .workspaceID)
+        label = try c.decode(String.self, forKey: .label)
+        activeTabID = try c.decode(String.self, forKey: .activeTabID)
+        paneCount = try c.decode(Int.self, forKey: .paneCount)
+        tabCount = try c.decode(Int.self, forKey: .tabCount)
+        agentStatus = try c.decode(AgentStatus.self, forKey: .agentStatus)
+        tokens = try c.decodeIfPresent([String: String].self, forKey: .tokens) ?? [:]
     }
 }
 
@@ -43,12 +55,34 @@ public struct Pane: Decodable, Identifiable, Equatable, Sendable {
     public let agent: String?
     public let displayAgent: String?
     public let agentStatus: AgentStatus
+    public let tokens: [String: String]
+    public let terminalTitle: String?
+    public let terminalTitleStripped: String?
     public var id: String { paneID }
     public var displayTitle: String { label ?? title ?? displayAgent ?? agent ?? "Terminal" }
     public var directory: String { foregroundCwd ?? cwd ?? "" }
     enum CodingKeys: String, CodingKey {
+        case tokens
+        case terminalTitle = "terminal_title", terminalTitleStripped = "terminal_title_stripped"
         case paneID = "pane_id", terminalID = "terminal_id", workspaceID = "workspace_id", tabID = "tab_id"
         case label, title, cwd, foregroundCwd = "foreground_cwd", agent, displayAgent = "display_agent", agentStatus = "agent_status"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        paneID = try c.decode(String.self, forKey: .paneID)
+        terminalID = try c.decode(String.self, forKey: .terminalID)
+        workspaceID = try c.decode(String.self, forKey: .workspaceID)
+        tabID = try c.decode(String.self, forKey: .tabID)
+        label = try c.decodeIfPresent(String.self, forKey: .label)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
+        foregroundCwd = try c.decodeIfPresent(String.self, forKey: .foregroundCwd)
+        agent = try c.decodeIfPresent(String.self, forKey: .agent)
+        displayAgent = try c.decodeIfPresent(String.self, forKey: .displayAgent)
+        agentStatus = try c.decode(AgentStatus.self, forKey: .agentStatus)
+        tokens = try c.decodeIfPresent([String: String].self, forKey: .tokens) ?? [:]
+        terminalTitle = try c.decodeIfPresent(String.self, forKey: .terminalTitle)
+        terminalTitleStripped = try c.decodeIfPresent(String.self, forKey: .terminalTitleStripped)
     }
 }
 
@@ -60,11 +94,32 @@ public struct Agent: Decodable, Identifiable, Equatable, Sendable {
     public let agent: String?
     public let displayAgent: String?
     public let agentStatus: AgentStatus
+    public let tokens: [String: String]
+    public let terminalTitle: String?
+    public let terminalTitleStripped: String?
+    public let title: String?
     public var id: String { paneID }
     public var displayName: String { name ?? displayAgent ?? agent ?? "Agent" }
     enum CodingKeys: String, CodingKey {
+        case tokens
+        case terminalTitle = "terminal_title", terminalTitleStripped = "terminal_title_stripped"
+        case title
         case paneID = "pane_id", workspaceID = "workspace_id", tabID = "tab_id", name, agent
         case displayAgent = "display_agent", agentStatus = "agent_status"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        paneID = try c.decode(String.self, forKey: .paneID)
+        workspaceID = try c.decode(String.self, forKey: .workspaceID)
+        tabID = try c.decode(String.self, forKey: .tabID)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        agent = try c.decodeIfPresent(String.self, forKey: .agent)
+        displayAgent = try c.decodeIfPresent(String.self, forKey: .displayAgent)
+        agentStatus = try c.decode(AgentStatus.self, forKey: .agentStatus)
+        tokens = try c.decodeIfPresent([String: String].self, forKey: .tokens) ?? [:]
+        terminalTitle = try c.decodeIfPresent(String.self, forKey: .terminalTitle)
+        terminalTitleStripped = try c.decodeIfPresent(String.self, forKey: .terminalTitleStripped)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
     }
 }
 

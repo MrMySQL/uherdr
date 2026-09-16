@@ -1,0 +1,1 @@
+"/tmp/Legacy Build/AppHotkeys.o" /tmp/Legacy\ Build/HerdrApp.o '/tmp/Legacy Build/WorkspaceView.o'

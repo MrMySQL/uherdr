@@ -1,5 +1,6 @@
 import Foundation
 import HerdrCore
+@testable import HerdrMac
 
 @main struct DeviceStoreTests {
     @MainActor static func main() async throws {

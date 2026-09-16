@@ -32,6 +32,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 cp Vendor/GhosttyTerminal/LICENSE "$APP/Contents/Resources/GhosttyTerminal-LICENSE"
 cp .build/checkouts/MSDisplayLink/LICENSE "$APP/Contents/Resources/MSDisplayLink-LICENSE"
+cp docs/licenses/Herdr-LICENSE docs/licenses/TOMLKit-LICENSE docs/licenses/tomlplusplus-LICENSE "$APP/Contents/Resources/"
 cp docs/licenses/Ghostty-LICENSE "$APP/Contents/Resources/Ghostty-LICENSE"
 swift scripts/make-icon.swift .build/Herdr.iconset
 iconutil -c icns .build/Herdr.iconset -o "$APP/Contents/Resources/Herdr.icns"

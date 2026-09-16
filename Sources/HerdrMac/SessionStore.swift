@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import HerdrCore
 
 struct PaneDragPayload: Codable, Equatable, Sendable {
@@ -34,10 +35,10 @@ enum PaneDockEdge: CaseIterable {
 
 @MainActor
 final class SessionStore: ObservableObject {
-    @Published var workspaces: [Workspace] = []
-    @Published var tabs: [HerdrCore.Tab] = []
-    @Published var panes: [Pane] = []
-    @Published var agents: [Agent] = []
+    @Published var workspaces: [Workspace] = [] { didSet { refreshSidebarRows() } }
+    @Published var tabs: [HerdrCore.Tab] = [] { didSet { refreshSidebarRows() } }
+    @Published var panes: [Pane] = [] { didSet { refreshSidebarRows() } }
+    @Published var agents: [Agent] = [] { didSet { refreshSidebarRows() } }
     @Published var layouts: [String: TabLayout] = [:]
     @Published var selectedSpace: String?
     @Published var selectedTab: String?
@@ -57,8 +58,19 @@ final class SessionStore: ObservableObject {
     @Published private(set) var effectiveSocketPath: String
     @Published private(set) var remoteHome: String?
     @Published private(set) var suspended = false
-    @Published var appearance: String { didSet { defaults.set(appearance, forKey: "appearance") } }
-    @Published var fontSize: Double { didSet { defaults.set(fontSize, forKey: "fontSize") } }
+    let appearanceStore: AppearanceStore
+    private(set) var appearanceRevision: Int
+    var appearance: String {
+        get { appearanceStore.mode.rawValue }
+        set {
+            guard let mode = AppearanceMode(rawValue: newValue) else { return }
+            appearanceStore.setMode(mode)
+        }
+    }
+    var fontSize: Double {
+        get { appearanceStore.fontSize }
+        set { appearanceStore.setFontSize(newValue) }
+    }
     var socketPath: String { profile.socketPath }
     var executable: String { profile.executable }
     var isRemote: Bool { profile.kind == .ssh }
@@ -76,19 +88,78 @@ final class SessionStore: ObservableObject {
     private var paneMoveID: UUID?
     private var layoutRevision = 0
     private var pendingLayoutRefresh: Set<String> = []
+    private var sidebarSubscription: AnyCancellable?
+    private(set) var spaceSidebarRows: [String: [[SidebarTokenRun]]] = [:]
+    private(set) var agentSidebarRows: [String: [[SidebarTokenRun]]] = [:]
+    private(set) var sidebarResolutionCount = 0
+    private struct SidebarCacheEntry {
+        let values: [String: String]
+        let status: AgentStatus
+        let layout: [[SidebarOccurrence]]
+        let rows: [[SidebarTokenRun]]
+    }
+    private var sidebarCache: [String: SidebarCacheEntry] = [:]
+    private var appearanceSubscription: AnyCancellable?
 
-    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil, fileTransfer: RemoteFileTransfer? = nil) {
+    init(profile: DeviceProfile, defaults: UserDefaults = .standard, appearanceStore: AppearanceStore? = nil, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil, fileTransfer: RemoteFileTransfer? = nil) {
         self.profile = profile
         self.defaults = defaults
+        let appearance = appearanceStore ?? AppearanceStore(defaults: defaults)
+        self.appearanceStore = appearance
+        appearanceRevision = appearance.revision
         self.tunnel = tunnel ?? SSHTunnel()
         self.fileTransfer = fileTransfer ?? RemoteFileTransfer()
         let socket = profile.kind == .local ? (profile.socketPath as NSString).expandingTildeInPath : ""
         effectiveSocketPath = socket
-        appearance = defaults.string(forKey: "appearance") ?? "system"
-        fontSize = defaults.object(forKey: "fontSize") as? Double ?? 13
         self.client = client ?? HerdrClient(socketPath: socket)
         selectedSpace = defaults.string(forKey: "selectedSpace:\(profile.id.uuidString)")
         selectedTab = defaults.string(forKey: "selectedTab:\(profile.id.uuidString)")
+        sidebarSubscription = appearance.sidebarChanges.sink { [weak self] in
+            self?.refreshSidebarRows()
+            self?.objectWillChange.send()
+        }
+        appearanceSubscription = appearance.objectWillChange.sink { [weak self, weak appearance] in
+            guard let self, let appearance else { return }
+            appearanceRevision = appearance.revision
+            objectWillChange.send()
+        }
+    }
+
+    /// Runs on snapshot/settings updates, never in a SwiftUI body or terminal frame path.
+    /// Each session owns its cache, so IDs and labels may overlap across devices.
+    private func refreshSidebarRows() {
+        let configuration = appearanceStore.sidebarConfiguration
+        var live: Set<String> = []
+        func resolve(_ id: String, section: SidebarSection?, values: [String: String], status: AgentStatus, agent: String? = nil) -> [[SidebarTokenRun]]? {
+            guard let section, let layout = section.layout(agent: agent) else { return nil }
+            live.insert(id)
+            if let cached = sidebarCache[id], cached.values == values, cached.status == status, cached.layout == layout { return cached.rows }
+            let rows = section.resolve(values: values, status: status, agent: agent)
+            sidebarCache[id] = SidebarCacheEntry(values: values, status: status, layout: layout, rows: rows)
+            sidebarResolutionCount += 1
+            return rows
+        }
+        let spaces = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
+        let tabLabels = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0.label) })
+        let paneLabels = Dictionary(uniqueKeysWithValues: panes.map { ($0.id, $0.label ?? $0.title) })
+        var spaceRows: [String: [[SidebarTokenRun]]] = [:]
+        for space in workspaces {
+            var values = Dictionary(uniqueKeysWithValues: space.tokens.map { ("$" + $0.key, $0.value) })
+            values["workspace"] = space.label; values["state_text"] = space.agentStatus.label
+            spaceRows[space.id] = resolve("space:" + space.id, section: configuration?.spaces, values: values, status: space.agentStatus)
+        }
+        var agentRows: [String: [[SidebarTokenRun]]] = [:]
+        for agent in agents {
+            var values = Dictionary(uniqueKeysWithValues: agent.tokens.map { ("$" + $0.key, $0.value) })
+            values["machine"] = profile.name; values["workspace"] = spaces[agent.workspaceID]?.label
+            values["state_text"] = agent.agentStatus.label; values["tab"] = tabLabels[agent.tabID]
+            values["pane"] = agent.title ?? paneLabels[agent.paneID] ?? nil
+            values["agent"] = agent.displayAgent ?? agent.name ?? agent.agent ?? agent.title
+            values["terminal_title"] = agent.terminalTitle; values["terminal_title_stripped"] = agent.terminalTitleStripped
+            agentRows[agent.id] = resolve("agent:" + agent.id, section: configuration?.agents, values: values, status: agent.agentStatus, agent: agent.agent)
+        }
+        sidebarCache = sidebarCache.filter { live.contains($0.key) }
+        spaceSidebarRows = spaceRows; agentSidebarRows = agentRows
     }
 
     static func findExecutable() -> String {

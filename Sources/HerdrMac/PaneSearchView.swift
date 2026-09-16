@@ -1,8 +1,12 @@
 import AppKit
 import SwiftUI
+import HerdrCore
 
 /// Search a server snapshot while keeping the live terminal mounted underneath.
 struct PaneSearchView: View {
+    @Environment(\.resolvedAppearance) private var appearance
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: NativePalette { NativePalette(snapshot: appearance, colorScheme: colorScheme) }
     let paneID: String
     @ObservedObject var store: SessionStore
     let focusToken: UUID
@@ -19,7 +23,7 @@ struct PaneSearchView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                Image(systemName: "magnifyingglass").foregroundStyle(palette.color("secondary_text"))
                 TextField("Find in pane", text: $query)
                     .textFieldStyle(.plain).focused($fieldFocused)
                     .accessibilityLabel("Find in pane")
@@ -28,7 +32,7 @@ struct PaneSearchView: View {
                         return .handled
                     }
                 Text(query.isEmpty ? "" : matches.ranges.isEmpty ? "No matches" : "\(matches.selectedIndex + 1) of \(matches.ranges.count)")
-                    .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize()
+                    .font(.system(size: 10)).foregroundStyle(palette.color("secondary_text")).fixedSize()
                     .accessibilityLabel("Search results")
                 Button { matches.move(by: -1) } label: { Image(systemName: "chevron.up") }
                     .help("Previous match (Shift-Return)").accessibilityLabel("Previous match")
@@ -40,7 +44,7 @@ struct PaneSearchView: View {
                     .help("Close search (Escape)").accessibilityLabel("Close search")
             }
             .buttonStyle(.plain).padding(8)
-            Divider()
+            Divider().overlay(palette.color("border", fallback: .clear))
             HStack {
                 Text(truncated ? "Output snapshot · last 10,000 lines (truncated)" : "Output snapshot")
                     .lineLimit(1)
@@ -48,13 +52,13 @@ struct PaneSearchView: View {
                 if loading { ProgressView().controlSize(.mini) }
                 Button("Refresh") { refreshToken = UUID() }.disabled(loading)
             }
-            .font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 4)
+            .font(.system(size: 10)).foregroundStyle(palette.color("secondary_text")).padding(.horizontal, 8).padding(.vertical, 4)
             if let error {
                 Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled).padding(8)
             }
             PaneSearchText(text: text, matches: matches, fontSize: store.fontSize, close: close)
         }
-        .background(.background)
+        .background(palette.color("panel_bg", fallback: Color(nsColor: .textBackgroundColor)))
         .background(PaneSearchKeyHandler { matches.move(by: $0) })
         .onExitCommand(perform: close)
         .onAppear { fieldFocused = true }
@@ -114,6 +118,8 @@ private struct PaneSearchKeyHandler: NSViewRepresentable {
 }
 
 struct PaneSearchText: NSViewRepresentable {
+    @Environment(\.resolvedAppearance) private var appearance
+    @Environment(\.colorScheme) private var colorScheme
     let text: String
     let matches: PaneSearchMatches
     let fontSize: Double
@@ -138,17 +144,25 @@ struct PaneSearchText: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let view = scroll.documentView as? SearchOutputTextView else { return }
         view.closeSearch = close
-        let needsStyle = view.string != text || view.searchRanges != matches.ranges || view.font?.pointSize != CGFloat(fontSize)
+        let palette = NativePalette(snapshot: appearance, colorScheme: colorScheme)
+        view.backgroundColor = palette.nsColor("panel_bg", fallback: .textBackgroundColor)
+        scroll.backgroundColor = view.backgroundColor
+        view.selectedTextAttributes = [
+            .backgroundColor: palette.nsColor("selection", fallback: .selectedTextBackgroundColor),
+            .foregroundColor: palette.nsColor("text", fallback: .selectedTextColor)
+        ]
+        let needsStyle = view.palette != palette.palette || view.string != text || view.searchRanges != matches.ranges || view.font?.pointSize != CGFloat(fontSize)
         if needsStyle {
             let content = NSMutableAttributedString(string: text, attributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
-                .foregroundColor: NSColor.textColor
+                .foregroundColor: palette.nsColor("text", fallback: .textColor)
             ])
             for range in matches.ranges {
-                content.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.35), range: range)
+                content.addAttribute(.backgroundColor, value: palette.nsColor("selection", fallback: .systemYellow).withAlphaComponent(0.35), range: range)
             }
             view.textStorage?.setAttributedString(content)
             view.searchRanges = matches.ranges
+            view.palette = palette.palette
         }
         if needsStyle || view.activeMatch != matches.selectedRange {
             view.activeMatch = matches.selectedRange
@@ -159,6 +173,7 @@ struct PaneSearchText: NSViewRepresentable {
 }
 
 final class SearchOutputTextView: NSTextView {
+    var palette: ThemePalette?
     var searchRanges: [NSRange] = []
     var activeMatch: NSRange?
     var closeSearch: (() -> Void)?

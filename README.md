@@ -23,6 +23,10 @@ Open `Package.swift` in Xcode to develop the app, or use `swift build` and `swif
 
 The sidebar groups spaces and agents by device. **This Mac** uses your default local herdr socket and preserves existing connection preferences. Use the menu beside a device to edit its socket and local herdr executable. Start herdr first, or use the local device's Start Server button. Quit detaches the client; shells and agents remain owned by herdr.
 
+## Appearance
+
+Settings offers System/Light/Dark mode, global UI presets, color overrides, read-only Herdr TOML import/reload, and conditional sidebar text rules. The initial uherdr preset preserves the existing look. Preferences stay local and apply to every device; UI themes preserve running terminals and their existing ANSI palettes. See [appearance settings and examples](docs/appearance.md) and [theme provenance](docs/theme-provenance.md). Individual workspace/tab/pane color assignments are outside scope.
+
 ## Connect another device over SSH
 
 1. On the other Mac, enable Remote Login and start herdr. Install a compatible herdr CLI on this Mac too; the app uses it for compatibility with other server protocol versions.
@@ -64,12 +68,13 @@ The build script creates an ad-hoc-signed app for local use. Distribution to oth
 
 ## Dependencies
 
-[GhosttyTerminal / libghostty-spm](https://github.com/Lakr233/libghostty-spm) supplies the Swift/AppKit integration around [Ghostty](https://github.com/ghostty-org/ghostty), with [MSDisplayLink](https://github.com/Lakr233/MSDisplayLink) for display scheduling. These dependencies are MIT licensed; their notices are included in the built app. [Herdr](https://github.com/herdrdev/herdr) supplies the runtime and terminal/control protocols.
+[GhosttyTerminal / libghostty-spm](https://github.com/Lakr233/libghostty-spm) supplies the Swift/AppKit integration around [Ghostty](https://github.com/ghostty-org/ghostty), with [MSDisplayLink](https://github.com/Lakr233/MSDisplayLink) for display scheduling. These dependencies are MIT licensed; their notices are included in the built app. [Herdr](https://github.com/herdrdev/herdr) supplies the runtime and terminal/control protocols. Pinned [TOMLKit 0.5.0](https://github.com/LebJe/TOMLKit) parses read-only appearance imports; its MIT and transitive toml++ notices are packaged with the app. Adapted upstream theme data retains its Apache-2.0 notice.
 
 ## Verification
 
 ```sh
-swift run HerdrCoreTests  # Protocol, layout, selection, and error handling
+swift run HerdrCoreTests  # Protocol, layout, appearance/import/rules, and error handling
+bash scripts/test-appearance.sh # Native themes, settings, sidebar rules, and live terminal continuity
 ./scripts/test-hotkeys.sh # Command-key hint lifecycle
 bash scripts/test-agent-worktree.sh # Worktree agent launch and failure handling
 bash scripts/test-terminal-keyboard.sh # Real Ghostty rendering, keyboard, paste, resize, and teardown

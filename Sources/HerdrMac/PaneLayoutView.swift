@@ -54,6 +54,9 @@ struct ResizablePair<First: View, Second: View>: View {
     let onCommit: (Double) -> Void
     @ViewBuilder let first: () -> First
     @ViewBuilder let second: () -> Second
+    @Environment(\.resolvedAppearance) private var appearance
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: NativePalette { NativePalette(snapshot: appearance, colorScheme: colorScheme) }
     @State private var draggedRatio: Double?
     @State private var dragStart: Double?
     @State private var hovering = false
@@ -97,7 +100,7 @@ struct ResizablePair<First: View, Second: View>: View {
         Rectangle().fill(Color.clear)
             .overlay {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(hovering || dragStart != nil ? Color.accentColor.opacity(0.65) : Color.primary.opacity(0.09))
+                    .fill(hovering || dragStart != nil ? palette.color("accent").opacity(0.65) : palette.color("border", fallback: Color.primary.opacity(0.09)))
                     .frame(width: direction == .right ? 2 : 34, height: direction == .right ? 34 : 2)
             }
             .contentShape(Rectangle())
@@ -133,6 +136,7 @@ struct PaneCard: View {
     @State private var searchFocusToken = UUID()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var displayScale
+    private var palette: NativePalette { NativePalette(snapshot: snapshot.appearance, colorScheme: colorScheme) }
     private var selected: Bool { snapshot.selectedPaneID == pane.id }
     private var target: ResourceTarget { ResourceTarget(kind: "pane", id: pane.id, label: pane.displayTitle) }
     var body: some View {
@@ -142,8 +146,8 @@ struct PaneCard: View {
                     if let edge = drop.edge, visible, snapshot.dragPayloads[pane.id] != nil {
                         let rect = edge.preview(in: geometry.size)
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.accentColor.opacity(0.25))
-                            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor, lineWidth: 2) }
+                            .fill(palette.color("accent").opacity(0.25))
+                            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(palette.color("accent"), lineWidth: 2) }
                             .frame(width: rect.width, height: rect.height)
                             .offset(x: rect.minX, y: rect.minY)
                             .allowsHitTesting(false)
@@ -196,12 +200,12 @@ struct PaneCard: View {
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Pane actions")
                     .frame(height: 11)
             }
-            .foregroundStyle(.secondary).font(.system(size: 10))
+            .foregroundStyle(palette.color("secondary_text")).font(.system(size: 10))
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 11).padding(.vertical, 1 / displayScale)
-            .background(selected ? Color.accentColor.opacity(0.075) : Color.primary.opacity(0.025))
+            .background(selected ? palette.color("active_row", fallback: palette.color("accent").opacity(0.075)) : palette.color("panel_bg", fallback: Color.primary.opacity(0.025)))
             .contentShape(Rectangle()).onTapGesture { store.focusPane(pane.id) }
-            Divider().opacity(0.6)
+            Divider().overlay(palette.color("border", fallback: .clear)).opacity(0.6)
             ZStack {
                 TerminalSurface(controller: controller, pane: pane, store: store, dark: colorScheme == .dark, fontSize: snapshot.fontSize, selected: selected, visible: visible, searching: searching, dismissSearch: { searching = false })
                     .padding(7)
@@ -209,9 +213,9 @@ struct PaneCard: View {
                     .accessibilityHidden(searching)
                 if let error = controller.error {
                     VStack(spacing: 12) {
-                        Image(systemName: "terminal").font(.title2).foregroundStyle(.secondary)
+                        Image(systemName: "terminal").font(.title2).foregroundStyle(palette.color("secondary_text"))
                         Text("Terminal disconnected").font(.system(size: 13, weight: .semibold))
-                        Text(error).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                        Text(error).font(.system(size: 10, design: .monospaced)).foregroundStyle(palette.color("secondary_text"))
                             .multilineTextAlignment(.center).lineLimit(6).textSelection(.enabled)
                         HStack {
                             Button("Reconnect") { controller.retry() }
@@ -234,10 +238,10 @@ struct PaneCard: View {
                     }.padding(12).allowsHitTesting(false)
                 }
             }
-            .background(colorScheme == .dark ? Color(red: 0.055, green: 0.065, blue: 0.075) : Color(red: 0.98, green: 0.98, blue: 0.97))
+            .background(palette.color("panel_bg", fallback: colorScheme == .dark ? Color(red: 0.055, green: 0.065, blue: 0.075) : Color(red: 0.98, green: 0.98, blue: 0.97)))
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1) }
+        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? palette.color("focus").opacity(0.5) : palette.color("border", fallback: Color.primary.opacity(0.1)), lineWidth: 1) }
         .alert("Paste not sent", isPresented: Binding(
             get: { controller.pasteError != nil },
             set: { if !$0 { controller.resumeInputAfterRejectedPaste() } }
@@ -263,9 +267,9 @@ struct PaneCard: View {
     private var paneTitle: some View {
         HStack(spacing: 8) {
             Image(systemName: "line.3.horizontal")
-                .font(.system(size: 9)).foregroundStyle(.tertiary)
+                .font(.system(size: 9)).foregroundStyle(palette.color("secondary_text", fallback: Color(nsColor: .tertiaryLabelColor)))
             Image(systemName: pane.agent == nil ? "terminal" : "sparkles")
-                .font(.system(size: 10)).foregroundStyle(selected ? Color.accentColor : .secondary)
+                .font(.system(size: 10)).foregroundStyle(selected ? palette.color("accent") : palette.color("secondary_text"))
             Text(pane.displayTitle).font(.system(size: 11, weight: .medium)).lineLimit(1)
             if pane.agent != nil { StatusBadge(status: pane.agentStatus) }
             Spacer(minLength: 4)
@@ -343,6 +347,9 @@ struct PaneDragLifecycle: ViewModifier {
 
 
 struct PaneTabDropTarget: ViewModifier {
+    @Environment(\.resolvedAppearance) private var appearance
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: NativePalette { NativePalette(snapshot: appearance, colorScheme: colorScheme) }
     let tabID: String
     @ObservedObject var store: SessionStore
     @State private var targeted = false
@@ -359,8 +366,8 @@ struct PaneTabDropTarget: ViewModifier {
             .overlay {
                 if targeted && enabled {
                     RoundedRectangle(cornerRadius: 5)
-                        .fill(Color.accentColor.opacity(0.2))
-                        .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) }
+                        .fill(palette.color("accent").opacity(0.2))
+                        .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(palette.color("accent"), lineWidth: 2) }
                         .allowsHitTesting(false)
                 }
             }
