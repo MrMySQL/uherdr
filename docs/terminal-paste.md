@@ -25,11 +25,32 @@ An oversized paste is rejected before transmission. Subsequent input is stopped
 until the user dismisses the error, so an Enter intended for the rejected paste
 cannot submit an earlier draft. Dismissing the error resumes the same connection.
 
+## Files and clipboard images
+
+Command-V and Edit → Paste accept copied Finder files, clipboard screenshots,
+and raw image/movie representations. Screenshots without a file path are saved
+in a private temporary directory; TIFF clipboard images are converted to PNG.
+Copied files retain their original bytes and names. SSH panes upload through
+the same separate transfer channel as file drops before receiving any paths.
+
+Each copied file is sent as its own bracketed paste. Codex and Claude Code
+recognize supported image paths and render their own image attachment labels.
+Combining multiple paths in one event would leave them as plain prompt text.
+Videos and other files are passed through for the receiving harness to handle;
+the terminal does not add model support or fabricate attachment labels.
+This requires the 0.9+ server paste framing described above.
+
+Failed/cancelled uploads remove staged clipboard files. Accepted local staging
+remains in the OS temporary directory so an unsubmitted draft can still read it;
+accepted remote uploads retain their remote copies. Clipboard contents are not
+modified, and programmatic clipboard reads do not stage or upload files.
+
 ## Verification
 
 ```sh
 HERDR_BIN=/path/to/official/herdr bash scripts/test-terminal-paste.sh
 HERDR_TEST_PASTE_AGENTS=1 HERDR_BIN=/path/to/official/herdr bash scripts/test-terminal-paste.sh
+HERDR_TEST_PASTE_AGENTS=1 HERDR_TEST_PASTE_FILES=1 HERDR_BIN=/path/to/official/herdr bash scripts/test-terminal-paste.sh
 ```
 
 The runner creates and removes a disposable server. It checks native Ghostty
@@ -38,6 +59,11 @@ pastes, a preceding key, immediate Enter, and unchanged control connection ident
 The optional agent check launches actual Claude Code and Codex CLIs in temporary
 folders and exports their full drafts using Ctrl-G. The temporary editor clears
 the draft on return; no prompt is submitted. Clipboard contents are restored.
+`HERDR_TEST_PASTE_FILES=1` additionally requires each CLI to display attachments
+for two copied image files and a raw screenshot, without submitting the draft.
+`HERDR_TEST_CLIPBOARD_FILES=1 HERDR_BIN=/path/to/official/herdr bash scripts/test-agent-file-drops.sh`
+checks copied images and screenshots in both local and real localhost SSH panes,
+including uploaded byte equality. This mode does not submit prompts.
 
 To test a private example locally, also set
 `HERDR_TEST_PASTE_TEXT_FILE=/absolute/path/to/example.txt`. The example is not

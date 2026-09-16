@@ -247,7 +247,7 @@ struct TerminalSurface: NSViewRepresentable {
             }
         }
         view.onFileDropError = { [weak coordinator] error in
-            coordinator?.store?.operationError = "Could not upload files: \(error.localizedDescription)"
+            coordinator?.store?.operationError = "Could not paste files: \(error.localizedDescription)"
         }
         controller.cancelFileDrop = { [weak view] in view?.cancelFileDrop() }
         view.setAccessibilityLabel("Terminal: \(pane.displayTitle)")
@@ -556,6 +556,7 @@ final class HerdrTerminalView: AppTerminalView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL])
+        clipboardPasteHandler = { [weak self] in self?.pasteClipboardFiles() ?? false }
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -572,8 +573,35 @@ final class HerdrTerminalView: AppTerminalView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let urls = fileDropURLs(sender) else { return false }
+        return insertFiles(urls)
+    }
+
+    private func pasteClipboardFiles() -> Bool {
+        let board = NSPasteboard.general
+        guard TerminalClipboardFiles.hasFiles(board) else { return false }
+        // Consume rejected file pastes, so Ghostty cannot fall back to a
+        // local path on a remote host or paste into a hidden/busy pane.
+        guard canInsertFiles else { NSSound.beep(); return true }
+        do {
+            let files = try TerminalClipboardFiles.read(board)
+            if !insertFiles(files.urls, individually: true, staging: files.directory) {
+                files.discard()
+            }
+        } catch { onFileDropError?(error) }
+        return true
+    }
+
+    private var canInsertFiles: Bool {
+        fileDropTask == nil && surfaceVisible && canAcceptFileDrop() && controller != nil
+            && window != nil && !isHiddenOrHasHiddenAncestor
+    }
+
+    private func insertFiles(_ urls: [URL], individually: Bool = false, staging: URL? = nil) -> Bool {
+        guard !urls.isEmpty, urls.allSatisfy({
+            $0.isFileURL && !$0.path.isEmpty && $0.path.rangeOfCharacter(from: .controlCharacters) == nil
+        }) else { return false }
         guard let resolveFileDrop else {
-            guard paste(text: Self.fileDropText(urls.map(\.path))) else { return false }
+            guard insertFilePaths(urls.map(\.path), individually: individually) else { return false }
             acquireProgrammaticFocus()
             return true
         }
@@ -595,16 +623,29 @@ final class HerdrTerminalView: AppTerminalView {
                     throw HerdrError.message("The pane is no longer ready to paste. Close any dialog or search, then drop the files again.")
                 }
                 guard !prepared.paths.isEmpty, prepared.paths.allSatisfy({ !$0.isEmpty && $0.rangeOfCharacter(from: .controlCharacters) == nil }),
-                      self.paste(text: Self.fileDropText(prepared.paths)) else {
+                      self.insertFilePaths(prepared.paths, individually: individually) else {
                     throw HerdrError.message("The terminal could not accept the uploaded paths.")
+                }
+                // Remote copies own their bytes now; local drafts still need
+                // the staged files until the harness consumes the attachment.
+                if prepared.paths != urls.map(\.path), let staging {
+                    try? FileManager.default.removeItem(at: staging)
                 }
             } catch {
                 await files?.discard()
+                if let staging { try? FileManager.default.removeItem(at: staging) }
                 guard let self, self.fileDropGeneration == token else { return }
                 if !(error is CancellationError), !Task.isCancelled { self.onFileDropError?(error) }
             }
         }
         return true
+    }
+
+    private func insertFilePaths(_ paths: [String], individually: Bool) -> Bool {
+        // A harness recognizes one image path per paste event. Combining
+        // paths turns the whole batch into ordinary prompt text.
+        let batches = individually ? paths.map { [$0] } : [paths]
+        return batches.allSatisfy { paste(text: Self.fileDropText($0)) }
     }
 
     func cancelFileDrop() {
@@ -614,7 +655,7 @@ final class HerdrTerminalView: AppTerminalView {
     }
 
     private func fileDropURLs(_ sender: NSDraggingInfo) -> [URL]? {
-        guard fileDropTask == nil, surfaceVisible, canAcceptFileDrop(), controller != nil, window != nil, !isHiddenOrHasHiddenAncestor,
+        guard canInsertFiles,
               sender.draggingSourceOperationMask.contains(.copy),
               let urls = sender.draggingPasteboard.readObjects(
                 forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]

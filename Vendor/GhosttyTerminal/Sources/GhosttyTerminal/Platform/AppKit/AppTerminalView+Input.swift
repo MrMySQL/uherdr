@@ -21,6 +21,9 @@
 
     extension AppTerminalView {
         override open func keyDown(with event: NSEvent) {
+            if event.charactersIgnoringModifiers?.lowercased() == "v",
+               event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
+               clipboardPasteHandler?() == true { return }
             inputHandler?.handleKeyDown(with: event)
         }
 
@@ -126,7 +129,7 @@
                     "paste binding bytes=\(text.utf8.count) lines=\(TerminalInputText.lineCount(in: text))"
                 )
             }
-            _ = surface?.performBindingAction("paste_from_clipboard")
+            _ = performBindingAction("paste_from_clipboard")
         }
 
         @IBAction override open func selectAll(_: Any?) {

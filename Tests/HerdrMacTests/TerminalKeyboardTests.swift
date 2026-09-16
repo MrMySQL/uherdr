@@ -178,6 +178,7 @@ struct TerminalKeyboardTests {
         waitUntil { capture.bytes == Array("\u{1b}[200~paste café\u{1b}[201~".utf8) }
         precondition(capture.bytes == Array("\u{1b}[200~paste café\u{1b}[201~".utf8))
         print("PASS: explicit paste honors bracketed paste")
+        checkClipboardFiles(view: view, capture: capture, waitUntil: waitUntil)
 
         // A paste larger than native input buffers must preserve every byte,
         // including its opening/closing bracket and the final two lines.
@@ -489,6 +490,119 @@ struct TerminalKeyboardTests {
         }
         print("PASS: paste packets preserve binary keys, fragmented payloads, ordering, size limits, resets and server version gating")
     }
+}
+
+@MainActor
+private func checkClipboardFiles(view: HerdrTerminalView, capture: StreamCapture,
+                                 waitUntil: (() -> Bool) -> Void) {
+    let board = NSPasteboard.general
+    let saved = (board.pasteboardItems ?? []).map { item in
+        item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+    }
+    defer {
+        board.clearContents()
+        board.writeObjects(saved.map { entries in
+            let item = NSPasteboardItem()
+            for (type, data) in entries { item.setData(data, forType: type) }
+            return item
+        })
+        view.resolveFileDrop = nil
+        view.onFileDropError = nil
+    }
+    view.canAcceptFileDrop = { true }
+    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    let png = bitmap.representation(using: .png, properties: [:])!
+    board.clearContents()
+    board.setData(png, forType: .png)
+    capture.clear()
+    precondition(view.performBindingAction("paste_from_clipboard"))
+    waitUntil { !capture.bytes.isEmpty }
+    let payload = String(decoding: capture.bytes, as: UTF8.self)
+    precondition(payload.hasPrefix("\u{1b}[200~'"), "A screenshot must be staged and pasted as an attachment file")
+    let path = String(payload.dropFirst(7).dropLast(8))
+    precondition((try? Data(contentsOf: URL(fileURLWithPath: path))) == png,
+                 "The pasted screenshot must retain its encoded bytes: \(payload.debugDescription)")
+    try? FileManager.default.removeItem(at: URL(fileURLWithPath: path).deletingLastPathComponent())
+    print("PASS: clipboard screenshots become readable attachment files")
+
+    // Each path must be its own paste: Codex's image parser accepts only
+    // one path per event. Finder's display-name text must not win over URLs.
+    board.clearContents()
+    board.writeObjects([URL(fileURLWithPath: "/tmp/first image.png"),
+                        URL(fileURLWithPath: "/tmp/second.mov")] as [NSURL])
+    let commandV = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+        timestamp: 1, windowNumber: view.window!.windowNumber, context: nil,
+        characters: "v", charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9)!
+    capture.clear()
+    precondition(view.performKeyEquivalent(with: commandV))
+    waitUntil { capture.packets.count == 2 }
+    precondition(capture.packets.map { String(decoding: $0, as: UTF8.self) } == [
+        "\u{1b}[200~'/tmp/first image.png' \u{1b}[201~",
+        "\u{1b}[200~'/tmp/second.mov' \u{1b}[201~"
+    ], "Command-V must deliver images and videos as separate file pastes")
+
+    // The Edit menu follows the same path and uploads before sending input.
+    var finishUpload: CheckedContinuation<PreparedFileDrop, Error>?
+    view.resolveFileDrop = { urls in
+        precondition(urls.map(\.path) == ["/tmp/first image.png", "/tmp/second.mov"])
+        return try await withCheckedThrowingContinuation { finishUpload = $0 }
+    }
+    capture.clear()
+    precondition(NSApp.sendAction(NSSelectorFromString("paste:"), to: view, from: nil))
+    waitUntil { finishUpload != nil }
+    precondition(capture.bytes.isEmpty, "Clipboard paths must wait for the SSH upload")
+    precondition(view.performBindingAction("paste_from_clipboard"))
+    precondition(capture.bytes.isEmpty, "A busy clipboard paste must not fall back to local paths")
+    finishUpload!.resume(returning: PreparedFileDrop(paths: ["/tmp/remote/image.png", "/tmp/remote/video.mov"]))
+    finishUpload = nil
+    waitUntil { capture.packets.count == 2 }
+    precondition(capture.packets.map { String(decoding: $0, as: UTF8.self) } == [
+        "\u{1b}[200~'/tmp/remote/image.png' \u{1b}[201~",
+        "\u{1b}[200~'/tmp/remote/video.mov' \u{1b}[201~"
+    ])
+    view.resolveFileDrop = nil
+    print("PASS: Command-V and Edit Paste deliver separate files and wait for remote uploads")
+
+    board.clearContents()
+    board.setData(bitmap.tiffRepresentation!, forType: .tiff)
+    let tiffFiles = try! TerminalClipboardFiles.read(board)
+    precondition(tiffFiles.urls.count == 1 && tiffFiles.urls[0].pathExtension == "png")
+    precondition(NSBitmapImageRep(data: try! Data(contentsOf: tiffFiles.urls[0]))?.pixelsWide == 2)
+    tiffFiles.discard()
+    board.clearContents()
+    board.setData(Data("video fixture".utf8), forType: NSPasteboard.PasteboardType("public.mpeg-4"))
+    let videoFiles = try! TerminalClipboardFiles.read(board)
+    precondition(videoFiles.urls.count == 1 && videoFiles.urls[0].pathExtension == "mp4")
+    precondition((try! Data(contentsOf: videoFiles.urls[0])) == Data("video fixture".utf8))
+    videoFiles.discard()
+
+    board.clearContents()
+    board.setData(png, forType: .png)
+    var stagedURL: URL?
+    var pasteFailed = false
+    view.onFileDropError = { _ in pasteFailed = true }
+    view.resolveFileDrop = { urls in
+        stagedURL = urls[0]
+        throw HerdrError.message("Test upload failure")
+    }
+    capture.clear()
+    precondition(view.performBindingAction("paste_from_clipboard"))
+    waitUntil { pasteFailed }
+    precondition(pasteFailed && capture.bytes.isEmpty)
+    precondition(stagedURL != nil && !FileManager.default.fileExists(atPath: stagedURL!.path),
+                 "A failed upload must remove staged clipboard bytes")
+    view.resolveFileDrop = nil
+    view.onFileDropError = nil
+
+    board.clearContents()
+    board.setString("plain text", forType: .string)
+    capture.clear()
+    precondition(view.performBindingAction("paste_from_clipboard"))
+    waitUntil { !capture.bytes.isEmpty }
+    precondition(String(decoding: capture.bytes, as: UTF8.self) == "\u{1b}[200~plain text\u{1b}[201~")
+    print("PASS: TIFF conversion, raw video staging, failed upload cleanup and ordinary text paste")
 }
 
 @MainActor

@@ -87,7 +87,6 @@ enum GhosttyLiveTests {
             try await waitFor { transport.ready }
             try await waitFor { session.readViewportText()?.contains("ghostty-live-ok") == true }
             print("PASS: reconnect preserves the server pane and its output")
-            let connectionBeforePastes = transport.generation
 
             let resolve = view.resolveFileDrop
             var uploadStarted = false
@@ -117,6 +116,7 @@ enum GhosttyLiveTests {
             view.controller = engine
             view.resolveFileDrop = resolve
             print("PASS: terminal reconnect and native surface detach cancel in-flight file drops")
+            let connectionBeforePastes = transport.generation
 
             if ProcessInfo.processInfo.environment["HERDR_TEST_MOUSE"] == "1" {
                 try await checkMouse(view: view, transport: transport, session: session, window: window)
@@ -716,6 +716,37 @@ enum GhosttyLiveTests {
             }
             print("PASS: \(agent) clipboard paste preserves all \(text.utf8.count) UTF-8 bytes and final two lines in its exported draft")
             try await Task.sleep(for: .milliseconds(300))
+            if ProcessInfo.processInfo.environment["HERDR_TEST_PASTE_FILES"] == "1" {
+                let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8,
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+                let png = bitmap.representation(using: .png, properties: [:])!
+                let first = root.appendingPathComponent("sample image.png")
+                let second = root.appendingPathComponent("second image.png")
+                try png.write(to: first)
+                try png.write(to: second)
+                defer {
+                    board.clearContents()
+                    board.writeObjects(saved.map { entries in
+                        let item = NSPasteboardItem()
+                        for (type, data) in entries { item.setData(data, forType: type) }
+                        return item
+                    })
+                }
+                board.clearContents()
+                board.writeObjects([first, second] as [NSURL])
+                precondition(view.performBindingAction("paste_from_clipboard"))
+                try await wait("\(agent) two image attachments") {
+                    screen().contains("[Image #2]") || screen().contains("[Image 2]")
+                }
+                board.clearContents()
+                board.setData(png, forType: .png)
+                precondition(view.performBindingAction("paste_from_clipboard"))
+                try await wait("\(agent) screenshot attachment") {
+                    screen().contains("[Image #3]") || screen().contains("[Image 3]")
+                }
+                print("PASS: \(agent) renders two copied files and a clipboard screenshot as image attachments without submitting")
+            }
             precondition(view.sendKey(.c, modifiers: .ctrl))
             try await Task.sleep(for: .milliseconds(500))
             precondition(view.sendKey(.c, modifiers: .ctrl))

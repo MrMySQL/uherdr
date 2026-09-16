@@ -23,6 +23,11 @@
         var pointer: PointerSelectionState = .init()
         var focusBridge: FocusBridgeState = .init()
 
+        /// Handle an explicit user paste before Ghostty reads text. Return
+        /// true when consumed (including a reported error), false to use the
+        /// normal text paste. Never invoked for application clipboard reads.
+        public var clipboardPasteHandler: (() -> Bool)?
+
         open weak var delegate: (any TerminalSurfaceViewDelegate)? {
             get { core.delegate }
             set { core.delegate = newValue }
