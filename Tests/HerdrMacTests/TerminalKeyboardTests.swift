@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyTerminal
+import HerdrCore
 @testable import HerdrMac
 
 @main
@@ -7,6 +8,27 @@ struct TerminalKeyboardTests {
     @MainActor static func main() {
         _ = NSApplication.shared
         setbuf(stdout, nil)
+        if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--agent-drops" {
+            var finished = false
+            var failure: Error?
+            let test = Task { @MainActor in
+                defer { finished = true }
+                do {
+                    try await AgentFileDropTests.run(socket: CommandLine.arguments[2], executable: CommandLine.arguments[3])
+                } catch { failure = error }
+            }
+            let deadline = Date().addingTimeInterval(900)
+            while !finished, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            if !finished {
+                test.cancel()
+                let cleanupDeadline = Date().addingTimeInterval(15)
+                while !finished, Date() < cleanupDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+                print("FAIL: agent file drops exceeded the 15-minute deadline")
+                exit(1)
+            }
+            if let failure { print("FAIL: agent file drops: \(failure)"); exit(1) }
+            return
+        }
         if CommandLine.arguments.contains("--bundled-resources") {
             for url in [GhosttyRuntimeResources.directoryURL, GhosttyRuntimeResources.terminfoDirectoryURL] {
                 precondition(url?.path.hasPrefix(Bundle.main.bundleURL.path + "/Contents/Resources/") == true,
@@ -16,6 +38,17 @@ struct TerminalKeyboardTests {
             return
         }
         checkPastePackets()
+        let draftArgs = (textReference: "/tmp/drop/it's café.txt", imageReference: "/tmp/drop/sample image.png", pathPrefix: "/tmp/drop")
+        func containsFiles(_ draft: String) -> Bool {
+            AgentFileDropTests.draftContainsDroppedFiles(draft, textReference: draftArgs.textReference,
+                imageReference: draftArgs.imageReference, pathPrefix: draftArgs.pathPrefix)
+        }
+        precondition(!containsFiles("codex -C /tmp/drop"), "Startup cwd must not satisfy attachment readiness")
+        precondition(!containsFiles("'/tmp/drop/it's café.txt'"), "Both attachments must reach the draft")
+        precondition(containsFiles("'/tmp/drop/it'\\\n''s cafe\u{301}.txt' '/tmp/drop/sample\n image.png'"),
+                     "Draft matching must handle quoted apostrophes, wrapping and Unicode composition")
+        precondition(containsFiles("'/tmp/drop/it's café.txt' [Image #1]"))
+        print("PASS: agent drop readiness requires both files and handles terminal formatting")
         func waitUntil(_ predicate: () -> Bool) {
             let deadline = Date().addingTimeInterval(3)
             while !predicate(), Date() < deadline {
@@ -176,6 +209,72 @@ struct TerminalKeyboardTests {
         waitUntil { capture.bytes == Array(expectedDrop.utf8) }
         precondition(capture.bytes == Array(expectedDrop.utf8), "Drop must paste quoted file paths without submitting: \(String(decoding: capture.bytes, as: UTF8.self).debugDescription)")
         print("PASS: multiple file drops preserve quoting, Unicode, and bracketed paste")
+
+        // A remote drop must wait for upload completion and paste its returned
+        // path through Ghostty, preserving bracketed paste and never submitting.
+        capture.clear()
+        var finishUpload: CheckedContinuation<PreparedFileDrop, Error>?
+        var discardedDrops = 0
+        func prepared(_ paths: [String]) -> PreparedFileDrop {
+            PreparedFileDrop(paths: paths, discard: { discardedDrops += 1 })
+        }
+        var uploadError: String?
+        view.resolveFileDrop = { urls in
+            precondition(urls == droppedFiles)
+            return try await withCheckedThrowingContinuation { finishUpload = $0 }
+        }
+        view.onFileDropError = { uploadError = $0.localizedDescription }
+        precondition(view.performDragOperation(drop))
+        waitUntil { finishUpload != nil }
+        precondition(capture.bytes.isEmpty, "Local paths must never be pasted while uploading")
+        precondition(!view.performDragOperation(drop), "Concurrent drops must not reorder uploads")
+        finishUpload!.resume(returning: prepared(["/tmp/remote/project notes.txt"]))
+        finishUpload = nil
+        waitUntil { !capture.bytes.isEmpty }
+        precondition(String(decoding: capture.bytes, as: UTF8.self) == "\u{1b}[200~'/tmp/remote/project notes.txt' \u{1b}[201~")
+        precondition(uploadError == nil)
+        precondition(discardedDrops == 0, "Accepted uploads must remain available to the agent")
+
+        capture.clear()
+        precondition(view.performDragOperation(drop))
+        waitUntil { finishUpload != nil }
+        finishUpload!.resume(throwing: NSError(domain: "upload", code: 1))
+        finishUpload = nil
+        waitUntil { uploadError != nil }
+        precondition(capture.bytes.isEmpty, "Failed uploads must not paste a local or partial path")
+
+        uploadError = nil
+        precondition(view.performDragOperation(drop))
+        waitUntil { finishUpload != nil }
+        view.canAcceptFileDrop = { false }
+        var finishDiscard: CheckedContinuation<Void, Never>?
+        finishUpload!.resume(returning: PreparedFileDrop(paths: ["/tmp/remote/ready.txt"], discard: {
+            await withCheckedContinuation { finishDiscard = $0 }
+            discardedDrops += 1
+        }))
+        finishUpload = nil
+        waitUntil { finishDiscard != nil }
+        view.canAcceptFileDrop = { true }
+        precondition(!view.performDragOperation(drop), "Cleanup must retain ownership until the previous drop has finished")
+        finishDiscard!.resume()
+        waitUntil { uploadError != nil }
+        precondition(uploadError != nil && capture.bytes.isEmpty, "A completed upload must report when a dialog prevents pasting")
+        precondition(discardedDrops == 1, "A refused paste must discard its completed upload")
+        view.canAcceptFileDrop = { true }
+
+        precondition(view.performDragOperation(drop))
+        waitUntil { finishUpload != nil }
+        view.setSurfaceVisible(false)
+        view.setSurfaceVisible(true)
+        finishUpload!.resume(returning: prepared(["/tmp/remote/stale.txt"]))
+        finishUpload = nil
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        precondition(capture.bytes.isEmpty, "Hiding and showing a pane must invalidate an in-flight drop")
+        precondition(discardedDrops == 2, "A stale completed upload must be discarded")
+        view.resolveFileDrop = nil
+        view.onFileDropError = nil
+        view.acquireProgrammaticFocus()
+        print("PASS: remote drops wait for upload, reject duplicates, report failures and discard stale completion")
 
         view.canAcceptFileDrop = { false }
         capture.clear()
@@ -422,7 +521,7 @@ private final class SurfaceCapture: TerminalSurfaceLifecycleDelegate, TerminalSu
 
 // AppKit supplies this object during a drag; the pasteboard and terminal are real.
 @MainActor
-private final class FileDragInfo: NSObject, NSDraggingInfo {
+final class FileDragInfo: NSObject, NSDraggingInfo {
     let draggingPasteboard: NSPasteboard
     let draggingDestinationWindow: NSWindow?
     var draggingSourceOperationMask: NSDragOperation = .copy

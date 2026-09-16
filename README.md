@@ -45,7 +45,7 @@ Connection errors appear under the affected device and in its detail view. Faile
 - Long multiline paste uses the existing input connection with stock Herdr 0.9.0 or newer. No custom server patch or reconnect on paste is needed; see [paste handling](docs/terminal-paste.md).
 - Find in pane: Command-F or the pane actions menu opens a searchable output snapshot, including up to 10,000 recent scrollback lines. Matching is literal and case-insensitive. Return / Shift-Return or Command-G / Command-Shift-G navigate highlighted matches with wraparound. Refresh reads new output; Escape closes search and returns keyboard focus to the running terminal. Truncated history is labeled.
 - Links: click a web URL or labeled hyperlink in terminal output to open it in your default browser, including in mouse-enabled applications such as Claude Code. Command-click also works; dragging selects text, and clicks outside links still reach the application.
-- File drops: drag one or more files from Finder onto an agent’s terminal pane to paste their quoted paths. The target pane gains keyboard focus; press Enter when your prompt is ready.
+- File drops: drag one or more files from Finder onto a Codex, Claude Code, or other terminal pane. Local panes paste quoted local paths. For devices connected through Herdr’s SSH profiles, files upload over SSH first, then their remote paths are pasted. The pane shows upload progress and reports failures. Each drop uses a private `/tmp/herdr-drop-…` directory, preserving filenames without overwriting earlier uploads. Remote uploads support regular files, including images; folders are not supported. Files remain available until the remote system cleans its temporary directory. The target pane gains keyboard focus; press Enter when your prompt is ready. SSH or containers launched manually inside a local pane are not detected as remote devices.
 - Command-N creates a space. Command-comma opens Settings.
 
 Closing a pane, tab, or space terminates its processes and therefore asks for confirmation. Terminal ownership conflicts are shown on the affected pane; Take Control explicitly replaces the previous writable controller.
@@ -74,6 +74,7 @@ swift run HerdrCoreTests  # Protocol, layout, selection, and error handling
 bash scripts/test-agent-worktree.sh # Worktree agent launch and failure handling
 bash scripts/test-terminal-keyboard.sh # Real Ghostty rendering, keyboard, paste, resize, and teardown
 bash scripts/test-terminal-paste.sh # End-to-end long paste (stock Herdr 0.9.0+)
+bash scripts/test-agent-file-drops.sh # Opt-in: real Codex/Claude text+image drops, local and loopback SSH
 bash scripts/test-performance.sh # Polling and terminal publication regressions
 ./scripts/test.sh         # Also starts and cleans up an isolated herdr server
 bash scripts/test-devices.sh # Two isolated servers, overlapping IDs, and forwarded terminal control

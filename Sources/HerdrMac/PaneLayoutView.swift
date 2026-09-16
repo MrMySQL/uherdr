@@ -223,6 +223,16 @@ struct PaneCard: View {
                 if searching {
                     PaneSearchView(paneID: pane.id, store: store, focusToken: searchFocusToken) { searching = false }
                 }
+                if controller.uploadingFiles {
+                    VStack {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Uploading files…").font(.caption)
+                        }
+                        .padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        Spacer()
+                    }.padding(12).allowsHitTesting(false)
+                }
             }
             .background(colorScheme == .dark ? Color(red: 0.055, green: 0.065, blue: 0.075) : Color(red: 0.98, green: 0.98, blue: 0.97))
         }

@@ -64,6 +64,8 @@ final class SessionStore: ObservableObject {
     var defaultDirectory: String { isRemote ? remoteHome ?? "/tmp" : NSHomeDirectory() }
     private let defaults: UserDefaults
     private let tunnel: SSHTunnel
+    private let fileTransfer: RemoteFileTransfer
+    private var fileTransfers: [UUID: Task<PreparedFileDrop, Error>] = [:]
     private var retryAfter = Date.distantPast
     private var client: any HerdrRequesting
     private var pollTask: Task<Void, Never>?
@@ -74,10 +76,11 @@ final class SessionStore: ObservableObject {
     private var layoutRevision = 0
     private var pendingLayoutRefresh: Set<String> = []
 
-    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil) {
+    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil, fileTransfer: RemoteFileTransfer? = nil) {
         self.profile = profile
         self.defaults = defaults
         self.tunnel = tunnel ?? SSHTunnel()
+        self.fileTransfer = fileTransfer ?? RemoteFileTransfer()
         let socket = profile.kind == .local ? (profile.socketPath as NSString).expandingTildeInPath : ""
         effectiveSocketPath = socket
         appearance = defaults.string(forKey: "appearance") ?? "system"
@@ -106,6 +109,30 @@ final class SessionStore: ObservableObject {
               let id = paneID ?? selectedPane, visiblePanes.contains(where: { $0.id == id }) else { return }
         focusPane(id)
         paneSearchRequest = (id, UUID())
+    }
+
+    func prepareDroppedFiles(_ urls: [URL]) async throws -> PreparedFileDrop {
+        let generation = connectionGeneration
+        try Task.checkCancellation()
+        guard isRemote else { return PreparedFileDrop(paths: urls.map(\.path)) }
+        let id = UUID()
+        let profile = self.profile
+        let transfer = Task { try await fileTransfer.upload(urls, to: profile) }
+        fileTransfers[id] = transfer
+        defer { fileTransfers[id] = nil }
+        do {
+            let files = try await withTaskCancellationHandler {
+                try await transfer.value
+            } onCancel: { transfer.cancel() }
+            guard !Task.isCancelled, generation == connectionGeneration else {
+                await files.discard()
+                throw CancellationError()
+            }
+            return files
+        } catch {
+            guard generation == connectionGeneration else { throw CancellationError() }
+            throw error
+        }
     }
 
     func readPaneForSearch(_ paneID: String) async throws -> (text: String, truncated: Bool) {
@@ -143,6 +170,7 @@ final class SessionStore: ObservableObject {
     func disconnect() {
         pollTask?.cancel(); pollTask = nil
         connectionGeneration = UUID()
+        for transfer in fileTransfers.values { transfer.cancel() }
         paneMoveID = nil
         pendingLayoutRefresh = []
         tunnel.stop()
