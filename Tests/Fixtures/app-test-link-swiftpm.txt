@@ -1,3 +1,4 @@
 /tmp/Modern Build/AppHotkeys.swift.o
 /tmp/Modern Build/HerdrApp.swift.o
 /tmp/Modern Build/WorkspaceView.swift.o
+'/tmp/Modern Build/Date&Time.swift.o'

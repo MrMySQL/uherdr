@@ -111,74 +111,78 @@ struct DeviceSidebarView: View {
         }
     }
 
-    private func spaceRow(_ space: Workspace, session: SessionStore) -> some View {
+    @ViewBuilder private func spaceRow(_ space: Workspace, session: SessionStore) -> some View {
         let selected = devices.selectedDeviceID == session.profile.id && session.selectedSpace == space.id
         let shortcut = devices.workspaceShortcuts.firstIndex { $0.session === session && $0.workspace.id == space.id }
-        return Button { devices.select(session, workspace: space) } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                if let rows = session.spaceSidebarRows[space.id] {
-                    HStack {
-                        SidebarRowView(rows: rows, rowGap: session.appearanceStore.sidebarConfiguration?.spaces?.rowGap ?? 0)
-                        Spacer(minLength: 0)
-                        if let shortcut {
-                            Text("⌘\(shortcut + 1)").font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(palette.color("accent")).opacity(commandKey.isHeld ? 1 : 0)
-                                .accessibilityHidden(!commandKey.isHeld)
+        let configuredRows = session.spaceSidebarRows[space.id]
+        if configuredRows?.isEmpty != true {
+            Button { devices.select(session, workspace: space) } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let rows = configuredRows {
+                        HStack {
+                            SidebarRowView(rows: rows, rowGap: session.appearanceStore.sidebarConfiguration?.spaces?.rowGap ?? 0)
+                            Spacer(minLength: 0)
+                            if let shortcut {
+                                Text("⌘\(shortcut + 1)").font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(palette.color("accent")).opacity(commandKey.isHeld ? 1 : 0)
+                                    .accessibilityHidden(!commandKey.isHeld)
+                            }
                         }
-                    }
-                } else {
-                    HStack(spacing: 6) {
-                        Image(systemName: selected ? "folder.fill" : "folder").foregroundStyle(selected ? palette.color("accent") : palette.color("secondary_text"))
-                        Text(space.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                        Spacer(minLength: 0)
-                        if space.agentStatus == .working || space.agentStatus == .blocked || space.agentStatus == .done { StatusDot(status: space.agentStatus) }
-                        if let shortcut {
-                            Text("⌘\(shortcut + 1)").font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(palette.color("accent")).opacity(commandKey.isHeld ? 1 : 0)
-                                .accessibilityHidden(!commandKey.isHeld)
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: selected ? "folder.fill" : "folder").foregroundStyle(selected ? palette.color("accent") : palette.color("secondary_text"))
+                            Text(space.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                            Spacer(minLength: 0)
+                            if space.agentStatus == .working || space.agentStatus == .blocked || space.agentStatus == .done { StatusDot(status: space.agentStatus) }
+                            if let shortcut {
+                                Text("⌘\(shortcut + 1)").font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(palette.color("accent")).opacity(commandKey.isHeld ? 1 : 0)
+                                    .accessibilityHidden(!commandKey.isHeld)
+                            }
                         }
+                        Text("\(space.tabCount) tabs · \(space.paneCount) panes").font(.system(size: 10)).foregroundStyle(palette.color("secondary_text"))
                     }
-                    Text("\(space.tabCount) tabs · \(space.paneCount) panes").font(.system(size: 10)).foregroundStyle(palette.color("secondary_text"))
+                }.padding(.horizontal, 8).padding(.vertical, 7).padding(.leading, 16)
+                    .contentShape(Rectangle())
+                    .background(selected ? palette.color("active_row", fallback: palette.color("accent").opacity(0.12)) : .clear, in: RoundedRectangle(cornerRadius: 7))
+            }.buttonStyle(.plain).disabled(!session.connected)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .contextMenu {
+                    Button("Rename space…") {
+                        devices.select(session)
+                        session.sheet = .rename(ResourceTarget(kind: "workspace", id: space.id, label: space.label))
+                    }.disabled(!session.connected)
+                    Button("Close space…", role: .destructive) {
+                        devices.select(session)
+                        session.pendingClose = ResourceTarget(kind: "workspace", id: space.id, label: space.label)
+                    }.disabled(!session.connected)
                 }
-            }.padding(.horizontal, 8).padding(.vertical, 7).padding(.leading, 16)
-                .contentShape(Rectangle())
-                .background(selected ? palette.color("active_row", fallback: palette.color("accent").opacity(0.12)) : .clear, in: RoundedRectangle(cornerRadius: 7))
-        }.buttonStyle(.plain).disabled(!session.connected)
-            .accessibilityLabel("\(space.label), \(space.agentStatus.label)")
-            .accessibilityAddTraits(selected ? .isSelected : [])
-            .contextMenu {
-                Button("Rename space…") {
-                    devices.select(session)
-                    session.sheet = .rename(ResourceTarget(kind: "workspace", id: space.id, label: space.label))
-                }.disabled(!session.connected)
-                Button("Close space…", role: .destructive) {
-                    devices.select(session)
-                    session.pendingClose = ResourceTarget(kind: "workspace", id: space.id, label: space.label)
-                }.disabled(!session.connected)
-            }
+        }
     }
 
-    private func agentRow(_ agent: Agent, session: SessionStore) -> some View {
-        Button { devices.select(session); session.revealAgent(agent) } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                if let rows = session.agentSidebarRows[agent.id] {
-                    SidebarRowView(rows: rows, rowGap: session.appearanceStore.sidebarConfiguration?.agents?.rowGap ?? 0)
-                } else {
-                    HStack {
-                        Image(systemName: "sparkles").foregroundStyle(palette.color("accent"))
-                        Text(agent.displayName).lineLimit(1)
-                        Spacer(minLength: 0)
-                    }.font(.system(size: 12, weight: .medium))
-                    HStack {
-                        Text(session.workspaces.first { $0.id == agent.workspaceID }?.label ?? "Space").lineLimit(1)
-                        Spacer(minLength: 0)
-                        StatusBadge(status: agent.agentStatus)
-                    }.font(.system(size: 10)).foregroundStyle(palette.color("secondary_text"))
-                }
-            }.padding(8).padding(.leading, 16).contentShape(Rectangle())
-                .background(devices.selectedDeviceID == session.profile.id && session.selectedPane == agent.paneID ? palette.color("active_row", fallback: palette.color("accent").opacity(0.12)) : .clear, in: RoundedRectangle(cornerRadius: 7))
-        }.buttonStyle(.plain).disabled(!session.connected)
-            .accessibilityLabel("\(agent.displayName), \(agent.agentStatus.label)")
-            .accessibilityAddTraits(devices.selectedDeviceID == session.profile.id && session.selectedPane == agent.paneID ? .isSelected : [])
+    @ViewBuilder private func agentRow(_ agent: Agent, session: SessionStore) -> some View {
+        let configuredRows = session.agentSidebarRows[agent.id]
+        if configuredRows?.isEmpty != true {
+            Button { devices.select(session); session.revealAgent(agent) } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let rows = configuredRows {
+                        SidebarRowView(rows: rows, rowGap: session.appearanceStore.sidebarConfiguration?.agents?.rowGap ?? 0)
+                    } else {
+                        HStack {
+                            Image(systemName: "sparkles").foregroundStyle(palette.color("accent"))
+                            Text(agent.displayName).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }.font(.system(size: 12, weight: .medium))
+                        HStack {
+                            Text(session.workspaces.first { $0.id == agent.workspaceID }?.label ?? "Space").lineLimit(1)
+                            Spacer(minLength: 0)
+                            StatusBadge(status: agent.agentStatus)
+                        }.font(.system(size: 10)).foregroundStyle(palette.color("secondary_text"))
+                    }
+                }.padding(8).padding(.leading, 16).contentShape(Rectangle())
+                    .background(devices.selectedDeviceID == session.profile.id && session.selectedPane == agent.paneID ? palette.color("active_row", fallback: palette.color("accent").opacity(0.12)) : .clear, in: RoundedRectangle(cornerRadius: 7))
+            }.buttonStyle(.plain).disabled(!session.connected)
+                .accessibilityAddTraits(devices.selectedDeviceID == session.profile.id && session.selectedPane == agent.paneID ? .isSelected : [])
+        }
     }
 }

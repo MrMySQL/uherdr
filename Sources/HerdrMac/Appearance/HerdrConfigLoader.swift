@@ -7,6 +7,15 @@ enum HerdrConfigLoader {
     static func load(url: URL) async throws -> HerdrAppearanceConfig {
         try await Task.detached(priority: .userInitiated) {
             guard url.isFileURL else { throw HerdrError.message("Choose a local TOML file") }
+            // Some devices can block even with O_NONBLOCK. Reject them before open;
+            // fstat below still validates the descriptor if the path changes meanwhile.
+            var pathInfo = stat()
+            guard stat(url.path, &pathInfo) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            guard (pathInfo.st_mode & S_IFMT) == S_IFREG else {
+                throw HerdrError.message("Expected a regular TOML file")
+            }
             let fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
             guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
             let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)

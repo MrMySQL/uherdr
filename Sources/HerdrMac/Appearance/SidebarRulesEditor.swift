@@ -103,10 +103,10 @@ struct SidebarRulesEditor: View {
         let occurrence = rows![row][index]
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                TextField("Token or $metadata", text: Binding(get: { rows![row][index].token }, set: { text in edit(row, index) { $0.token = text } }))
+                TextField("Token or $metadata", text: Binding(get: { rows![row][index].token }, set: { text in replaceToken(row, index, with: text) }))
                 Menu("Built-in") {
                     ForEach(target == "agents" ? SidebarConfiguration.agentTokens : SidebarConfiguration.spaceTokens, id: \.self) { token in
-                        Button(token) { edit(row, index) { $0.token = token } }
+                        Button(token) { replaceToken(row, index, with: token) }
                     }
                 }.fixedSize()
                 Button("↑") { var next = rows!; next[row].swapAt(index, index - 1); setRows(next) }.disabled(index == 0).help("Move token earlier")
@@ -127,6 +127,15 @@ struct SidebarRulesEditor: View {
 
     private func edit(_ row: Int, _ token: Int, _ update: (inout SidebarOccurrence) -> Void) {
         var next = rows!; update(&next[row][token]); setRows(next)
+    }
+    private func replaceToken(_ row: Int, _ index: Int, with token: String) {
+        edit(row, index) { $0 = Self.replacingToken(in: $0, with: token) }
+    }
+    static func replacingToken(in occurrence: SidebarOccurrence, with token: String) -> SidebarOccurrence {
+        var next = occurrence
+        next.token = token
+        if ["state_icon", "git_status"].contains(token) { next.rules.removeAll() }
+        return next
     }
     private func setRows(_ rows: [[SidebarOccurrence]]?) {
         var next = section

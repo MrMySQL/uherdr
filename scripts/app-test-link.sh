@@ -26,6 +26,12 @@ app_test_append_object() {
 }
 if [ "$APP_TEST_LINK_LAYOUT" = swiftpm ]; then
     while IFS= read -r object || [ -n "$object" ]; do
+        # SwiftPM emits one path per line, but shell-quotes paths with special
+        # characters (for example TOMLKit's Date&Time objects). Decode those
+        # records without splitting ordinary, unquoted paths containing spaces.
+        case "$object" in
+            \'*|\"*) object="$(printf '%s\n' "$object" | xargs -n 1 printf '%s\n')" ;;
+        esac
         app_test_append_object "$object"
     done < "$APP_TEST_LINK_FILE"
 else

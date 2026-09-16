@@ -11,6 +11,8 @@ import HerdrCore
         setbuf(stdout, nil)
         Task { @MainActor in
             do {
+                try sidebarRowRenderingLimits()
+                try sidebarTokenRuleCompatibility()
                 try await sidebarEditorControls()
                 try await settingsPresetControls()
                 try await retainedAppearance(socket: CommandLine.arguments[1], executable: CommandLine.arguments[2])
@@ -19,6 +21,35 @@ import HerdrCore
             } catch { print("FAIL: \(error)"); exit(1) }
         }
         NSApp.run()
+    }
+
+    @MainActor static func sidebarRowRenderingLimits() throws {
+        let section = SidebarSection(rows: [
+            [SidebarOccurrence(token: "workspace")],
+            [SidebarOccurrence(token: "state_text")],
+        ])
+        let rows = section.resolve(values: ["workspace": "Production", "state_text": "Working"], status: .working)
+        let regular = NSHostingView(rootView: SidebarRowView(rows: rows, rowGap: 4).fixedSize())
+        let extreme = NSHostingView(rootView: SidebarRowView(rows: rows, rowGap: .max).fixedSize())
+        regular.layoutSubtreeIfNeeded()
+        extreme.layoutSubtreeIfNeeded()
+        guard extreme.fittingSize.height == regular.fittingSize.height, extreme.fittingSize.height < 100 else {
+            throw HerdrError.message("An imported row gap can make the mounted sidebar unreasonably tall")
+        }
+    }
+
+    @MainActor static func sidebarTokenRuleCompatibility() throws {
+        let rule = SidebarRule(condition: .contains("prod"), style: SidebarStyle(bold: true))
+        let original = SidebarOccurrence(token: "workspace", rules: [rule])
+        for token in ["state_icon", "git_status"] {
+            let changed = SidebarRulesEditor.replacingToken(in: original, with: token)
+            guard changed.token == token, changed.rules.isEmpty else {
+                throw HerdrError.message("Changing to \(token) retained rules that the format rejects")
+            }
+        }
+        guard SidebarRulesEditor.replacingToken(in: original, with: "state_text").rules == [rule] else {
+            throw HerdrError.message("Changing between rule-bearing tokens discarded compatible rules")
+        }
     }
 
     @MainActor static func sidebarEditorControls() async throws {
@@ -40,11 +71,10 @@ import HerdrCore
         defer { window.orderOut(nil); window.contentView = nil }
         for source in [AppearanceThemeSource.herdrConfig, .native] {
             if source == .native { try store.copySidebarToNative() }
-            try await Task.sleep(for: .milliseconds(200))
-            host.layoutSubtreeIfNeeded()
-            let controls = descendants(host).compactMap { $0 as? NSPopUpButton }.filter { $0.itemTitles.contains("Inherit") }
-            guard !controls.isEmpty && controls.allSatisfy({ $0.isEnabled == (source == .native) }) else {
-                throw HerdrError.message("Sidebar style controls must be read-only until copied to Native")
+            try await wait("sidebar style controls update for \(source.rawValue)") {
+                host.layoutSubtreeIfNeeded()
+                let controls = descendants(host).compactMap { $0 as? NSPopUpButton }.filter { $0.itemTitles.contains("Inherit") }
+                return !controls.isEmpty && controls.allSatisfy { $0.isEnabled == (source == .native) }
             }
             if let directory = ProcessInfo.processInfo.environment["HERDR_SETTINGS_CAPTURE_DIR"] {
                 let path = URL(fileURLWithPath: directory).appendingPathComponent("sidebar-\(source.rawValue)-native-cache.png").path
@@ -82,15 +112,11 @@ import HerdrCore
                 rows = [[{token="workspace",rules=[{contains="prod",fg="#ff8040",bold=true,hide=false}]}]]
                 """))
             }
-            try await Task.sleep(for: .milliseconds(150))
-            host.layoutSubtreeIfNeeded()
-            let pickers = descendants(host).compactMap { $0 as? NSPopUpButton }
-                .filter { $0.itemTitles.contains("Nord") }
-            guard pickers.count == 3 else {
-                throw HerdrError.message("Expected three mounted theme preset controls; found \(pickers.count)")
-            }
-            guard pickers.allSatisfy(\.isEnabled) else {
-                throw HerdrError.message("Native preset controls are disabled for \(source.rawValue)")
+            try await wait("three enabled theme preset controls for \(source.rawValue)") {
+                host.layoutSubtreeIfNeeded()
+                let pickers = descendants(host).compactMap { $0 as? NSPopUpButton }
+                    .filter { $0.itemTitles.contains("Nord") }
+                return pickers.count == 3 && pickers.allSatisfy(\.isEnabled)
             }
             if let directory = ProcessInfo.processInfo.environment["HERDR_SETTINGS_CAPTURE_DIR"],
                let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
@@ -299,8 +325,10 @@ import HerdrCore
             store.appearance = mode
             try store.appearanceStore.setPreset(preset)
             update(mode == "dark" ? .dark : .light)
-            try await Task.sleep(for: .milliseconds(100))
-            guard try selection() == selectedText, hidden.controller === controllers[first.id],
+            try await wait("native selection survives \(mode) \(preset)") {
+                (try? selection()) == selectedText
+            }
+            guard hidden.controller === controllers[first.id],
                   delegates[first.id]!.controller.generation == generations[first.id] else {
                 throw HerdrError.message("Theme change replaced selection, renderer, or writable controller")
             }

@@ -86,7 +86,7 @@ public struct HerdrAppearanceConfig: Codable, Equatable, Sendable {
         var sidebar: SidebarConfiguration?
         if let rawUI = root["ui"], rawUI.type == .table, let ui = rawUI.table, let raw = ui["sidebar"] {
             guard raw.type == .table, let table = raw.table else { throw failure("ui.sidebar", "expected a table") }
-            let rawSidebar = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(table))
+            let rawSidebar = jsonValue(table)
             sidebar = try SidebarConfiguration.parse(rawSidebar, diagnostics: &messages)
         }
         return try Self(themeName: name("name") ?? "catppuccin", autoSwitch: autoSwitch,
@@ -97,6 +97,23 @@ public struct HerdrAppearanceConfig: Codable, Equatable, Sendable {
 
     private static func failure(_ path: String, _ message: String) -> HerdrError {
         .message("\(path): \(message)")
+    }
+
+    /// Bridges TOML without JSONEncoder so non-finite values reach the typed validator.
+    /// TOML date/time values remain non-strings, ensuring supported fields reject them.
+    private static func jsonValue(_ value: TOMLValueConvertible) -> JSONValue {
+        switch value.type {
+        case .table:
+            var fields: [String: JSONValue] = [:]
+            for (key, value) in value.table! { fields[key] = jsonValue(value) }
+            return .object(fields)
+        case .array: return .array(value.array!.map(jsonValue))
+        case .string: return .string(value.string!)
+        case .int: return .number(Double(value.int!))
+        case .double: return .number(value.double!)
+        case .bool: return .bool(value.bool!)
+        case .date, .time, .dateTime: return .null
+        }
     }
 
 }

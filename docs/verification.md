@@ -285,3 +285,46 @@ run observed exact `history-line-1` and `history-line-120` records while
 preserving the live shell, selection, renderer and writable controller. The
 full suite exercised all shared-helper consumers. Existing linker warning
 noise remained unchanged.
+
+
+## PR #23 review follow-up — 2026-09-17
+
+The nine review findings were addressed: configuration-matched release test
+builds, complete sidebar accessibility content, condition-based appearance test
+waits, refusal of lossy imported-sidebar copies, omitted empty configured rows,
+bounded rendered row spacing, tolerant unknown non-finite TOML fields, rule
+cleanup when switching to non-text tokens, and pre-open regular-file validation.
+The test linker also now decodes quoted SwiftPM object paths, including TOMLKit's
+`Date&Time` filenames, while preserving unquoted paths containing spaces.
+
+Regression evidence: the unknown TOML field failed with
+`JSONEncoder.invalidValue(-inf)` before the direct bridge; the native-copy test
+failed with `Lossy sidebar copy was accepted` before the guard. Both core and
+appearance-store suites passed afterward, including persisted copy diagnostics,
+native-state preservation, `/dev/null`, and symlink-to-device rejection. The
+quoted-path fixture failed before the linker fix and passed afterward. The
+release pane-drag runner passed its transfer, identity, docking, failure, and
+selection-race checks.
+
+Validation used Apple Swift 6.4 with the installed macOS 26.5 SDK and SwiftPM's
+native build system. Temporary process-local wrappers supplied
+`--build-system native --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`
+to SwiftPM and `-sdk` to `swiftc`; no system toolchain setting changed. The default
+macOS 27 Command Line Tools attempt failed because its SwiftUI macro plugin was
+missing. Existing native-build deprecation/toolchain warnings remain.
+
+A mounted accessibility probe exposed the SwiftUI `NSHostingView` as an `AXGroup`
+with no accessible children, even in a frontmost window. The incomplete probe
+was removed; the row-label and empty-button fixes were code-reviewed, but this
+run does not claim VoiceOver or mounted accessibility-tree verification.
+
+Final `bash scripts/test-appearance.sh` and `bash scripts/test.sh` runs both
+exited 0. Mounted appearance checks passed for bounded row spacing, token-rule
+compatibility, read-only/imported controls, enabled preset selection, unchanged
+terminal/controller identity, exact clipboard selection, shell PID, 120-line
+scrollback, and subsequent input. Aggregate validation passed core/live API,
+hotkeys, search, agent-worktree fixtures, pane transfers, keyboard/paste/file
+handling, retained-tab performance, terminal streaming, and multi-device/SSH
+routing. Tests used disposable local sessions with `HERDR_TEST_PASTE_AGENTS`
+unset. `git diff --check` passed, and independent code review found no remaining
+source issues.

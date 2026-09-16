@@ -5,12 +5,16 @@ import SwiftUI
 struct SidebarRowView: View {
     let rows: [[SidebarTokenRun]]
     var rowGap: UInt16 = 0
+    private static let maximumRenderedRowGap: UInt16 = 4
     @Environment(\.resolvedAppearance) private var appearance
     @Environment(\.colorScheme) private var colorScheme
     private var palette: NativePalette { NativePalette(snapshot: appearance, colorScheme: colorScheme) }
+    private var renderedRowSpacing: CGFloat {
+        4 + CGFloat(min(rowGap, Self.maximumRenderedRowGap)) * 12
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4 + CGFloat(rowGap) * 12) {
+        VStack(alignment: .leading, spacing: renderedRowSpacing) {
             ForEach(rows.indices, id: \.self) { index in
                 HStack(spacing: 0) {
                     ForEach(rows[index].indices, id: \.self) { offset in

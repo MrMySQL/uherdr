@@ -40,6 +40,27 @@ enum HerdrAppearanceConfigTests {
         precondition(restored == value)
         let defaults = try HerdrAppearanceConfig.parse("[server]\nport = 2")
         precondition(defaults.themeName == "catppuccin" && !defaults.autoSwitch)
+        let forwardCompatible = try HerdrAppearanceConfig.parse("""
+        [ui.sidebar.spaces]
+        rows = [["workspace"]]
+        future_nan = nan
+        future_inf = inf
+        [ui.sidebar.future]
+        future_negative_inf = -inf
+        """)
+        precondition(forwardCompatible.sidebar?.spaces?.rows == [[SidebarOccurrence(token: "workspace")]])
+        precondition(forwardCompatible.diagnostics == [
+            "Unsupported ui.sidebar.future; ignored.",
+            "Unsupported ui.sidebar.spaces.future_inf; ignored.",
+            "Unsupported ui.sidebar.spaces.future_nan; ignored.",
+        ])
+        for (bad, path) in [
+            ("[ui.sidebar.spaces]\nrow_gap = inf", "ui.sidebar.spaces.row_gap"),
+            ("[ui.sidebar.spaces]\nrows = [[{ token = 'workspace', rules = [{ gt = nan }] }]]", "ui.sidebar.spaces.rows[0][0].rules[0]"),
+        ] {
+            do { _ = try HerdrAppearanceConfig.parse(bad); preconditionFailure("Accepted non-finite supported value: \(bad)") }
+            catch { precondition(error.localizedDescription.contains(path), "Diagnostic did not identify \(path): \(error)") }
+        }
         for bad in [
             "[ui.sidebar.agents]\nrows = [[\"unsupported_token\"]]",
             "[theme", "[theme]\nname = 'uherdr'", "[theme]\nname = 'typo'", "[theme]\nauto_switch = 'true'",

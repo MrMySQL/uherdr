@@ -34,7 +34,8 @@ cp "$REPOSITORY_ROOT/Tests/Fixtures/app-test-link-swiftpm.txt" \
 source "$HELPER"
 assert_objects "SwiftPM newline layout" \
     "/tmp/Modern Build/AppHotkeys.swift.o" \
-    "/tmp/Modern Build/WorkspaceView.swift.o"
+    "/tmp/Modern Build/WorkspaceView.swift.o" \
+    "/tmp/Modern Build/Date&Time.swift.o"
 
 LEGACY_ROOT="$FIXTURE_ROOT/Legacy Checkout"
 FIXTURE_BIN_PATH="$LEGACY_ROOT/products"

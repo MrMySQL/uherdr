@@ -14,6 +14,7 @@ struct AppearanceStoreTests {
         try testContrastPreview()
         try testSidebarPaneTitleFallback()
         try testSidebarCopyAndDeviceCache()
+        try testSidebarCopyRejectsUnsupportedImportedFields()
         testLegacyMigrationAndSecondInitialization()
         testInvalidPersistenceIsPreservedUntilAnEdit()
         try testResolutionAndNoOpPublication()
@@ -131,6 +132,34 @@ struct AppearanceStoreTests {
     }
 
     @MainActor
+    private static func testSidebarCopyRejectsUnsupportedImportedFields() throws {
+        let suite = "uherdr.sidebar-lossy-copy.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let native = SidebarConfiguration(spaces: SidebarSection(rows: [[SidebarOccurrence(token: "branch")]]))
+        let store = AppearanceStore(defaults: defaults)
+        try store.setNativeSidebar(native)
+        let imported = try HerdrAppearanceConfig.parse("""
+        [ui.sidebar.spaces]
+        rows = [["workspace"]]
+        future_metric = nan
+        """)
+        try store.applyImportedSettings(imported)
+
+        let restarted = AppearanceStore(defaults: defaults)
+        precondition(restarted.themeSource == .herdrConfig)
+        do {
+            try restarted.copySidebarToNative()
+            preconditionFailure("Lossy sidebar copy was accepted")
+        } catch {
+            precondition(error.localizedDescription.contains("ui.sidebar.spaces.future_metric"), "Copy diagnostic must identify the unsupported persisted field: \(error)")
+        }
+        precondition(restarted.themeSource == .herdrConfig && restarted.nativeSidebar == native,
+                     "Rejected copy must preserve imported selection and the previous native sidebar")
+        print("PASS: sidebar copy blocks persisted unsupported fields with a precise diagnostic and preserves native state")
+    }
+
+    @MainActor
     private static func testReadOnlyImportAndLastGoodState() async throws {
         let suite = "uherdr.import.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -177,6 +206,15 @@ struct AppearanceStoreTests {
         await store.loadHerdrConfig(url: FileManager.default.temporaryDirectory)
         precondition(store.lastGoodImportedSettings == lastGood && store.resolvedSnapshot == snapshot)
         precondition(store.herdrConfigPath == url.path, "Failed file selection must preserve last-good path")
+        for deviceURL in [URL(fileURLWithPath: "/dev/null"), url] {
+            if deviceURL == url {
+                try FileManager.default.createSymbolicLink(at: url, withDestinationURL: URL(fileURLWithPath: "/dev/null"))
+            }
+            await store.loadHerdrConfig(url: deviceURL)
+            precondition(store.lastGoodImportedSettings == lastGood && store.resolvedSnapshot == snapshot)
+            precondition(store.herdrConfigPath == url.path, "Rejected device selection must preserve last-good path")
+            precondition(store.importDiagnostic?.contains(deviceURL.path) == true)
+        }
         let restarted = AppearanceStore(defaults: defaults)
         precondition(restarted.lastGoodImportedSettings == lastGood && restarted.resolvedSnapshot == snapshot)
     }

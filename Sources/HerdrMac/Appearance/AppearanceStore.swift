@@ -153,6 +153,12 @@ final class AppearanceStore: ObservableObject {
     }
 
     func copySidebarToNative() throws {
+        let unsupported = lastGoodImportedSettings?.diagnostics?.filter {
+            $0.hasPrefix("Unsupported ui.sidebar.")
+        } ?? []
+        guard unsupported.isEmpty else {
+            throw HerdrError.message("Cannot copy this sidebar to Native because it contains unsupported fields: \(unsupported.joined(separator: " "))")
+        }
         try setNativeSidebar(lastGoodImportedSettings?.sidebar)
     }
 
