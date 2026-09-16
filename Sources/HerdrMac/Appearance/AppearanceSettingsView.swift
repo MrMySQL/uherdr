@@ -63,7 +63,6 @@ struct AppearanceSettingsView: View {
                     ForEach(BuiltInThemes.names, id: \.self) { Text(themeLabel($0)).tag($0) }
                 }
             }
-            .disabled(store.themeSource == .herdrConfig)
 
             HStack {
                 Text("Terminal text").font(.callout)

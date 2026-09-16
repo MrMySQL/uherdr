@@ -11,12 +11,59 @@ import HerdrCore
         setbuf(stdout, nil)
         Task { @MainActor in
             do {
+                try await settingsPresetControls()
                 try await retainedAppearance(socket: CommandLine.arguments[1], executable: CommandLine.arguments[2])
                 print("PASS: mounted terminal appearance regressions")
                 exit(0)
             } catch { print("FAIL: \(error)"); exit(1) }
         }
         NSApp.run()
+    }
+
+    @MainActor static func settingsPresetControls() async throws {
+        let suite = "dev.herdr.settings-mounted.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AppearanceStore(defaults: defaults)
+        let host = NSHostingView(rootView: AppearanceSettingsView(store: store).padding(28)
+            .background(Color(nsColor: .windowBackgroundColor)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 680),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        for source in [AppearanceThemeSource.native, .herdrConfig] {
+            if source == .herdrConfig {
+                try store.applyImportedSettings(try HerdrAppearanceConfig.parse("""
+                [theme]
+                name = "catppuccin"
+                auto_switch = true
+                light_name = "catppuccin-latte"
+                [ui.sidebar.spaces]
+                rows = [["workspace"]]
+                """))
+            }
+            try await Task.sleep(for: .milliseconds(150))
+            host.layoutSubtreeIfNeeded()
+            let pickers = descendants(host).compactMap { $0 as? NSPopUpButton }
+                .filter { $0.itemTitles.contains("Nord") }
+            guard pickers.count == 3 else {
+                throw HerdrError.message("Expected three mounted theme preset controls; found \(pickers.count)")
+            }
+            guard pickers.allSatisfy(\.isEnabled) else {
+                throw HerdrError.message("Native preset controls are disabled for \(source.rawValue)")
+            }
+            if let directory = ProcessInfo.processInfo.environment["HERDR_SETTINGS_CAPTURE_DIR"],
+               let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                if let data = bitmap.representation(using: .png, properties: [:]) {
+                    let url = URL(fileURLWithPath: directory).appendingPathComponent("settings-\(source.rawValue)-native-cache.png")
+                    try data.write(to: url)
+                    print("CAPTURE: mounted settings view \(url.path)")
+                }
+            }
+        }
+        print("PASS: all three mounted native preset controls remain enabled for Native and Herdr config sources")
     }
 
     @MainActor static func retainedAppearance(socket: String, executable: String) async throws {

@@ -15,6 +15,7 @@ struct AppearanceStoreTests {
         try testImportedFixedThemeResolutionBoundary()
         testSharedSessionAndDevicePublication()
         try await testReadOnlyImportAndLastGoodState()
+        try await testSuspendedImportCannotOverrideNativeSelection()
         try testExplicitNamesAndTerminalSource()
         print("PASS: appearance migration, import atomicity, bounded regular-file loading, unchanged TOML, offline persistence, source precedence, terminal palette, shared publication, and device isolation")
     }
@@ -68,13 +69,28 @@ struct AppearanceStoreTests {
         precondition(store.herdrConfigPath == url.path, "Failed file selection must preserve last-good path")
         let restarted = AppearanceStore(defaults: defaults)
         precondition(restarted.lastGoodImportedSettings == lastGood && restarted.resolvedSnapshot == snapshot)
-        // Cancellation and later source selections supersede suspended I/O.
-        try data.write(to: url)
-        let pending = Task { await store.loadHerdrConfig(url: url) }
-        await Task.yield()
+    }
+
+    @MainActor
+    private static func testSuspendedImportCannotOverrideNativeSelection() async throws {
+        let suite = "uherdr.suspended-import.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let gate = SuspendedConfigLoad()
+        let store = AppearanceStore(defaults: defaults, configLoader: { url in try await gate.load(url) })
+        let previous = ImportedAppearanceSettings(themeName: "nord")
+        try store.applyImportedSettings(previous)
+        let pending = Task { await store.loadHerdrConfig(url: URL(fileURLWithPath: "/tmp/suspended-config.toml")) }
+        await gate.waitUntilStarted()
+        precondition(store.isLoadingConfig, "Loader must still be suspended when the source changes")
         store.setThemeSource(.native)
+        let selected = store.resolvedSnapshot
+        await gate.complete(ImportedAppearanceSettings(themeName: "catppuccin"))
         await pending.value
-        precondition(store.themeSource == .native)
+        precondition(store.themeSource == .native, "A stale in-flight import replaced the later Native selection")
+        precondition(store.resolvedSnapshot == selected && store.lastGoodImportedSettings == previous)
+        precondition(store.herdrConfigPath == nil && !store.isLoadingConfig)
+        print("PASS: a deterministically suspended import cannot override a later Native selection")
     }
 
     @MainActor
@@ -291,5 +307,29 @@ struct AppearanceStoreTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
         try body(defaults)
+    }
+}
+
+/// Test-only gate: the loader cannot finish until the test explicitly releases it.
+private actor SuspendedConfigLoad {
+    private var pending: CheckedContinuation<HerdrAppearanceConfig, Error>?
+    private var started: CheckedContinuation<Void, Never>?
+
+    func load(_ url: URL) async throws -> HerdrAppearanceConfig {
+        try await withCheckedThrowingContinuation { continuation in
+            pending = continuation
+            started?.resume()
+            started = nil
+        }
+    }
+
+    func waitUntilStarted() async {
+        if pending != nil { return }
+        await withCheckedContinuation { started = $0 }
+    }
+
+    func complete(_ value: HerdrAppearanceConfig) {
+        pending?.resume(returning: value)
+        pending = nil
     }
 }

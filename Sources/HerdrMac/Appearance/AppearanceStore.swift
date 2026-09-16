@@ -88,10 +88,17 @@ final class AppearanceStore: ObservableObject {
         return lightPreset
     }
 
+    private let configLoader: @Sendable (URL) async throws -> HerdrAppearanceConfig
     private let defaults: UserDefaults
     private let encoder = JSONEncoder()
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        configLoader: @escaping @Sendable (URL) async throws -> HerdrAppearanceConfig = {
+            try await HerdrConfigLoader.load(url: $0)
+        }
+    ) {
+        self.configLoader = configLoader
         self.defaults = defaults
         herdrConfigPath = defaults.string(forKey: PreferenceKey.herdrConfigPath)
         mode = defaults.string(forKey: PreferenceKey.mode).flatMap(AppearanceMode.init(rawValue:)) ?? .system
@@ -260,7 +267,7 @@ final class AppearanceStore: ObservableObject {
         let generation = loadGeneration
         publishChange { isLoadingConfig = true }
         do {
-            let settings = try await HerdrConfigLoader.load(url: url)
+            let settings = try await configLoader(url)
             guard generation == loadGeneration, !Task.isCancelled else {
                 if generation == loadGeneration { publishChange { isLoadingConfig = false } }
                 return
