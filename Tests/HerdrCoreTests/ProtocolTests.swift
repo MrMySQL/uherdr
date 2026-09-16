@@ -17,6 +17,7 @@ import HerdrCore
         print("PASS: 10 protocol, layout, framing, selection, and connection tests")
         try await DeviceProfileTests.run()
         try await FileTransferTests.run()
+        try AppearanceTests.run()
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--live" { try await LiveTests.run(socket: CommandLine.arguments[2]) }
     }
     func testNestedLayoutPreservesDirectionRatiosAndPaneOrder() throws {
