@@ -84,6 +84,12 @@ import HerdrCore
         let baseline = publishedRoots[first.tabID]!.count - baselineStart
         print("BASELINE: hidden cosmetic root publications = \(baseline) across 3 metadata updates")
         guard baseline == 0 else { throw HerdrError.message("Hidden metadata roots regressed from the recorded zero-publication baseline") }
+        try store.appearanceStore.applyImportedSettings(ImportedAppearanceSettings(themeName: "terminal", autoSwitch: true))
+        update()
+        guard hidden.controller!.renderedConfig == oldConfig, hidden.controller!.theme == theme,
+              visible.controller === controllers[second.id] else {
+            throw HerdrError.message("Reading embedded ANSI colors changed an active engine")
+        }
         let paletteStart = publishedRoots[first.tabID]!.count
         for color in [ColorValue.rgb(180, 40, 80), .rgb(70, 130, 210), .rgb(90, 200, 100)] {
             store.appearanceStore.setNativeOverride(color, for: "accent", scope: .common)

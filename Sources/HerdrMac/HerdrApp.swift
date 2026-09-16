@@ -16,6 +16,9 @@ struct HerdrApp: App {
     var body: some Scene {
         Window("Herdr", id: "main") {
             WorkspaceView(store: store, devices: devices)
+                .task {
+                    if appearance.themeSource == .herdrConfig { await appearance.reloadHerdrConfig() }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in devices.stop() }
         }
         .defaultSize(width: 1280, height: 820)

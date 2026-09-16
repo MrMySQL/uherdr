@@ -1,4 +1,5 @@
 import Combine
+import Darwin
 import Foundation
 import HerdrCore
 @testable import HerdrMac
@@ -6,14 +7,95 @@ import HerdrCore
 @main
 struct AppearanceStoreTests {
     @MainActor
-    static func main() throws {
+    static func main() async throws {
         testLegacyMigrationAndSecondInitialization()
         testInvalidPersistenceIsPreservedUntilAnEdit()
         try testResolutionAndNoOpPublication()
         try testMainPresetSelection()
         try testImportedFixedThemeResolutionBoundary()
         testSharedSessionAndDevicePublication()
-        print("PASS: appearance migration, invalid fallback, resolution, shared publication, and device isolation")
+        try await testReadOnlyImportAndLastGoodState()
+        try testExplicitNamesAndTerminalSource()
+        print("PASS: appearance migration, import atomicity, bounded regular-file loading, unchanged TOML, offline persistence, source precedence, terminal palette, shared publication, and device isolation")
+    }
+
+    @MainActor
+    private static func testReadOnlyImportAndLastGoodState() async throws {
+        let suite = "uherdr.import.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let data = Data("[theme]\nname = 'nord'\nfuture = true\n[theme.custom]\naccent = '#123456'\n[ui.sidebar.spaces]\nrows = [['workspace']]".utf8)
+        try data.write(to: url)
+        let store = AppearanceStore(defaults: defaults)
+        await store.loadHerdrConfig(url: url)
+        precondition(store.themeSource == .herdrConfig && store.herdrConfigPath == url.path)
+        precondition(store.resolvedSnapshot.dark.colors["accent"] == .rgb(18, 52, 86))
+        let unchanged = try Data(contentsOf: url)
+        precondition(unchanged == data, "Import must never write the source TOML")
+        await store.reloadHerdrConfig()
+        let reloadedBytes = try Data(contentsOf: url)
+        precondition(reloadedBytes == data, "Reload must never write the source TOML")
+        precondition(store.lastGoodImportedSettings?.sidebar != nil)
+        precondition(store.lastGoodImportedSettings?.diagnostics?.count == 2)
+        store.setNativeOverride(.rgb(1, 2, 3), for: "accent", scope: .common)
+        precondition(store.resolvedSnapshot.dark.colors["accent"] == .rgb(1, 2, 3))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        let beforeUnreadable = store.resolvedSnapshot
+        await store.reloadHerdrConfig()
+        precondition(store.resolvedSnapshot == beforeUnreadable && store.importDiagnostic?.contains(url.path) == true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        let lastGood = store.lastGoodImportedSettings
+        let snapshot = store.resolvedSnapshot
+        for invalid in [Data("[theme]\nname = 'oops'".utf8), Data(repeating: 35, count: 1_048_577), Data([0xff])] {
+            try invalid.write(to: url)
+            await store.reloadHerdrConfig()
+            precondition(store.lastGoodImportedSettings == lastGood && store.resolvedSnapshot == snapshot)
+            precondition(store.importDiagnostic?.contains(url.path) == true)
+        }
+        try FileManager.default.removeItem(at: url)
+        await store.reloadHerdrConfig()
+        precondition(store.lastGoodImportedSettings == lastGood && store.resolvedSnapshot == snapshot)
+        // A FIFO must be rejected without waiting for a writer.
+        precondition(mkfifo(url.path, 0o600) == 0)
+        await store.reloadHerdrConfig()
+        precondition(store.lastGoodImportedSettings == lastGood && store.resolvedSnapshot == snapshot)
+        try FileManager.default.removeItem(at: url)
+        // A directory is not a readable configuration file.
+        await store.loadHerdrConfig(url: FileManager.default.temporaryDirectory)
+        precondition(store.lastGoodImportedSettings == lastGood && store.resolvedSnapshot == snapshot)
+        precondition(store.herdrConfigPath == url.path, "Failed file selection must preserve last-good path")
+        let restarted = AppearanceStore(defaults: defaults)
+        precondition(restarted.lastGoodImportedSettings == lastGood && restarted.resolvedSnapshot == snapshot)
+        // Cancellation and later source selections supersede suspended I/O.
+        try data.write(to: url)
+        let pending = Task { await store.loadHerdrConfig(url: url) }
+        await Task.yield()
+        store.setThemeSource(.native)
+        await pending.value
+        precondition(store.themeSource == .native)
+    }
+
+    @MainActor
+    private static func testExplicitNamesAndTerminalSource() throws {
+        try withDefaults { defaults in
+            let store = AppearanceStore(defaults: defaults)
+            try store.applyImportedSettings(ImportedAppearanceSettings(
+                themeName: "catppuccin", autoSwitch: true,
+                lightName: "catppuccin", darkName: "catppuccin-latte"))
+            precondition(store.resolvedSnapshot.light.colors["accent"] == .rgb(137, 180, 250))
+            precondition(store.resolvedSnapshot.dark.colors["accent"] == .rgb(30, 102, 245))
+            try store.applyImportedSettings(ImportedAppearanceSettings(themeName: "terminal", autoSwitch: false))
+            let snapshot = store.resolvedSnapshot
+            precondition(snapshot.light.colors["accent"] != snapshot.dark.colors["accent"])
+            precondition(snapshot.light.colors["panel_bg"] == .reset)
+            precondition(snapshot.dark.colors["text"] == .reset)
+            let before = EmbeddedTerminalPalette.theme
+            store.setNativeOverride(.rgb(20, 30, 40), for: "accent", scope: .common)
+            precondition(EmbeddedTerminalPalette.theme == before)
+            precondition(store.resolvedSnapshot.dark.colors["accent"] == .rgb(20, 30, 40))
+        }
     }
 
     @MainActor

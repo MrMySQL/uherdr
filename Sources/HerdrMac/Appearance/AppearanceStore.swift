@@ -38,27 +38,7 @@ struct NativeAppearanceOverrides: Codable, Equatable, Sendable {
 
 /// The normalized, last-known-good subset loaded from a Herdr configuration.
 /// Task 4 owns parsing and diagnostics; this value is the persistence boundary.
-struct ImportedAppearanceSettings: Codable, Equatable, Sendable {
-    var themeName: String
-    var autoSwitch: Bool
-    var commonOverrides: ThemeOverrides
-    var lightOverrides: ThemeOverrides
-    var darkOverrides: ThemeOverrides
-
-    init(
-        themeName: String,
-        autoSwitch: Bool = true,
-        commonOverrides: ThemeOverrides = [:],
-        lightOverrides: ThemeOverrides = [:],
-        darkOverrides: ThemeOverrides = [:]
-    ) {
-        self.themeName = themeName
-        self.autoSwitch = autoSwitch
-        self.commonOverrides = commonOverrides
-        self.lightOverrides = lightOverrides
-        self.darkOverrides = darkOverrides
-    }
-}
+typealias ImportedAppearanceSettings = HerdrAppearanceConfig
 
 struct ResolvedAppearanceSnapshot: Equatable, Sendable {
     let mode: AppearanceMode
@@ -81,14 +61,11 @@ final class AppearanceStore: ObservableObject {
         static let lightPreset = "appearance.lightPreset"
         static let darkPreset = "appearance.darkPreset"
         static let nativeOverrides = "appearance.nativeOverrides"
+        static let herdrConfigPath = "appearance.herdrConfigPath"
         static let lastGoodImportedSettings = "appearance.lastGoodImportedSettings"
     }
 
-    static let supportedOverrideRoles = [
-        "accent", "panel_bg", "sidebar_bg", "active_row_bg", "selection_bg",
-        "surface0", "surface1", "surface_dim", "overlay0", "overlay1", "text",
-        "subtext0", "mauve", "green", "yellow", "red", "blue", "teal", "peach",
-    ]
+    static let supportedOverrideRoles = HerdrAppearanceConfig.colorRoles
 
     private(set) var mode: AppearanceMode
     private(set) var fontSize: Double
@@ -99,6 +76,12 @@ final class AppearanceStore: ObservableObject {
     private(set) var lastGoodImportedSettings: ImportedAppearanceSettings?
     private(set) var resolvedSnapshot: ResolvedAppearanceSnapshot
     private(set) var revision = 0
+    private(set) var herdrConfigPath: String?
+    private(set) var importDiagnostic: String?
+    private(set) var isLoadingConfig = false
+    private var loadGeneration = 0
+    static let defaultHerdrConfigURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".config/herdr/config.toml")
 
     var unifiedPreset: String? {
         guard lightPreset == darkPreset else { return nil }
@@ -110,6 +93,7 @@ final class AppearanceStore: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        herdrConfigPath = defaults.string(forKey: PreferenceKey.herdrConfigPath)
         mode = defaults.string(forKey: PreferenceKey.mode).flatMap(AppearanceMode.init(rawValue:)) ?? .system
         if let number = defaults.object(forKey: PreferenceKey.fontSize) as? NSNumber,
            number.doubleValue.isFinite, (10...22).contains(number.doubleValue) {
@@ -163,6 +147,7 @@ final class AppearanceStore: ObservableObject {
 
     func setPreset(_ name: String) throws {
         _ = try BuiltInThemes.palette(named: name)
+        invalidateLoad()
         guard lightPreset != name || darkPreset != name || themeSource != .native else { return }
         publishChange {
             lightPreset = name
@@ -176,6 +161,7 @@ final class AppearanceStore: ObservableObject {
     }
 
     func setLightPreset(_ name: String) {
+        invalidateLoad()
         guard Self.validPreset(name) != nil,
               lightPreset != name || themeSource != .native else { return }
         publishChange {
@@ -188,6 +174,7 @@ final class AppearanceStore: ObservableObject {
     }
 
     func setDarkPreset(_ name: String) {
+        invalidateLoad()
         guard Self.validPreset(name) != nil,
               darkPreset != name || themeSource != .native else { return }
         publishChange {
@@ -230,14 +217,19 @@ final class AppearanceStore: ObservableObject {
     }
 
     func applyImportedSettings(_ settings: ImportedAppearanceSettings) throws {
-        _ = try BuiltInThemes.palette(named: settings.themeName)
-        let sanitized = ImportedAppearanceSettings(
-            themeName: settings.themeName,
-            autoSwitch: settings.autoSwitch,
-            commonOverrides: Self.sanitized(settings.commonOverrides),
-            lightOverrides: Self.sanitized(settings.lightOverrides),
-            darkOverrides: Self.sanitized(settings.darkOverrides)
-        )
+        try HerdrAppearanceConfig.validateThemeName(settings.themeName)
+        for name in [settings.lightName, settings.darkName].compactMap({ $0 }) {
+            try HerdrAppearanceConfig.validateThemeName(name)
+        }
+        guard ![settings.themeName, settings.lightName, settings.darkName].compactMap({ $0 })
+            .contains(where: { $0.lowercased() == "terminal" }) ||
+            (EmbeddedTerminalPalette.palette(for: .light) != nil && EmbeddedTerminalPalette.palette(for: .dark) != nil) else {
+            throw HerdrError.message("Could not read the embedded terminal ANSI palette")
+        }
+        var sanitized = settings
+        sanitized.commonOverrides = Self.sanitized(settings.commonOverrides)
+        sanitized.lightOverrides = Self.sanitized(settings.lightOverrides)
+        sanitized.darkOverrides = Self.sanitized(settings.darkOverrides)
         guard lastGoodImportedSettings != sanitized || themeSource != .herdrConfig else { return }
         publishChange {
             lastGoodImportedSettings = sanitized
@@ -249,6 +241,7 @@ final class AppearanceStore: ObservableObject {
     }
 
     func setThemeSource(_ source: AppearanceThemeSource) {
+        invalidateLoad()
         guard source != .herdrConfig || lastGoodImportedSettings != nil,
               themeSource != source else { return }
         publishChange {
@@ -256,6 +249,41 @@ final class AppearanceStore: ObservableObject {
             refreshSnapshot()
         }
         defaults.set(source.rawValue, forKey: PreferenceKey.themeSource)
+    }
+
+    func reloadHerdrConfig() async {
+        await loadHerdrConfig(url: herdrConfigPath.map { URL(fileURLWithPath: $0) } ?? Self.defaultHerdrConfigURL)
+    }
+
+    func loadHerdrConfig(url: URL) async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        publishChange { isLoadingConfig = true }
+        do {
+            let settings = try await HerdrConfigLoader.load(url: url)
+            guard generation == loadGeneration, !Task.isCancelled else {
+                if generation == loadGeneration { publishChange { isLoadingConfig = false } }
+                return
+            }
+            try applyImportedSettings(settings)
+            publishChange {
+                herdrConfigPath = url.path
+                importDiagnostic = settings.diagnostics?.joined(separator: "\n")
+                isLoadingConfig = false
+            }
+            defaults.set(url.path, forKey: PreferenceKey.herdrConfigPath)
+        } catch {
+            guard generation == loadGeneration else { return }
+            publishChange {
+                importDiagnostic = "\(url.path): \(error.localizedDescription)"
+                isLoadingConfig = false
+            }
+        }
+    }
+
+    private func invalidateLoad() {
+        loadGeneration += 1
+        if isLoadingConfig { publishChange { isLoadingConfig = false } }
     }
 
     private func publishChange(_ update: () -> Void) {
@@ -316,9 +344,15 @@ final class AppearanceStore: ObservableObject {
         let base: ThemePalette
         var layers: [ThemeOverrides] = []
         if source == .herdrConfig, let imported {
-            base = (try? imported.autoSwitch
-                ? BuiltInThemes.palette(named: imported.themeName, variant: variant)
-                : BuiltInThemes.palette(named: imported.themeName)) ?? fallbackPalette()
+            let explicit = variant == .light ? imported.lightName : imported.darkName
+            let name = imported.autoSwitch ? (explicit ?? imported.themeName) : imported.themeName
+            if name.lowercased() == "terminal" {
+                base = EmbeddedTerminalPalette.palette(for: variant) ?? fallbackPalette()
+            } else {
+                base = (try? imported.autoSwitch && explicit == nil
+                    ? BuiltInThemes.palette(named: name, variant: variant)
+                    : BuiltInThemes.palette(named: name)) ?? fallbackPalette()
+            }
             layers.append(imported.commonOverrides)
             if imported.autoSwitch {
                 layers.append(variant == .light ? imported.lightOverrides : imported.darkOverrides)
@@ -342,14 +376,15 @@ final class AppearanceStore: ObservableObject {
     }
 
     private static func validImportedSettings(_ settings: ImportedAppearanceSettings) -> ImportedAppearanceSettings? {
-        guard validPreset(settings.themeName) != nil else { return nil }
-        return ImportedAppearanceSettings(
-            themeName: settings.themeName,
-            autoSwitch: settings.autoSwitch,
-            commonOverrides: sanitized(settings.commonOverrides),
-            lightOverrides: sanitized(settings.lightOverrides),
-            darkOverrides: sanitized(settings.darkOverrides)
-        )
+        guard (try? HerdrAppearanceConfig.validateThemeName(settings.themeName)) != nil,
+              [settings.lightName, settings.darkName].compactMap({ $0 }).allSatisfy({
+                  (try? HerdrAppearanceConfig.validateThemeName($0)) != nil
+              }) else { return nil }
+        var result = settings
+        result.commonOverrides = sanitized(settings.commonOverrides)
+        result.lightOverrides = sanitized(settings.lightOverrides)
+        result.darkOverrides = sanitized(settings.darkOverrides)
+        return result
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, from defaults: UserDefaults, key: String) -> T? {

@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import HerdrCore
+@testable import HerdrMac
 
 @main struct SessionPublicationTests {
     @MainActor static func main() async throws {

@@ -305,10 +305,7 @@ struct TerminalSurface: NSViewRepresentable {
         weak var view: HerdrTerminalView?
         let engine = GhosttyTerminal.TerminalController(
             configuration: HerdrTerminalView.baseConfiguration,
-            theme: TerminalTheme(
-                light: TerminalConfiguration.alabaster.background("#fafaf7").foreground("#212926"),
-                dark: TerminalConfiguration().background("#0e1113").foreground("#dbe3de")
-            )
+            theme: EmbeddedTerminalPalette.theme
         )
         lazy var bridge: GhosttyStreamBridge = GhosttyStreamBridge(
             input: { [weak self] data in

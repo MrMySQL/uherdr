@@ -8,6 +8,7 @@ struct AppearanceSettingsView: View {
     @State private var overrideScope: AppearanceOverrideScope = .common
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 15) {
             Picker("Appearance", selection: modeBinding) {
                 Text("System").tag(AppearanceMode.system)
@@ -16,18 +17,53 @@ struct AppearanceSettingsView: View {
             }
             .pickerStyle(.segmented)
 
-            Picker("Theme", selection: unifiedPresetBinding) {
-                if store.unifiedPreset == nil {
-                    Text("Custom (mixed)").tag("")
+            Picker("Theme source", selection: Binding(get: { store.themeSource }, set: { source in
+                if source == .herdrConfig && store.lastGoodImportedSettings == nil {
+                    Task { await store.reloadHerdrConfig() }
+                } else { store.setThemeSource(source) }
+            })) {
+                Text("Native").tag(AppearanceThemeSource.native)
+                Text("Herdr config").tag(AppearanceThemeSource.herdrConfig)
+            }
+            .pickerStyle(.segmented)
+            HStack {
+                Button("Choose File…", action: chooseConfigFile)
+                Button("Reload") { Task { await store.reloadHerdrConfig() } }
+                    .disabled(store.isLoadingConfig)
+                if store.isLoadingConfig { ProgressView().controlSize(.small) }
+            }
+            Text(store.herdrConfigPath ?? AppearanceStore.defaultHerdrConfigURL.path)
+                .font(.caption).textSelection(.enabled)
+            if let diagnostic = store.importDiagnostic, !diagnostic.isEmpty {
+                Text(diagnostic).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            } else if let messages = store.lastGoodImportedSettings?.diagnostics, !messages.isEmpty {
+                Text(messages.joined(separator: "\n")).font(.caption).foregroundStyle(.secondary)
+            }
+            if store.themeSource == .herdrConfig, let imported = store.lastGoodImportedSettings {
+                Text("Imported theme: \(imported.themeName) • \(imported.autoSwitch ? "Auto-switch" : "Fixed")")
+                    .font(.caption)
+                if imported.autoSwitch, imported.lightName != nil || imported.darkName != nil {
+                    Text("Light: \(imported.lightName ?? imported.themeName) • Dark: \(imported.darkName ?? imported.themeName)")
+                        .font(.caption)
                 }
-                ForEach(BuiltInThemes.names, id: \.self) { Text(themeLabel($0)).tag($0) }
+                Text("Read-only import. Local overrides apply after imported colors. The terminal theme uses this app’s embedded ANSI palette; there is no outer terminal.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Picker("Light theme", selection: lightPresetBinding) {
-                ForEach(BuiltInThemes.names, id: \.self) { Text(themeLabel($0)).tag($0) }
+            Group {
+                Picker("Theme", selection: unifiedPresetBinding) {
+                    if store.unifiedPreset == nil {
+                        Text("Custom (mixed)").tag("")
+                    }
+                    ForEach(BuiltInThemes.names, id: \.self) { Text(themeLabel($0)).tag($0) }
+                }
+                Picker("Light theme", selection: lightPresetBinding) {
+                    ForEach(BuiltInThemes.names, id: \.self) { Text(themeLabel($0)).tag($0) }
+                }
+                Picker("Dark theme", selection: darkPresetBinding) {
+                    ForEach(BuiltInThemes.names, id: \.self) { Text(themeLabel($0)).tag($0) }
+                }
             }
-            Picker("Dark theme", selection: darkPresetBinding) {
-                ForEach(BuiltInThemes.names, id: \.self) { Text(themeLabel($0)).tag($0) }
-            }
+            .disabled(store.themeSource == .herdrConfig)
 
             HStack {
                 Text("Terminal text").font(.callout)
@@ -75,6 +111,21 @@ struct AppearanceSettingsView: View {
             Text("Theme changes preview immediately. Terminal programs keep their existing ANSI colors.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        }
+        .frame(maxHeight: 620)
+    }
+
+    private func chooseConfigFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        let initial = store.herdrConfigPath.map { URL(fileURLWithPath: $0) } ?? AppearanceStore.defaultHerdrConfigURL
+        panel.directoryURL = initial.deletingLastPathComponent()
+        panel.nameFieldStringValue = initial.lastPathComponent
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor in await store.loadHerdrConfig(url: url) }
         }
     }
 
