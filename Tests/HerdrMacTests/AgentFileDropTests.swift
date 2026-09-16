@@ -7,6 +7,21 @@ import HerdrCore
 /// Opt-in tests using installed, authenticated agent CLIs and an isolated SSH
 /// server. They send only generated test files to the agents.
 enum AgentFileDropTests {
+    private static func normalizedDraft(_ text: String) -> String {
+        text.precomposedStringWithCanonicalMapping
+            .components(separatedBy: .whitespacesAndNewlines).joined()
+            .replacingOccurrences(of: "'\\''", with: "'")
+    }
+
+    static func draftContainsDroppedFiles(_ draft: String, textReference: String,
+                                          imageReference: String, pathPrefix: String) -> Bool {
+        let draft = normalizedDraft(draft)
+        let hasText = draft.contains(normalizedDraft(textReference))
+        let hasImage = draft.contains(normalizedDraft(imageReference)) ||
+            draft.contains("[Image#1]") || draft.contains("[Image1]")
+        return draft.contains(normalizedDraft(pathPrefix)) && hasText && hasImage
+    }
+
     @MainActor static func run(socket: String, executable: String) async throws {
         let env = ProcessInfo.processInfo.environment
         guard socket.hasPrefix("/tmp/"), socket.contains("native-client-test"),
@@ -15,63 +30,81 @@ enum AgentFileDropTests {
             throw HerdrError.message("Requires a disposable test socket and HERDR_DROP_TEST_SSH, KEY and PORT")
         }
         let client = HerdrClient(socketPath: socket)
+        func require(_ condition: Bool, _ message: String) throws {
+            guard condition else { throw HerdrError.message(message) }
+        }
+        let fixtureParent = URL(fileURLWithPath: env["HERDR_DROP_TEST_ROOT"] ?? "/tmp", isDirectory: true)
         for remote in [false, true] {
             for agent in ["codex", "claude"] {
-                let root = URL(fileURLWithPath: "/tmp/herdr-agent-drop-test-\(UUID().uuidString)")
+                let root = fixtureParent.appendingPathComponent("herdr-agent-drop-test-\(UUID().uuidString)", isDirectory: true)
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
                 defer { try? FileManager.default.removeItem(at: root) }
                 let token = UUID().uuidString.lowercased()
                 let textURL = root.appendingPathComponent("it's $notes; café.txt")
                 try Data(token.utf8).write(to: textURL)
                 let imageURL = root.appendingPathComponent("sample image.png")
-                let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 64,
+                guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 64,
                     bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
-                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+                    let pixels = bitmap.bitmapData else {
+                    throw HerdrError.message("Could not allocate the test image")
+                }
                 for y in 0..<64 { for x in 0..<64 {
                     let offset = y * bitmap.bytesPerRow + x * 3
-                    bitmap.bitmapData![offset] = 255
-                    bitmap.bitmapData![offset + 1] = 0
-                    bitmap.bitmapData![offset + 2] = 0
+                    pixels[offset] = 255
+                    pixels[offset + 1] = 0
+                    pixels[offset + 2] = 0
                 } }
-                try bitmap.representation(using: .png, properties: [:])!.write(to: imageURL)
+                guard let imageData = bitmap.representation(using: .png, properties: [:]) else {
+                    throw HerdrError.message("Could not encode the test image")
+                }
+                try imageData.write(to: imageURL)
                 let created = try await client.request("workspace.create", params: [
                     "label": .string("Drop test \(agent) \(remote ? "SSH" : "local")"),
                     "cwd": .string(root.path), "focus": .bool(false)
                 ])
                 let workspace = try created["workspace"].decode(Workspace.self)
-                let pane = try created["root_pane"].decode(Pane.self)
-                let defaults = UserDefaults(suiteName: "herdr-agent-drop-\(token)")!
-                defer { defaults.removePersistentDomain(forName: "herdr-agent-drop-\(token)") }
-                let profile = DeviceProfile(name: "Drop test", kind: remote ? .ssh : .local,
-                    host: "127.0.0.1", user: NSUserName(), port: port, identityFile: key,
-                    socketPath: socket, executable: executable)
-                let store = SessionStore(profile: profile, defaults: defaults,
-                    tunnel: SSHTunnel(sshExecutable: ssh), fileTransfer: RemoteFileTransfer(sshExecutable: ssh))
-                await store.refresh()
-                guard store.connected else { throw HerdrError.message(store.connectionError ?? "Test device did not connect") }
-                store.selectedPane = pane.id
-                let transport = HerdrMac.TerminalController()
-                let host = NSHostingView(rootView: AnyView(HerdrMac.TerminalSurface(
-                    controller: transport, pane: pane, store: store, dark: true,
-                    fontSize: 13, selected: true)))
-                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 780),
-                    styleMask: [.titled, .resizable], backing: .buffered, defer: false)
-                window.contentView = host
-                window.makeKeyAndOrderFront(nil)
-                defer { transport.stop(); store.disconnect(); window.orderOut(nil) }
-                func terminal(_ root: NSView) -> HerdrTerminalView? {
-                    if let view = root as? HerdrTerminalView { return view }
-                    return root.subviews.compactMap { terminal($0) }.first
-                }
-                func wait(_ predicate: () -> Bool, timeout: Double = 20) async throws {
-                    let deadline = Date().addingTimeInterval(timeout)
-                    while !predicate(), Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }
-                    guard predicate() else { throw HerdrError.message("Timed out: \(agent) \(remote ? "SSH" : "local")") }
-                }
                 do {
+                    let pane = try created["root_pane"].decode(Pane.self)
+                    guard let defaults = UserDefaults(suiteName: "herdr-agent-drop-\(token)") else {
+                        throw HerdrError.message("Could not create isolated test defaults")
+                    }
+                    defer { defaults.removePersistentDomain(forName: "herdr-agent-drop-\(token)") }
+                    let profile = DeviceProfile(name: "Drop test", kind: remote ? .ssh : .local,
+                        host: "127.0.0.1", user: NSUserName(), port: port, identityFile: key,
+                        socketPath: socket, executable: executable)
+                    let store = SessionStore(profile: profile, defaults: defaults,
+                        tunnel: SSHTunnel(sshExecutable: ssh), fileTransfer: RemoteFileTransfer(sshExecutable: ssh))
+                    defer { store.disconnect() }
+                    await store.refresh()
+                    guard store.connected else { throw HerdrError.message(store.connectionError ?? "Test device did not connect") }
+                    store.selectedPane = pane.id
+                    let transport = HerdrMac.TerminalController()
+                    let host = NSHostingView(rootView: AnyView(HerdrMac.TerminalSurface(
+                        controller: transport, pane: pane, store: store, dark: true,
+                        fontSize: 13, selected: true)))
+                    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 780),
+                        styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+                    window.contentView = host
+                    window.makeKeyAndOrderFront(nil)
+                    defer {
+                        host.rootView = AnyView(EmptyView())
+                        transport.stop()
+                        window.orderOut(nil)
+                    }
+                    func terminal(_ root: NSView) -> HerdrTerminalView? {
+                        if let view = root as? HerdrTerminalView { return view }
+                        return root.subviews.compactMap { terminal($0) }.first
+                    }
+                    func wait(_ predicate: () -> Bool, timeout: Double = 20) async throws {
+                        let deadline = Date().addingTimeInterval(timeout)
+                        while !predicate(), Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }
+                        guard predicate() else { throw HerdrError.message("Timed out: \(agent) \(remote ? "SSH" : "local")") }
+                    }
                     try await wait { transport.ready }
-                    let view = terminal(host)!
-                    guard case .inMemory(let session) = view.configuration.backend else { fatalError() }
+                    guard let view = terminal(host), case .inMemory(let session) = view.configuration.backend else {
+                        throw HerdrError.message("Expected an attached in-memory terminal")
+                    }
                     func screen() -> String { session.readViewportText() ?? "" }
                     func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
                     let command: String
@@ -80,20 +113,23 @@ enum AgentFileDropTests {
                     } else {
                         command = "claude --setting-sources '' --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' --allowedTools Read"
                     }
-                    precondition(view.paste(text: command)); precondition(view.sendKey(.enter))
+                    try require(view.paste(text: command), "Could not paste the agent command")
+                    try require(view.sendKey(.enter), "Could not start the agent")
                     // Startup screens vary by CLI version. Log them for review;
                     // allow only trust for the generated, disposable test folder.
                     var readySamples = 0
                     for _ in 0..<100 {
                         let output = screen()
                         if output.contains("Yes, I trust this folder") || output.contains("Yes, continue") {
-                            precondition(view.sendKey(.enter))
+                            try require(view.sendKey(.enter), "Could not send Enter to the agent")
                             readySamples = 0
                             try await Task.sleep(for: .milliseconds(500))
                             continue
                         }
+                        // The footer can truncate policy labels for long cwd
+                        // paths. A loaded model header plus the prompt is stable.
                         let ready = (agent == "codex" && output.contains("Ask Codex to do anything") &&
-                                     output.contains("never") && !output.contains("loading")) ||
+                                     output.contains("model:") && !output.contains("loading")) ||
                             (agent == "claude" && (output.contains("for shortcuts") || output.contains("Try \"")))
                         readySamples = ready ? readySamples + 1 : 0
                         if readySamples >= 2 { break }
@@ -102,16 +138,22 @@ enum AgentFileDropTests {
                     print("STARTUP \(agent) \(remote ? "SSH" : "local"):\n\(screen())")
                     guard readySamples >= 2 else { throw HerdrError.message("Agent did not reach its prompt") }
                     let prompt = "Read the text file and inspect the image I am attaching. Reply only DROP_OK:<the exact text file contents>:<the image's dominant color in lowercase>. Do not modify any files. Files: "
-                    precondition(view.paste(text: prompt))
+                    try require(view.paste(text: prompt), "Could not paste the test prompt")
                     let board = NSPasteboard.withUniqueName()
                     defer { board.releaseGlobally() }
-                    precondition(board.writeObjects([textURL, imageURL] as [NSURL]))
+                    try require(board.writeObjects([textURL, imageURL] as [NSURL]), "Could not write file URLs to the pasteboard")
                     let drag = FileDragInfo(pasteboard: board, window: window)
-                    precondition(view.performDragOperation(drag))
-                    try await wait { screen().contains(remote ? "/tmp/herdr-drop-" : root.path) || screen().contains("Image #") }
+                    try require(view.performDragOperation(drag), "The terminal rejected the file drop")
+                    // The cwd is already visible during startup. Require both
+                    // dropped files in the draft before submitting anything.
+                    try await wait {
+                        draftContainsDroppedFiles(screen(),
+                            textReference: remote ? textURL.lastPathComponent : textURL.path,
+                            imageReference: remote ? imageURL.lastPathComponent : imageURL.path,
+                            pathPrefix: remote ? "/tmp/herdr-drop-" : root.path)
+                    }
                     try await wait { !transport.uploadingFiles }
-                    try await Task.sleep(for: .milliseconds(500))
-                    guard store.operationError == nil else { throw HerdrError.message(store.operationError!) }
+                    if let error = store.operationError { throw HerdrError.message(error) }
                     print("DRAFT \(agent) \(remote ? "SSH" : "local"):\n\(screen())")
                     if remote {
                         // A path-only implementation cannot pass after the
@@ -119,16 +161,12 @@ enum AgentFileDropTests {
                         try FileManager.default.removeItem(at: textURL)
                         try FileManager.default.removeItem(at: imageURL)
                     }
-                    precondition(view.sendKey(.enter))
+                    try require(view.sendKey(.enter), "Could not send Enter to the agent")
                     do { try await wait({ screen().contains("DROP_OK:\(token):red") }, timeout: 120) }
                     catch { print("RESULT:\n\(screen())"); throw error }
                     print("PASS: \(agent) \(remote ? "real SSH" : "local") drag/drop reads text and image")
-                    host.rootView = AnyView(EmptyView())
-                    transport.stop()
                     _ = try await client.request("workspace.close", params: ["workspace_id": .string(workspace.id)])
                 } catch {
-                    host.rootView = AnyView(EmptyView())
-                    transport.stop()
                     _ = try? await client.request("workspace.close", params: ["workspace_id": .string(workspace.id)])
                     throw error
                 }

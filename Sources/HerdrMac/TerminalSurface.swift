@@ -222,7 +222,7 @@ struct TerminalSurface: NSViewRepresentable {
         }
         view.canAcceptFileDrop = { [weak coordinator] in
             guard let coordinator, let store = coordinator.store else { return false }
-            return !coordinator.stopped && coordinator.visible && coordinator.view?.isHiddenOrHasHiddenAncestor == false && coordinator.controller.ready
+            return !coordinator.stopped && coordinator.surfaceAttached && coordinator.visible && coordinator.view?.isHiddenOrHasHiddenAncestor == false && coordinator.controller.ready
                 && coordinator.controller.error == nil && coordinator.controller.pasteError == nil && !coordinator.controller.uploadingFiles
                 && !coordinator.searching && store.sheet == nil && store.pendingClose == nil
         }
@@ -232,13 +232,16 @@ struct TerminalSurface: NSViewRepresentable {
             let terminal = coordinator.controller.generation
             coordinator.controller.uploadingFiles = store.isRemote
             defer { coordinator.controller.uploadingFiles = false }
+            var files: PreparedFileDrop?
             do {
-                let paths = try await store.prepareDroppedFiles(urls)
+                let prepared = try await store.prepareDroppedFiles(urls)
+                files = prepared
                 try Task.checkCancellation()
                 guard !coordinator.stopped, store.connectionGeneration == connection,
                       coordinator.controller.generation == terminal else { throw CancellationError() }
-                return paths
+                return prepared
             } catch {
+                await files?.discard()
                 guard coordinator.controller.generation == terminal else { throw CancellationError() }
                 throw error
             }
@@ -330,6 +333,7 @@ struct TerminalSurface: NSViewRepresentable {
         var wasSelected = false
         var started = false
         var stopped = false
+        var surfaceAttached = false
         var visible = true
         var searching = false
         var dismissSearch: (() -> Void)?
@@ -399,9 +403,13 @@ struct TerminalSurface: NSViewRepresentable {
         }
 
         func terminalDidAttachSurface(_ surface: GhosttyTerminal.TerminalSurface) {
+            surfaceAttached = true
             DispatchQueue.main.async { [weak self] in self?.focusIfSelected() }
         }
-        func terminalDidDetachSurface() {}
+        func terminalDidDetachSurface() {
+            surfaceAttached = false
+            view?.cancelFileDrop()
+        }
         func terminalDidChangeFocus(_ focused: Bool) {
             if focused && visible { store?.focusPane(paneID) }
         }
@@ -423,7 +431,7 @@ final class HerdrTerminalView: AppTerminalView {
     var onAttach: (() -> Void)?
     var onRetainedTabVisibility: ((Bool, String?) -> Void)?
     var canAcceptFileDrop: () -> Bool = { false }
-    var resolveFileDrop: (([URL]) async throws -> [String])?
+    var resolveFileDrop: (([URL]) async throws -> PreparedFileDrop)?
     var onFileDropError: ((Error) -> Void)?
     private var fileDropTask: Task<Void, Never>?
     private var fileDropGeneration = UUID()
@@ -570,24 +578,29 @@ final class HerdrTerminalView: AppTerminalView {
             return true
         }
         acquireProgrammaticFocus()
+        fileDropGeneration = UUID()
         let token = fileDropGeneration
         fileDropTask = Task { [weak self] in
+            defer {
+                if let self, self.fileDropGeneration == token { self.fileDropTask = nil }
+            }
+            var files: PreparedFileDrop?
             do {
-                let paths = try await resolveFileDrop(urls)
+                let prepared = try await resolveFileDrop(urls)
+                files = prepared
                 try Task.checkCancellation()
-                guard let self, self.fileDropGeneration == token else { return }
-                defer { self.fileDropTask = nil }
+                guard let self, self.fileDropGeneration == token else { throw CancellationError() }
                 guard self.canAcceptFileDrop(), self.surfaceVisible, self.window != nil,
                       !self.isHiddenOrHasHiddenAncestor, self.controller != nil else {
                     throw HerdrError.message("The pane is no longer ready to paste. Close any dialog or search, then drop the files again.")
                 }
-                guard !paths.isEmpty, paths.allSatisfy({ !$0.isEmpty && $0.rangeOfCharacter(from: .controlCharacters) == nil }),
-                      self.paste(text: Self.fileDropText(paths)) else {
+                guard !prepared.paths.isEmpty, prepared.paths.allSatisfy({ !$0.isEmpty && $0.rangeOfCharacter(from: .controlCharacters) == nil }),
+                      self.paste(text: Self.fileDropText(prepared.paths)) else {
                     throw HerdrError.message("The terminal could not accept the uploaded paths.")
                 }
             } catch {
+                await files?.discard()
                 guard let self, self.fileDropGeneration == token else { return }
-                self.fileDropTask = nil
                 if !(error is CancellationError), !Task.isCancelled { self.onFileDropError?(error) }
             }
         }

@@ -96,7 +96,7 @@ enum GhosttyLiveTests {
                 uploadStarted = true
                 do { try await Task.sleep(for: .seconds(30)) }
                 catch { uploadCancelled = error is CancellationError; throw error }
-                return ["/tmp/should-never-be-pasted"]
+                return PreparedFileDrop(paths: ["/tmp/should-never-be-pasted"])
             }
             let dropBoard = NSPasteboard.withUniqueName()
             defer { dropBoard.releaseGlobally() }
@@ -105,8 +105,18 @@ enum GhosttyLiveTests {
             try await waitFor { uploadStarted }
             transport.retry()
             try await waitFor { uploadCancelled && transport.ready }
+            uploadStarted = false
+            uploadCancelled = false
+            precondition(view.performDragOperation(FileDragInfo(pasteboard: dropBoard, window: window)))
+            try await waitFor { uploadStarted }
+            // Detach only Ghostty's native surface, leaving the SwiftUI
+            // coordinator and terminal transport alive.
+            let engine = view.controller
+            view.controller = nil
+            try await waitFor { uploadCancelled }
+            view.controller = engine
             view.resolveFileDrop = resolve
-            print("PASS: terminal reconnect cancels an in-flight file drop")
+            print("PASS: terminal reconnect and native surface detach cancel in-flight file drops")
 
             if ProcessInfo.processInfo.environment["HERDR_TEST_MOUSE"] == "1" {
                 try await checkMouse(view: view, transport: transport, session: session, window: window)

@@ -12,6 +12,7 @@ import HerdrCore
         let suiteName = "dev.herdr.device-tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
+        try await testFileTransferCancellation(defaults: defaults)
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -88,5 +89,41 @@ import HerdrCore
         await second.refresh()
         precondition(second.connected)
         print("PASS: two-device ID isolation, action routing, selection, persistence, disconnect/reconnect, remote paths, forwarded terminal stream and detach preservation")
+    }
+
+    @MainActor static func testFileTransferCancellation(defaults: UserDefaults) async throws {
+        let root = URL(fileURLWithPath: "/tmp/herdr-device-upload-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("sample.txt")
+        try Data("file bytes".utf8).write(to: source)
+        let key = root.appendingPathComponent("fixture-key").path
+        let marker = key + ".upload-path"
+        let fixture = FileManager.default.currentDirectoryPath + "/Tests/Fixtures/ssh-upload-fixture.py"
+        for disconnect in [true, false] {
+            try? FileManager.default.removeItem(atPath: marker)
+            let profile = DeviceProfile(name: "Upload cancellation", host: "slow.test", user: "tester",
+                port: "2222", identityFile: key, executable: "/bin/herdr")
+            let session = SessionStore(profile: profile, defaults: defaults, fileTransfer: RemoteFileTransfer(sshExecutable: fixture))
+            let pending = Task { try await session.prepareDroppedFiles([source]) }
+            defer { pending.cancel(); session.disconnect() }
+            let deadline = Date().addingTimeInterval(5)
+            while !FileManager.default.fileExists(atPath: marker), Date() < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let directory = try String(contentsOfFile: marker, encoding: .utf8)
+            defer { try? FileManager.default.removeItem(atPath: directory) }
+            let cancelledAt = Date()
+            if disconnect { session.disconnect() } else { pending.cancel() }
+            do {
+                _ = try await pending.value
+                throw HerdrError.message("An invalidated device upload returned paths")
+            } catch is CancellationError { }
+            guard Date().timeIntervalSince(cancelledAt) < 3,
+                  !FileManager.default.fileExists(atPath: directory) else {
+                throw HerdrError.message("Device/caller cancellation must promptly remove remote staging")
+            }
+        }
+        print("PASS: device disconnect and caller cancellation stop uploads and remove remote staging")
     }
 }

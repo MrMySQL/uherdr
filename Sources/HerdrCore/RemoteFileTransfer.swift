@@ -1,5 +1,25 @@
 import Foundation
 
+/// Owns files until the receiving pane accepts their paths. Local drops have
+/// nothing to discard; rejected or cancelled remote drops remove their staging.
+@MainActor
+public struct PreparedFileDrop {
+    public let paths: [String]
+    private let discardAction: (() async -> Void)?
+
+    public init(paths: [String], discard: (() async -> Void)? = nil) {
+        self.paths = paths
+        self.discardAction = discard
+    }
+
+    public func discard() async {
+        guard let discardAction else { return }
+        // Cleanup must run even when its caller is already cancelled.
+        let cleanup = Task { await discardAction() }
+        await cleanup.value
+    }
+}
+
 /// Streams file bytes over a separate SSH channel; never writes shell commands
 /// into the pane, whose foreground process may be an agent or an editor.
 @MainActor
@@ -10,7 +30,7 @@ public final class RemoteFileTransfer {
         self.sshExecutable = sshExecutable
     }
 
-    public func upload(_ urls: [URL], to profile: DeviceProfile) async throws -> [String] {
+    public func upload(_ urls: [URL], to profile: DeviceProfile) async throws -> PreparedFileDrop {
         let options = try profile.sshArguments()
         guard profile.kind == .ssh, !urls.isEmpty else {
             throw HerdrError.message("Choose files to upload to an SSH device.")
@@ -33,8 +53,16 @@ public final class RemoteFileTransfer {
                 arguments: options + ["--", profile.host, command], standardInput: input)
             _ = try await child.result(timeout: 300)
         }
-        try await run("umask 077; mkdir \(Self.quote(directory))")
+        let sshExecutable = self.sshExecutable
+        let discard: () async -> Void = {
+            do {
+                let child = try ManagedProcess(executable: sshExecutable,
+                    arguments: options + ["--", profile.host, "rm -rf \(Self.quote(directory))"])
+                _ = try await child.result(timeout: 12)
+            } catch { /* Best effort if the remote device is unreachable. */ }
+        }
         do {
+            try await run("umask 077; mkdir \(Self.quote(directory))")
             var paths: [String] = []
             for (index, url) in urls.enumerated() {
                 try Task.checkCancellation()
@@ -44,16 +72,9 @@ public final class RemoteFileTransfer {
                 paths.append(path)
             }
             try Task.checkCancellation()
-            return paths
+            return PreparedFileDrop(paths: paths, discard: discard)
         } catch {
-            // This directory is exclusively owned by this upload. A fresh task
-            // can clean it up even if the transfer task itself was cancelled.
-            let cleanup = Task {
-                let child = try ManagedProcess(executable: sshExecutable,
-                    arguments: options + ["--", profile.host, "rm -rf \(Self.quote(directory))"])
-                _ = try await child.result(timeout: 12)
-            }
-            _ = try? await cleanup.value
+            await PreparedFileDrop(paths: [], discard: discard).discard()
             throw error
         }
     }

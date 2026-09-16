@@ -9,8 +9,17 @@ command -v claude >/dev/null
 TEST_ROOT="$(mktemp -d /tmp/herdr-agent-drops.XXXXXX)"
 TEST_SOCKET="$TEST_ROOT/config/herdr/sessions/native-client-test/herdr.sock"
 cleanup() {
+    local status=$?
+    if [ "$status" -ne 0 ]; then
+        for log in server.log ssh.log ssh-client.log; do
+            if [ -f "$TEST_ROOT/$log" ]; then
+                printf '\n%s:\n' "$log" >&2
+                cat "$TEST_ROOT/$log" >&2
+            fi
+        done
+    fi
     env -u HERDR_SESSION HERDR_SOCKET_PATH="$TEST_SOCKET" "$HERDR_TEST_BIN" server stop >/dev/null 2>&1 || true
-    if [ -n "${SERVER_PID:-}" ]; then wait "$SERVER_PID" 2>/dev/null || true; fi
+    if [ -n "${SERVER_PID:-}" ]; then kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; fi
     if [ -n "${SSH_PID:-}" ]; then kill "$SSH_PID" 2>/dev/null || true; wait "$SSH_PID" 2>/dev/null || true; fi
     python3 - "$TEST_ROOT" <<'PY'
 import pathlib, re, shutil, sys
@@ -22,6 +31,7 @@ if log.exists():
             shutil.rmtree(path, ignore_errors=True)
 shutil.rmtree(root)
 PY
+    exit "$status"
 }
 trap cleanup EXIT
 ssh-keygen -q -t ed25519 -N '' -f "$TEST_ROOT/host_key"
@@ -63,10 +73,40 @@ env -u HERDR_SESSION -u HERDR_SOCKET_PATH XDG_CONFIG_HOME="$TEST_ROOT/config" XD
     "$HERDR_TEST_BIN" --session native-client-test server > "$TEST_ROOT/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in {1..100}; do
+    if ! kill -0 "$SSH_PID" 2>/dev/null; then
+        printf 'Test SSH server exited during startup.\n' >&2
+        exit 1
+    fi
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        printf 'Test Herdr server exited during startup.\n' >&2
+        exit 1
+    fi
     [ -S "$TEST_SOCKET" ] && break
     sleep 0.1
 done
-test -S "$TEST_SOCKET"
+if [ ! -S "$TEST_SOCKET" ]; then
+    printf 'Timed out waiting for the test Herdr socket.\n' >&2
+    exit 1
+fi
+SSH_READY=false
+for _ in {1..100}; do
+    if ! kill -0 "$SSH_PID" 2>/dev/null; then
+        printf 'Test SSH server exited during startup.\n' >&2
+        exit 1
+    fi
+    if "$TEST_ROOT/ssh" -p "$TEST_PORT" -i "$TEST_ROOT/client_key" \
+        -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=1 -o ConnectionAttempts=1 \
+        -o StrictHostKeyChecking=yes "$(id -un)@127.0.0.1" true > "$TEST_ROOT/ssh-client.log" 2>&1; then
+        SSH_READY=true
+        break
+    fi
+    sleep 0.1
+done
+if [ "$SSH_READY" != true ]; then
+    printf 'Could not authenticate to the test SSH server.\n' >&2
+    exit 1
+fi
+export HERDR_DROP_TEST_ROOT="$TEST_ROOT"
 export HERDR_DROP_TEST_SSH="$TEST_ROOT/ssh"
 export HERDR_DROP_TEST_KEY="$TEST_ROOT/client_key"
 export HERDR_DROP_TEST_PORT="$TEST_PORT"
