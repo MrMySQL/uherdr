@@ -18,6 +18,9 @@ command = args[-1]
 assert "/tmp/herdr-drop-" in command
 parts = shlex.split(command)
 root_setup = len(parts) == 4 and parts[:3] == ["umask", "077;", "mkdir"]
+# FileTransferTests requires setup-failure.test to throw its directory marker
+# and slow.test to publish the marker file. A command-shape drift fails both
+# tests rather than silently falling back to a successful normal upload.
 if root_setup and host in ("setup-failure.test", "slow.test"):
     subprocess.run(["/bin/sh", "-c", command], check=True)
     if "-i" in args:

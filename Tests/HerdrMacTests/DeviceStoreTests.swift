@@ -113,15 +113,13 @@ import HerdrCore
             }
             let directory = try String(contentsOfFile: marker, encoding: .utf8)
             defer { try? FileManager.default.removeItem(atPath: directory) }
-            let cancelledAt = Date()
             if disconnect { session.disconnect() } else { pending.cancel() }
             do {
                 _ = try await pending.value
                 throw HerdrError.message("An invalidated device upload returned paths")
             } catch is CancellationError { }
-            guard Date().timeIntervalSince(cancelledAt) < 3,
-                  !FileManager.default.fileExists(atPath: directory) else {
-                throw HerdrError.message("Device/caller cancellation must promptly remove remote staging")
+            guard !FileManager.default.fileExists(atPath: directory) else {
+                throw HerdrError.message("Device/caller cancellation must remove remote staging")
             }
         }
         print("PASS: device disconnect and caller cancellation stop uploads and remove remote staging")

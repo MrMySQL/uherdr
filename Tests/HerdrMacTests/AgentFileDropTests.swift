@@ -98,8 +98,13 @@ enum AgentFileDropTests {
                     }
                     func wait(_ predicate: () -> Bool, timeout: Double = 20) async throws {
                         let deadline = Date().addingTimeInterval(timeout)
-                        while !predicate(), Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }
-                        guard predicate() else { throw HerdrError.message("Timed out: \(agent) \(remote ? "SSH" : "local")") }
+                        while true {
+                            try Task.checkCancellation()
+                            if let error = store.operationError ?? transport.error { throw HerdrError.message(error) }
+                            if predicate() { return }
+                            guard Date() < deadline else { throw HerdrError.message("Timed out: \(agent) \(remote ? "SSH" : "local")") }
+                            try await Task.sleep(for: .milliseconds(100))
+                        }
                     }
                     try await wait { transport.ready }
                     guard let view = terminal(host), case .inMemory(let session) = view.configuration.backend else {
