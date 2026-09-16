@@ -19,6 +19,12 @@ GhosttyRuntimeResources also checks the signed macOS app's Contents/Resources
 for its resource bundle before using SwiftPM's command-line Bundle.module
 accessor. This prevents packaged apps from depending on the build directory.
 
+AppTerminalView exposes `clipboardPasteHandler` for explicit Command-V, Edit
+Paste, and `performBindingAction("paste_from_clipboard")`. Herdr consumes file
+and raw-media pastes there, staging/uploading before sending individual paths.
+Returning false preserves Ghostty's text handling. Application clipboard reads
+never call this hook. Retain these three entry points when updating the wrapper.
+
 Herdr owns the authoritative terminal and answers its queries. Its ANSI display
 frames must update the embedded renderer without generating duplicate replies
 as shell input. A Swift callback gate around receive is insufficient.

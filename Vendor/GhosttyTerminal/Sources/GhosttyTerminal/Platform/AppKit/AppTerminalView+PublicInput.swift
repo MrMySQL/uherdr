@@ -67,7 +67,8 @@
         /// "clear_screen"). Returns true when the action dispatched.
         @discardableResult
         public func performBindingAction(_ action: String) -> Bool {
-            surface?.performBindingAction(action) ?? false
+            if action == "paste_from_clipboard", clipboardPasteHandler?() == true { return true }
+            return surface?.performBindingAction(action) ?? false
         }
 
         /// Jump the viewport by a number of shell prompts.

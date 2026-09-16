@@ -146,6 +146,45 @@ enum AgentFileDropTests {
                     }
                     print("STARTUP \(agent) \(remote ? "SSH" : "local"):\n\(screen())")
                     guard readySamples >= 2 else { throw HerdrError.message("Agent did not reach its prompt") }
+                    if env["HERDR_TEST_CLIPBOARD_FILES"] == "1" {
+                        let board = NSPasteboard.general
+                        let saved = (board.pasteboardItems ?? []).map { item in
+                            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+                        }
+                        defer {
+                            board.clearContents()
+                            board.writeObjects(saved.map { entries in
+                                let item = NSPasteboardItem()
+                                for (type, data) in entries { item.setData(data, forType: type) }
+                                return item
+                            })
+                        }
+                        let uploadLog = URL(fileURLWithPath: ssh).deletingLastPathComponent().appendingPathComponent("uploads")
+                        let before = (try? String(contentsOf: uploadLog, encoding: .utf8)) ?? ""
+                        board.clearContents()
+                        board.writeObjects([imageURL] as [NSURL])
+                        try require(view.performBindingAction("paste_from_clipboard"), "File clipboard paste rejected")
+                        try await wait { screen().contains("[Image #1]") || screen().contains("[Image 1]") }
+                        board.clearContents()
+                        board.setData(imageData, forType: .png)
+                        try require(view.performBindingAction("paste_from_clipboard"), "Screenshot clipboard paste rejected")
+                        try await wait { screen().contains("[Image #2]") || screen().contains("[Image 2]") }
+                        if remote {
+                            let after = try String(contentsOf: uploadLog, encoding: .utf8)
+                            let added = after.dropFirst(before.count).split(separator: "\n")
+                            try require(added.count == 2, "Both clipboard pastes must upload through real SSH")
+                            for directory in added {
+                                let files = try FileManager.default.contentsOfDirectory(
+                                    at: URL(fileURLWithPath: String(directory)).appendingPathComponent("0"),
+                                    includingPropertiesForKeys: nil)
+                                try require(files.count == 1 && (try Data(contentsOf: files[0])) == imageData,
+                                            "Uploaded clipboard image bytes differ")
+                            }
+                        }
+                        print("PASS: \(agent) \(remote ? "real SSH" : "local") copied image and screenshot render as attachments without submitting")
+                        _ = try await client.request("workspace.close", params: ["workspace_id": .string(workspace.id)])
+                        continue
+                    }
                     let prompt = "Read the text file and inspect the image I am attaching. Reply only DROP_OK:<the exact text file contents>:<the image's dominant color in lowercase>. Do not modify any files. Files: "
                     try require(view.paste(text: prompt), "Could not paste the test prompt")
                     let board = NSPasteboard.withUniqueName()
