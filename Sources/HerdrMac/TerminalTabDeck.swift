@@ -80,6 +80,11 @@ struct TerminalTabDeck: NSViewRepresentable {
     private weak var session: SessionStore?
     private var generation: UUID?
 
+    /// Observes immutable presentation values after a native root is published.
+    /// A nil snapshot means the tab root was cleared for removal.
+    /// The default deck has no observer and stores no publication history.
+    var didPublishRoot: ((String, TerminalTabSnapshot?) -> Void)?
+
     override var isFlipped: Bool { true }
 
     func update(store: SessionStore, colorScheme: ColorScheme, displayScale: CGFloat) {
@@ -127,6 +132,7 @@ struct TerminalTabDeck: NSViewRepresentable {
                 entries[tab.id] = entry
             } else {
                 let host = NSHostingView(rootView: root(snapshot, store: store))
+                didPublishRoot?(snapshot.layout.tabID, snapshot)
                 host.appearance = NSAppearance(named: snapshot.colorScheme == .dark ? .darkAqua : .aqua)
                 host.sizingOptions = []
                 host.frame = bounds
@@ -160,6 +166,7 @@ struct TerminalTabDeck: NSViewRepresentable {
         entry.snapshot = snapshot
         entry.host.appearance = NSAppearance(named: snapshot.colorScheme == .dark ? .darkAqua : .aqua)
         entry.host.rootView = root(snapshot, store: store)
+        didPublishRoot?(snapshot.layout.tabID, snapshot)
     }
 
     private func root(_ snapshot: TerminalTabSnapshot, store: SessionStore) -> AnyView {
@@ -193,6 +200,7 @@ struct TerminalTabDeck: NSViewRepresentable {
         guard let entry = entries.removeValue(forKey: id) else { return }
         setTerminals(in: entry.host, visible: false)
         entry.host.rootView = AnyView(EmptyView())
+        didPublishRoot?(id, nil)
         entry.host.layoutSubtreeIfNeeded()
         entry.host.removeFromSuperview()
     }

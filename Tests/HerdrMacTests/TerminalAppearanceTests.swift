@@ -37,6 +37,12 @@ import HerdrCore
         await store.refresh()
         store.selectSpace(space)
         let deck = TerminalTabDeckView()
+        var publishedRoots: [String: [TerminalTabSnapshot]] = [:]
+        var releasedRoots: Set<String> = []
+        deck.didPublishRoot = { tabID, snapshot in
+            if let snapshot { publishedRoots[tabID, default: []].append(snapshot) }
+            else { releasedRoots.insert(tabID) }
+        }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 650), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.contentView = deck
         window.orderBack(nil)
@@ -66,32 +72,24 @@ import HerdrCore
         let oldConfig = hidden.controller!.renderedConfig
         let theme = hidden.controller!.theme
         let hiddenHost = deck.subviews.compactMap { $0 as? NSHostingView<AnyView> }.first { $0.isHidden }!
-        // AnyView uses reference-backed type erasure. Retain the storage object
-        // while comparing it, so allocation/address reuse cannot mask a root write.
-        func rootStorage(_ host: NSHostingView<AnyView>) throws -> AnyObject {
-            guard let storage = Mirror(reflecting: host.rootView).children.first(where: { $0.label == "storage" })?.value,
-                  Mirror(reflecting: storage).displayStyle == .class else {
-                throw HerdrError.message("SwiftUI AnyView storage observation unavailable")
-            }
-            return storage as AnyObject
+        guard publishedRoots[first.tabID]?.isEmpty == false,
+              publishedRoots[second.tabID]?.isEmpty == false else {
+            throw HerdrError.message("Mounted hosts did not report initial root publications")
         }
-        var previous = try rootStorage(hiddenHost)
-        var baseline = 0
+        let baselineStart = publishedRoots[first.tabID]!.count
         for value in ["baseline one", "baseline two", "baseline three"] {
             _ = try await client.request("pane.rename", params: ["pane_id": .string(first.id), "label": .string(value)])
             await store.refresh(); update()
-            let next = try rootStorage(hiddenHost)
-            if previous !== next { baseline += 1 }; previous = next
         }
+        let baseline = publishedRoots[first.tabID]!.count - baselineStart
         print("BASELINE: hidden cosmetic root publications = \(baseline) across 3 metadata updates")
         guard baseline == 0 else { throw HerdrError.message("Hidden metadata roots regressed from the recorded zero-publication baseline") }
-        var publications = 0
+        let paletteStart = publishedRoots[first.tabID]!.count
         for color in [ColorValue.rgb(180, 40, 80), .rgb(70, 130, 210), .rgb(90, 200, 100)] {
             store.appearanceStore.setNativeOverride(color, for: "accent", scope: .common)
             update()
-            let next = try rootStorage(hiddenHost)
-            if previous !== next { publications += 1 }; previous = next
         }
+        let publications = publishedRoots[first.tabID]!.count - paletteStart
         print("CURRENT: hidden cosmetic root publications = \(publications) across 3 UI palette updates")
         guard publications == baseline, hidden.controller!.renderedConfig == oldConfig else {
             throw HerdrError.message("Hidden appearance publications differ from measured baseline")
@@ -129,6 +127,7 @@ import HerdrCore
         guard visible.controller!.renderedConfig != oldConfig, hidden.controller!.renderedConfig == oldConfig else {
             throw HerdrError.message("Light/dark update did not reach only the visible Ghostty surface")
         }
+        let beforeReveal = publishedRoots[first.tabID]!.count
         var paletteReadyAtReveal = false
         let visibility = hidden.onRetainedTabVisibility
         hidden.onRetainedTabVisibility = { shown, zoomed in
@@ -137,8 +136,8 @@ import HerdrCore
                 paletteReadyAtReveal = hiddenHost.appearance?.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                     && hidden.appearance?.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                     && hidden.controller!.renderedConfig != oldConfig
-                    && ((try? rootStorage(hiddenHost)) !== previous)
-                    && hostedSnapshot(hiddenHost.rootView)?.appearance == store.appearanceStore.resolvedSnapshot
+                    && publishedRoots[first.tabID]!.count == beforeReveal + 1
+                    && publishedRoots[first.tabID]!.last?.appearance == store.appearanceStore.resolvedSnapshot
             }
             visibility?(shown, zoomed)
         }
@@ -219,16 +218,11 @@ import HerdrCore
             }
             window.contentView = nil
         }
-        _ = try await client.request("workspace.close", params: ["workspace_id": .string(space.id)])
-    }
-
-    static func hostedSnapshot(_ value: Any, depth: Int = 0) -> TerminalTabSnapshot? {
-        if let snapshot = value as? TerminalTabSnapshot { return snapshot }
-        guard depth < 40, !(value is SessionStore) else { return nil }
-        for child in Mirror(reflecting: value).children {
-            if let snapshot = hostedSnapshot(child.value, depth: depth + 1) { return snapshot }
+        deck.removeAllTabs()
+        guard releasedRoots == Set([first.tabID, second.tabID]) else {
+            throw HerdrError.message("Cleared hosts did not report root removal publications")
         }
-        return nil
+        _ = try await client.request("workspace.close", params: ["workspace_id": .string(space.id)])
     }
 
     @MainActor static func wait(_ label: String, _ predicate: () -> Bool) async throws {
