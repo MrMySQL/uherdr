@@ -17,7 +17,7 @@ enum AppearanceTests {
         let longHex = try ColorValue.parse(" #10A0fF ")
         let rgb = try ColorValue.parse("rgb(0, 255, 42)")
         let purple = try ColorValue.parse("purple")
-        let lightCyan = try ColorValue.parse("light_cyan")
+        let lightCyan = try ColorValue.parse("lightcyan")
         precondition(shortHex == .rgb(170, 187, 204))
         precondition(longHex == .rgb(16, 160, 255))
         precondition(rgb == .rgb(0, 255, 42))
@@ -30,7 +30,7 @@ enum AppearanceTests {
     }
 
     private static func testColorParsingRejectsInvalidInput() throws {
-        for invalid in ["rgb(256, 0, 0)", "rgb(-1, 0, 0)", "rgb(1, 2)", "#12", "#abcd", "#gg0000", "chartreuse", ""] {
+        for invalid in ["rgb(256, 0, 0)", "rgb(-1, 0, 0)", "rgb(1, 2)", "#12", "#abcd", "#gg0000", "light_cyan", "light-cyan", "chartreuse", ""] {
             do {
                 _ = try ColorValue.parse(invalid)
                 preconditionFailure("Expected invalid color to throw: \(invalid)")

@@ -26,7 +26,7 @@ public enum ColorValue: Codable, Equatable, Sendable {
         if value.hasPrefix("rgb(") && value.hasSuffix(")") {
             return try parseRGB(String(value.dropFirst(4).dropLast()), original: text)
         }
-        if let named = namedColors[value.replacingOccurrences(of: "_", with: "").replacingOccurrences(of: "-", with: "")] {
+        if let named = namedColors[value] {
             return named
         }
         throw ColorValueParseError.invalidColor(text)
