@@ -8,6 +8,7 @@ import HerdrCore
 struct AppearanceStoreTests {
     @MainActor
     static func main() async throws {
+        try testSidebarPaneTitleFallback()
         try testSidebarCopyAndDeviceCache()
         testLegacyMigrationAndSecondInitialization()
         testInvalidPersistenceIsPreservedUntilAnEdit()
@@ -19,6 +20,34 @@ struct AppearanceStoreTests {
         try await testSuspendedImportCannotOverrideNativeSelection()
         try testExplicitNamesAndTerminalSource()
         print("PASS: appearance migration, import atomicity, bounded regular-file loading, unchanged TOML, offline persistence, source precedence, terminal palette, shared publication, and device isolation")
+    }
+
+    @MainActor
+    private static func testSidebarPaneTitleFallback() throws {
+        let suite = "uherdr.sidebar-title.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AppearanceStore(defaults: defaults)
+        try store.setNativeSidebar(SidebarConfiguration(agents: SidebarSection(rows: [[SidebarOccurrence(token: "pane")]])))
+        let session = SessionStore(profile: DeviceProfile(name: "legacy", executable: "/unused"), defaults: defaults, appearanceStore: store)
+        let base = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Fixtures")
+        func snapshot(_ name: String) throws -> SessionSnapshot {
+            try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: base.appendingPathComponent(name)))["snapshot"].decode(SessionSnapshot.self)
+        }
+        let titleOnly = try snapshot("snapshot-0.9-title-only.json")
+        session.agents = titleOnly.agents; session.panes = titleOnly.panes
+        precondition(session.agentSidebarRows["w_1:p_1"]?.first?.first?.value == "Legacy pane title", "Configured pane token must fall back to the linked pane title when its label is absent")
+        let count = session.sidebarResolutionCount
+        session.panes = titleOnly.panes
+        precondition(session.sidebarResolutionCount == count)
+        session.panes = try snapshot("snapshot-0.9.json").panes
+        precondition(session.agentSidebarRows["w_1:p_1"]?.first?.first?.value == "Review", "A pane label takes precedence over the title fallback")
+        session.panes = titleOnly.panes
+        session.agents = try snapshot("snapshot-metadata.json").agents
+        precondition(session.agentSidebarRows["w_1:p_1"]?.first?.first?.value == "Review", "Agent title must retain highest precedence")
+        session.agents = titleOnly.agents; session.panes = []
+        precondition(session.agentSidebarRows["w_1:p_1"]?.isEmpty == true)
+        print("PASS: sidebar pane token resolves agent title, pane label, then legacy pane title; cache updates and absent value suppression preserved")
     }
 
     @MainActor

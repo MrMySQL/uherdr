@@ -140,7 +140,7 @@ final class SessionStore: ObservableObject {
         }
         let spaces = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
         let tabLabels = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0.label) })
-        let paneLabels = Dictionary(uniqueKeysWithValues: panes.map { ($0.id, $0.label) })
+        let paneLabels = Dictionary(uniqueKeysWithValues: panes.map { ($0.id, $0.label ?? $0.title) })
         var spaceRows: [String: [[SidebarTokenRun]]] = [:]
         for space in workspaces {
             var values = Dictionary(uniqueKeysWithValues: space.tokens.map { ("$" + $0.key, $0.value) })

@@ -31,6 +31,8 @@ import HerdrCore
         let new = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: base.appendingPathComponent("snapshot-metadata.json")))["snapshot"].decode(SessionSnapshot.self)
         precondition(old.workspaces[0].tokens.isEmpty && old.panes[0].tokens.isEmpty && old.agents[0].tokens.isEmpty)
         precondition(old.agents[0].terminalTitle == nil)
+        let titleOnly = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: base.appendingPathComponent("snapshot-0.9-title-only.json")))["snapshot"].decode(SessionSnapshot.self)
+        precondition(titleOnly.panes[0].label == nil && titleOnly.panes[0].title == "Legacy pane title" && titleOnly.agents[0].title == nil)
         precondition(new.workspaces[0].tokens["owner"] == "infra" && new.agents[0].tokens["load"] == "91")
         precondition(new.agents[0].terminalTitle == "codex - Review" && new.panes[0].terminalTitleStripped == "Review")
         print("PASS: old/new public snapshot metadata fixtures")
