@@ -1,12 +1,11 @@
 import SwiftUI
 import HerdrCore
 
-let herdrAccentColor = Color(red: 0.34, green: 0.73, blue: 0.58)
-
 struct WorkspaceView: View {
     @ObservedObject var store: SessionStore
     @ObservedObject var devices: DeviceStore
     @Environment(\.colorScheme) private var systemColorScheme
+    private var palette: NativePalette { NativePalette(snapshot: store.appearanceStore.resolvedSnapshot, colorScheme: systemColorScheme) }
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
     var body: some View {
         NavigationSplitView(columnVisibility: $sidebarVisibility) {
@@ -18,7 +17,7 @@ struct WorkspaceView: View {
                 if store.connected {
                     if store.currentSpace != nil {
                         tabStrip
-                        Divider()
+                        Divider().overlay(palette.color("border", fallback: .clear))
                         terminalDeck
                             .id(store.connectionGeneration)
                             .padding(8)
@@ -28,10 +27,10 @@ struct WorkspaceView: View {
                 } else {
                     connectionView
                 }
-                Divider()
+                Divider().overlay(palette.color("border", fallback: .clear))
                 statusBar
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(palette.color("window_bg"))
             .navigationTitle("\(store.profile.name) — \(store.currentSpace?.label ?? "Herdr")")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -64,8 +63,9 @@ struct WorkspaceView: View {
                 .help("Show or hide sidebar")
             }
         }
-        .tint(NativePalette(snapshot: store.appearanceStore.resolvedSnapshot, colorScheme: systemColorScheme).color("accent"))
-        .accentColor(NativePalette(snapshot: store.appearanceStore.resolvedSnapshot, colorScheme: systemColorScheme).color("accent"))
+        .foregroundStyle(palette.color("text"))
+        .tint(palette.color("accent"))
+        .accentColor(palette.color("accent"))
         .environment(\.resolvedAppearance, store.appearanceStore.resolvedSnapshot)
         .frame(minWidth: 840, minHeight: 520)
         .preferredColorScheme(store.colorScheme)
@@ -126,13 +126,13 @@ struct WorkspaceView: View {
                                 Image(systemName: "terminal").font(.system(size: 10))
                                 Text(tab.label).lineLimit(1)
                                 if tab.agentStatus != .unknown && tab.agentStatus != .idle { StatusDot(status: tab.agentStatus) }
-                                Text("\(tab.paneCount)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                                Text("\(tab.paneCount)").font(.system(size: 10, design: .monospaced)).foregroundStyle(palette.color("secondary_text"))
                             }
                             .font(.system(size: 11, weight: store.selectedTab == tab.id ? .semibold : .regular))
                             .padding(.horizontal, 10).frame(height: 26)
                             .contentShape(Rectangle())
-                            .background(store.selectedTab == tab.id ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
-                            .overlay(alignment: .bottom) { if store.selectedTab == tab.id { Capsule().fill(herdrAccentColor).frame(height: 2).padding(.horizontal, 12) } }
+                            .background(store.selectedTab == tab.id ? palette.color("active_row", fallback: Color.primary.opacity(0.08)) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                            .overlay(alignment: .bottom) { if store.selectedTab == tab.id { Capsule().fill(palette.color("accent")).frame(height: 2).padding(.horizontal, 12) } }
                         }
                         .buttonStyle(.plain)
                         .modifier(PaneTabDropTarget(tabID: tab.id, store: store))
@@ -146,13 +146,13 @@ struct WorkspaceView: View {
                 }.padding(.horizontal, 6).padding(.vertical, 3)
             }
             Text("\(store.visiblePanes.count) \(store.visiblePanes.count == 1 ? "pane" : "panes")")
-                .font(.system(size: 11)).foregroundStyle(.tertiary).padding(.horizontal, 14)
+                .font(.system(size: 11)).foregroundStyle(palette.color("secondary_text", fallback: Color(nsColor: .tertiaryLabelColor))).padding(.horizontal, 14)
         }.frame(height: 32)
     }
 
     private var statusBar: some View {
         HStack(spacing: 8) {
-            Circle().fill(store.connected ? herdrAccentColor : Color.orange).frame(width: 6, height: 6)
+            Circle().fill(store.connected ? palette.color("accent") : palette.color("status_interrupted")).frame(width: 6, height: 6)
             Text(store.profile.name)
             Text(store.connected ? "Connected to herdr \(store.version)" : store.connecting ? "Connecting…" : "Disconnected")
             Spacer()
@@ -165,29 +165,29 @@ struct WorkspaceView: View {
                 .buttonStyle(.plain).help("Connection and appearance settings")
         }
         .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(palette.color("secondary_text"))
         .padding(.horizontal, 14).padding(.vertical, 7)
     }
 
     private var emptySpaces: some View {
         VStack(spacing: 18) {
-            Image(systemName: "square.stack.3d.up").font(.system(size: 42, weight: .ultraLight)).foregroundStyle(herdrAccentColor)
+            Image(systemName: "square.stack.3d.up").font(.system(size: 42, weight: .ultraLight)).foregroundStyle(palette.color("accent"))
             Text("Room for your next idea").font(.system(size: 24, weight: .medium))
-            Text("Create a space for a project, then add terminals and agents.").foregroundStyle(.secondary)
+            Text("Create a space for a project, then add terminals and agents.").foregroundStyle(palette.color("secondary_text"))
             Button("Create a space…") { store.sheet = .space }.buttonStyle(.borderedProminent)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var connectionView: some View {
         VStack(spacing: 18) {
-            Image(systemName: "square.split.2x2").font(.system(size: 50, weight: .ultraLight)).foregroundStyle(herdrAccentColor)
+            Image(systemName: "square.split.2x2").font(.system(size: 50, weight: .ultraLight)).foregroundStyle(palette.color("accent"))
             Text(store.profile.name).font(.system(size: 26, weight: .medium))
             Text(store.isRemote ? "Connect over SSH to see this device’s workspaces." : "Connect to herdr on this Mac to see your workspaces.")
-                .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .foregroundStyle(palette.color("secondary_text")).multilineTextAlignment(.center)
             if let error = store.connectionError {
-                Text(error).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                Text(error).font(.system(size: 11, design: .monospaced)).foregroundStyle(palette.color("secondary_text"))
                     .textSelection(.enabled).multilineTextAlignment(.center).frame(maxWidth: 460)
-                    .padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(12).background(palette.color("surface0", fallback: Color.primary.opacity(0.035)), in: RoundedRectangle(cornerRadius: 8))
             }
             HStack {
                 Button("Edit device…") { devices.editor = DeviceEditorTarget(profile: store.profile) }
@@ -196,7 +196,7 @@ struct WorkspaceView: View {
                     Button("Start server") { store.startServer(); store.reconnect() }.buttonStyle(.borderedProminent)
                 }
             }
-            Text("Your sessions keep running when you close this app.").font(.caption).foregroundStyle(.tertiary)
+            Text("Your sessions keep running when you close this app.").font(.caption).foregroundStyle(palette.color("secondary_text", fallback: Color(nsColor: .tertiaryLabelColor)))
         }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -204,18 +204,31 @@ struct WorkspaceView: View {
 
 struct StatusDot: View {
     let status: AgentStatus
-    var body: some View { Circle().fill(status.color).frame(width: 6, height: 6).accessibilityLabel(status.label) }
+    @Environment(\.resolvedAppearance) private var appearance
+    @Environment(\.colorScheme) private var colorScheme
+    var body: some View {
+        Circle().fill(status.color(in: NativePalette(snapshot: appearance, colorScheme: colorScheme)))
+            .frame(width: 6, height: 6).accessibilityLabel(status.label)
+    }
 }
 struct StatusBadge: View {
     let status: AgentStatus
+    @Environment(\.resolvedAppearance) private var appearance
+    @Environment(\.colorScheme) private var colorScheme
     var body: some View {
         HStack(spacing: 5) { StatusDot(status: status); Text(status.label) }
-            .font(.system(size: 10, weight: .medium)).foregroundStyle(status.color)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(status.color(in: NativePalette(snapshot: appearance, colorScheme: colorScheme)))
     }
 }
 extension AgentStatus {
-    var color: Color {
-        switch self { case .working: return .cyan; case .blocked: return .orange; case .done: return herdrAccentColor; case .idle: return .secondary; case .unknown: return .secondary }
+    func color(in palette: NativePalette) -> Color {
+        switch self {
+        case .working: palette.color("status_working", fallback: .cyan)
+        case .blocked: palette.color("status_blocked", fallback: .orange)
+        case .done: palette.color("status_done", fallback: palette.color("accent"))
+        case .idle, .unknown: palette.color("secondary_text")
+        }
     }
 }
 

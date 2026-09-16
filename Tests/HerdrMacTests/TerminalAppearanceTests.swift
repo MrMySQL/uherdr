@@ -1,0 +1,263 @@
+import AppKit
+import SwiftUI
+import GhosttyTerminal
+import HerdrCore
+@testable import HerdrMac
+
+@main struct TerminalAppearanceTests {
+    @MainActor static func main() {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        setbuf(stdout, nil)
+        Task { @MainActor in
+            do {
+                try await retainedAppearance(socket: CommandLine.arguments[1], executable: CommandLine.arguments[2])
+                print("PASS: mounted terminal appearance regressions")
+                exit(0)
+            } catch { print("FAIL: \(error)"); exit(1) }
+        }
+        NSApp.run()
+    }
+
+    @MainActor static func retainedAppearance(socket: String, executable: String) async throws {
+        guard socket.hasPrefix("/tmp/"), socket.contains("native-client-test") else {
+            throw HerdrError.message("Requires a disposable native-client-test socket")
+        }
+        let client = HerdrClient(socketPath: socket)
+        let suite = "dev.herdr.appearance-mounted.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let devices = DeviceStore(defaults: defaults, profiles: [DeviceProfile(name: "Appearance fixture", kind: .local, socketPath: socket, executable: executable)])
+        let store = devices.activeSession
+        store.appearance = "light"
+        let created = try await client.request("workspace.create", params: ["label": .string("Appearance fixture"), "cwd": .string("/tmp"), "focus": .bool(true)])
+        let space = try created["workspace"].decode(Workspace.self)
+        let first = try created["root_pane"].decode(Pane.self)
+        let second = try await client.request("tab.create", params: ["workspace_id": .string(space.id), "label": .string("Other"), "focus": .bool(false)])["root_pane"].decode(Pane.self)
+        await store.refresh()
+        store.selectSpace(space)
+        let deck = TerminalTabDeckView()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 650), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.contentView = deck
+        window.orderBack(nil)
+        defer { deck.removeAllTabs(); window.orderOut(nil); devices.stop() }
+        func update(_ scheme: ColorScheme = .light) {
+            deck.update(store: store, colorScheme: scheme, displayScale: window.backingScaleFactor)
+            deck.layoutSubtreeIfNeeded()
+        }
+        var views: [String: HerdrTerminalView] = [:]
+        for pane in [first, second] {
+            store.selectedTab = pane.tabID
+            store.selectedPane = pane.id
+            await store.refresh()
+            update()
+            let marker = "appearance-\(pane.id)-END"
+            _ = try await client.request("pane.send_input", params: ["pane_id": .string(pane.id), "text": .string("printf '\\033[31mANSI red \\033[38;2;42;190;240mRGB blue \\033[0m\(marker)\\n'"), "keys": .array([.string("enter")])])
+            try await wait("mount \(pane.id)") {
+                update()
+                if let view = terminals(deck).first(where: { viewport($0).contains(marker) }) { views[pane.id] = view; return true }
+                return false
+            }
+        }
+        let hidden = views[first.id]!, visible = views[second.id]!
+        let controllers = views.mapValues { $0.controller! }
+        let delegates = views.mapValues { $0.delegate as! HerdrMac.TerminalSurface.Coordinator }
+        let generations = delegates.mapValues { $0.controller.generation }
+        let oldConfig = hidden.controller!.renderedConfig
+        let theme = hidden.controller!.theme
+        let hiddenHost = deck.subviews.compactMap { $0 as? NSHostingView<AnyView> }.first { $0.isHidden }!
+        // AnyView uses reference-backed type erasure. Retain the storage object
+        // while comparing it, so allocation/address reuse cannot mask a root write.
+        func rootStorage(_ host: NSHostingView<AnyView>) throws -> AnyObject {
+            guard let storage = Mirror(reflecting: host.rootView).children.first(where: { $0.label == "storage" })?.value,
+                  Mirror(reflecting: storage).displayStyle == .class else {
+                throw HerdrError.message("SwiftUI AnyView storage observation unavailable")
+            }
+            return storage as AnyObject
+        }
+        var previous = try rootStorage(hiddenHost)
+        var baseline = 0
+        for value in ["baseline one", "baseline two", "baseline three"] {
+            _ = try await client.request("pane.rename", params: ["pane_id": .string(first.id), "label": .string(value)])
+            await store.refresh(); update()
+            let next = try rootStorage(hiddenHost)
+            if previous !== next { baseline += 1 }; previous = next
+        }
+        print("BASELINE: hidden cosmetic root publications = \(baseline) across 3 metadata updates")
+        guard baseline == 0 else { throw HerdrError.message("Hidden metadata roots regressed from the recorded zero-publication baseline") }
+        var publications = 0
+        for color in [ColorValue.rgb(180, 40, 80), .rgb(70, 130, 210), .rgb(90, 200, 100)] {
+            store.appearanceStore.setNativeOverride(color, for: "accent", scope: .common)
+            update()
+            let next = try rootStorage(hiddenHost)
+            if previous !== next { publications += 1 }; previous = next
+        }
+        print("CURRENT: hidden cosmetic root publications = \(publications) across 3 UI palette updates")
+        guard publications == baseline, hidden.controller!.renderedConfig == oldConfig else {
+            throw HerdrError.message("Hidden appearance publications differ from measured baseline")
+        }
+        // Search is a native AppKit descendant of the separately hosted root:
+        // its attributed text proves the palette environment actually arrived.
+        store.appearanceStore.setNativeOverride(.rgb(230, 70, 100), for: "text", scope: .common)
+        store.paneSearchRequest = (second.id, UUID())
+        update()
+        try await wait("mounted search output") { descendants(deck).contains { $0 is SearchOutputTextView } }
+        let search = descendants(deck).compactMap { $0 as? SearchOutputTextView }.first!
+        try await wait("search snapshot") { !search.string.isEmpty }
+        let actual = (search.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.usingColorSpace(.sRGB)
+        guard let actual, abs(actual.redComponent - 230.0 / 255) < 0.01,
+              abs(actual.greenComponent - 70.0 / 255) < 0.01 else {
+            throw HerdrError.message("Mounted search did not receive current UI palette; got \(String(describing: actual))")
+        }
+        store.appearanceStore.setNativeOverride(.rgb(80, 100, 210), for: "text", scope: .common)
+        update()
+        try await wait("existing search restyles after a palette edit") {
+            let color = (search.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.usingColorSpace(.sRGB)
+            return color.map { abs($0.redComponent - 80.0 / 255) < 0.01 && abs($0.blueComponent - 210.0 / 255) < 0.01 } == true
+        }
+        let currentTextColor = (search.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.usingColorSpace(.sRGB)
+        for (id, view) in views {
+            guard terminals(deck).contains(where: { $0 === view }), view.controller === controllers[id],
+                  delegates[id]!.controller.generation == generations[id], view.controller!.theme == theme,
+                  view.controller!.renderedConfig == oldConfig else {
+                throw HerdrError.message("UI palette changed live terminal/controller, connection, or Ghostty theme")
+            }
+            print("IDENTITY: \(id): native \(ObjectIdentifier(view)), renderer \(ObjectIdentifier(controllers[id]!)), transport \(ObjectIdentifier(delegates[id]!.controller)), generation \(generations[id]!) unchanged")
+        }
+        store.appearance = "dark"
+        update(.light) // A forced mode wins even if the enclosing window is light.
+        guard visible.controller!.renderedConfig != oldConfig, hidden.controller!.renderedConfig == oldConfig else {
+            throw HerdrError.message("Light/dark update did not reach only the visible Ghostty surface")
+        }
+        var paletteReadyAtReveal = false
+        let visibility = hidden.onRetainedTabVisibility
+        hidden.onRetainedTabVisibility = { shown, zoomed in
+            if shown {
+                // Inspect retained presentation values at the exact native reveal boundary.
+                paletteReadyAtReveal = hiddenHost.appearance?.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    && hidden.appearance?.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    && hidden.controller!.renderedConfig != oldConfig
+                    && ((try? rootStorage(hiddenHost)) !== previous)
+                    && hostedSnapshot(hiddenHost.rootView)?.appearance == store.appearanceStore.resolvedSnapshot
+            }
+            visibility?(shown, zoomed)
+        }
+        store.selectedTab = first.tabID; store.selectedPane = first.id
+        update(.dark)
+        hidden.onRetainedTabVisibility = visibility
+        guard paletteReadyAtReveal else { throw HerdrError.message("Pending appearance not applied before native reveal") }
+        // The revealed root must use the latest palette, including changes made while hidden.
+        store.paneSearchRequest = (first.id, UUID())
+        update(.dark)
+        try await wait("revealed search") { descendants(hiddenHost).contains { $0 is SearchOutputTextView } }
+        let revealedSearch = descendants(hiddenHost).compactMap { $0 as? SearchOutputTextView }.first!
+        try await wait("revealed snapshot") { !revealedSearch.string.isEmpty }
+        let revealedColor = (revealedSearch.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.usingColorSpace(.sRGB)
+        guard revealedColor == currentTextColor, hidden.controller === controllers[first.id], hidden.controller!.theme == theme,
+              viewport(hidden).contains("appearance-\(first.id)-END"), delegates[first.id]!.controller.generation == generations[first.id] else {
+            throw HerdrError.message("Reveal lost palette, controller, theme, connection, or terminal output")
+        }
+        store.appearance = "light"; update(.light)
+        guard hidden.controller!.renderedConfig == oldConfig else { throw HerdrError.message("Light Ghostty theme did not restore in place") }
+        print("PASS: UI palette preserves native/controller identity, stream, fixed Ghostty theme and ANSI/RGB output; hidden roots match baseline and catch up before reveal; light/dark updates in place")
+        if let directory = ProcessInfo.processInfo.environment["HERDR_APPEARANCE_CAPTURE_DIR"] {
+            // Optional manual QA uses the real workspace and disposable shells.
+            // No agent processes are started; the footer previews native status badges.
+            deck.removeAllTabs()
+            store.appearanceStore.resetNativeOverrides()
+            _ = try await client.request("workspace.create", params: ["label": .string("Unselected space"), "cwd": .string("/tmp"), "focus": .bool(false)])
+            _ = try await client.request("pane.split", params: ["target_pane_id": .string(first.id), "direction": .string("right"), "focus": .bool(false)])
+            await store.refresh()
+            let host = NSHostingView(rootView: AppearanceVisualFixture(store: store, devices: devices))
+            window.contentView = host
+            window.setContentSize(NSSize(width: 1200, height: 800))
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            for (name, mode, preset) in [("default-light", "light", "uherdr"), ("default-dark", "dark", "uherdr"), ("nord-dark", "dark", "nord"), ("one-light-search", "light", "one-light")] {
+                store.appearance = mode
+                try store.appearanceStore.setPreset(preset)
+                if name.contains("search") { store.paneSearchRequest = (first.id, UUID()) }
+                try await Task.sleep(for: .milliseconds(800))
+                if name.contains("search"), let field = window.firstResponder as? NSTextView {
+                    field.insertText("ANSI", replacementRange: NSRange(location: NSNotFound, length: 0))
+                    try await Task.sleep(for: .milliseconds(300))
+                }
+                let capture = Process()
+                capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                capture.arguments = ["-x", "-l", String(window.windowNumber), directory + "/" + name + ".png"]
+                try capture.run(); capture.waitUntilExit()
+                print("VISUAL: \(name) screen capture exit \(capture.terminationStatus)")
+                if capture.terminationStatus != 0, let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    if let data = bitmap.representation(using: .png, properties: [:]) {
+                        try data.write(to: URL(fileURLWithPath: directory + "/" + name + "-native-cache.png"))
+                        print("VISUAL: saved actual AppKit cached rendering (Metal terminal contents may be absent)")
+                    }
+                }
+                // NavigationSplitView's material sidebar cannot be captured by
+                // cacheDisplay on this host. Capture the same production sidebar
+                // in a plain native host as separate, explicitly named evidence.
+                let sidebar = NSHostingView(rootView: DeviceSidebarView(devices: devices)
+                    .environment(\.resolvedAppearance, store.appearanceStore.resolvedSnapshot)
+                    .environment(\.colorScheme, mode == "dark" ? .dark : .light)
+                    .foregroundStyle(NativePalette(snapshot: store.appearanceStore.resolvedSnapshot, colorScheme: mode == "dark" ? .dark : .light).color("text"))
+                    .background(Color(nsColor: .windowBackgroundColor)))
+                let sidebarWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+                sidebarWindow.appearance = NSAppearance(named: mode == "dark" ? .darkAqua : .aqua)
+                sidebarWindow.contentView = sidebar
+                sidebarWindow.orderBack(nil)
+                try await Task.sleep(for: .milliseconds(150))
+                sidebar.layoutSubtreeIfNeeded()
+                if let bitmap = sidebar.bitmapImageRepForCachingDisplay(in: sidebar.bounds) {
+                    sidebar.cacheDisplay(in: sidebar.bounds, to: bitmap)
+                    if let data = bitmap.representation(using: .png, properties: [:]) {
+                        try data.write(to: URL(fileURLWithPath: directory + "/" + name + "-sidebar-native-cache.png"))
+                    }
+                }
+                sidebarWindow.orderOut(nil)
+                sidebarWindow.contentView = nil
+            }
+            window.contentView = nil
+        }
+        _ = try await client.request("workspace.close", params: ["workspace_id": .string(space.id)])
+    }
+
+    static func hostedSnapshot(_ value: Any, depth: Int = 0) -> TerminalTabSnapshot? {
+        if let snapshot = value as? TerminalTabSnapshot { return snapshot }
+        guard depth < 40, !(value is SessionStore) else { return nil }
+        for child in Mirror(reflecting: value).children {
+            if let snapshot = hostedSnapshot(child.value, depth: depth + 1) { return snapshot }
+        }
+        return nil
+    }
+
+    @MainActor static func wait(_ label: String, _ predicate: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(15)
+        while !predicate() {
+            guard Date() < deadline else { throw HerdrError.message("Timed out: \(label)") }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+    @MainActor static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    @MainActor static func terminals(_ view: NSView) -> [HerdrTerminalView] { descendants(view).compactMap { $0 as? HerdrTerminalView } }
+    @MainActor static func viewport(_ view: HerdrTerminalView) -> String {
+        guard case .inMemory(let session) = view.configuration.backend else { return "" }
+        return session.readViewportText() ?? ""
+    }
+}
+
+private struct AppearanceVisualFixture: View {
+    @ObservedObject var store: SessionStore
+    let devices: DeviceStore
+    var body: some View {
+        VStack(spacing: 0) {
+            WorkspaceView(store: store, devices: devices)
+            HStack {
+                ForEach([AgentStatus.working, .blocked, .done, .idle, .unknown], id: \.self) { StatusBadge(status: $0) }
+            }.padding(8)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .environment(\.resolvedAppearance, store.appearanceStore.resolvedSnapshot)
+        .preferredColorScheme(store.colorScheme)
+    }
+}

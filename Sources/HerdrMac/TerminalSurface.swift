@@ -347,6 +347,8 @@ struct TerminalSurface: NSViewRepresentable {
             self.paneID = paneID
         }
 
+        // UI palette edits stay in the native hosting tree. Only the existing
+        // font and light/dark settings may reconfigure this retained renderer.
         func updateAppearance(fontSize: Double, dark: Bool) {
             if self.fontSize != fontSize {
                 engine.setTerminalConfiguration(TerminalConfiguration().fontSize(Float(fontSize)))

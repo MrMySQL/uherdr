@@ -23,6 +23,18 @@ struct NativePalette {
         Color(nsColor: nsColor(role))
     }
 
+    /// Reset keeps the existing native styling at each use site (including its
+    /// opacity); explicit theme colors are already complete surface colors.
+    func color(_ role: String, fallback: @autoclosure () -> Color) -> Color {
+        guard case .rgb = palette.colors[role] else { return fallback() }
+        return color(role)
+    }
+
+    func nsColor(_ role: String, fallback: @autoclosure () -> NSColor) -> NSColor {
+        guard case .rgb = palette.colors[role] else { return fallback() }
+        return nsColor(role)
+    }
+
     func nsColor(_ role: String) -> NSColor {
         guard case let .rgb(red, green, blue) = palette.colors[role] else {
             return Self.nativeFallback(for: role)

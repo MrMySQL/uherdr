@@ -12,6 +12,7 @@ struct TerminalTabSnapshot: Equatable {
     var searchToken: UUID?
     var dragPayloads: [String: PaneDragPayload]
     var moveDestinationTabs: [HerdrCore.Tab]
+    let appearance: ResolvedAppearanceSnapshot
     let fontSize: Double
     let colorScheme: ColorScheme
     let displayScale: CGFloat
@@ -28,9 +29,10 @@ struct TerminalTabSnapshot: Equatable {
             guard visible, let payload = store.paneDragPayload(for: pane.id) else { return nil }
             return (pane.id, payload)
         })
+        appearance = store.appearanceStore.resolvedSnapshot
         fontSize = store.fontSize
         moveDestinationTabs = visible ? store.visibleTabs.filter { $0.id != layout.tabID } : []
-        self.colorScheme = colorScheme
+        self.colorScheme = store.colorScheme ?? colorScheme
         self.displayScale = displayScale
         self.visible = visible
     }
@@ -125,6 +127,7 @@ struct TerminalTabDeck: NSViewRepresentable {
                 entries[tab.id] = entry
             } else {
                 let host = NSHostingView(rootView: root(snapshot, store: store))
+                host.appearance = NSAppearance(named: snapshot.colorScheme == .dark ? .darkAqua : .aqua)
                 host.sizingOptions = []
                 host.frame = bounds
                 host.isHidden = true
@@ -155,6 +158,7 @@ struct TerminalTabDeck: NSViewRepresentable {
     private func apply(_ snapshot: TerminalTabSnapshot, to entry: inout Entry, store: SessionStore) {
         guard entry.snapshot != snapshot else { return }
         entry.snapshot = snapshot
+        entry.host.appearance = NSAppearance(named: snapshot.colorScheme == .dark ? .darkAqua : .aqua)
         entry.host.rootView = root(snapshot, store: store)
     }
 
@@ -166,8 +170,10 @@ struct TerminalTabDeck: NSViewRepresentable {
             .modifier(PaneDragLifecycle())
             .environment(\.colorScheme, snapshot.colorScheme)
             .environment(\.displayScale, snapshot.displayScale)
-            .tint(herdrAccentColor)
-            .accentColor(herdrAccentColor)
+            .environment(\.resolvedAppearance, snapshot.appearance)
+            .foregroundStyle(NativePalette(snapshot: snapshot.appearance, colorScheme: snapshot.colorScheme).color("text"))
+            .tint(NativePalette(snapshot: snapshot.appearance, colorScheme: snapshot.colorScheme).color("accent"))
+            .accentColor(NativePalette(snapshot: snapshot.appearance, colorScheme: snapshot.colorScheme).color("accent"))
             .accessibilityHidden(!snapshot.visible)
             .frame(maxWidth: .infinity, maxHeight: .infinity))
     }
