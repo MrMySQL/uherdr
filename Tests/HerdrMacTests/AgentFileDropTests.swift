@@ -100,9 +100,13 @@ enum AgentFileDropTests {
                         let deadline = Date().addingTimeInterval(timeout)
                         while true {
                             try Task.checkCancellation()
-                            if let error = store.operationError ?? transport.error { throw HerdrError.message(error) }
+                            // Startup stderr can contain warnings. Report transport
+                            // diagnostics only if the requested state never arrives.
+                            if let error = store.operationError { throw HerdrError.message(error) }
                             if predicate() { return }
-                            guard Date() < deadline else { throw HerdrError.message("Timed out: \(agent) \(remote ? "SSH" : "local")") }
+                            guard Date() < deadline else {
+                                throw HerdrError.message(transport.error ?? "Timed out: \(agent) \(remote ? "SSH" : "local")")
+                            }
                             try await Task.sleep(for: .milliseconds(100))
                         }
                     }
@@ -147,6 +151,18 @@ enum AgentFileDropTests {
                     let board = NSPasteboard.withUniqueName()
                     defer { board.releaseGlobally() }
                     try require(board.writeObjects([textURL, imageURL] as [NSURL]), "Could not write file URLs to the pasteboard")
+                    func trackedUploads() throws -> Set<String> {
+                        let log = URL(fileURLWithPath: ssh).deletingLastPathComponent().appendingPathComponent("uploads")
+                        guard FileManager.default.fileExists(atPath: log.path) else { return [] }
+                        let paths = try String(contentsOf: log, encoding: .utf8).split(separator: "\n").map(String.init)
+                        for path in paths {
+                            let prefix = "/tmp/herdr-drop-"
+                            try require(path.hasPrefix(prefix) && UUID(uuidString: String(path.dropFirst(prefix.count))) != nil,
+                                "Invalid staging-directory record: \(path)")
+                        }
+                        return Set(paths)
+                    }
+                    let uploadsBeforeDrop = remote ? try trackedUploads() : []
                     let drag = FileDragInfo(pasteboard: board, window: window)
                     try require(view.performDragOperation(drag), "The terminal rejected the file drop")
                     // The cwd is already visible during startup. Require both
@@ -161,6 +177,8 @@ enum AgentFileDropTests {
                     if let error = store.operationError { throw HerdrError.message(error) }
                     print("DRAFT \(agent) \(remote ? "SSH" : "local"):\n\(screen())")
                     if remote {
+                        try require(try trackedUploads().subtracting(uploadsBeforeDrop).count == 1,
+                            "This remote drop did not register one new staging directory; check the SSH upload interceptor")
                         // A path-only implementation cannot pass after the
                         // local originals disappear, even on loopback SSH.
                         try FileManager.default.removeItem(at: textURL)

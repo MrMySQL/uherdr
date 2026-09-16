@@ -111,12 +111,3 @@ export HERDR_DROP_TEST_SSH="$TEST_ROOT/ssh"
 export HERDR_DROP_TEST_KEY="$TEST_ROOT/client_key"
 export HERDR_DROP_TEST_PORT="$TEST_PORT"
 bash scripts/test-terminal-keyboard.sh --agent-drops "$TEST_SOCKET" "$HERDR_TEST_BIN"
-# Both remote agent runs must have registered their staging directory. If the
-# upload command changes shape, fail loudly instead of silently leaking files.
-python3 - "$TEST_ROOT/uploads" <<'PY'
-import pathlib, re, sys
-log = pathlib.Path(sys.argv[1])
-directories = set(log.read_text().splitlines()) if log.exists() else set()
-if len(directories) != 2 or any(not re.fullmatch(r'/tmp/herdr-drop-[A-Fa-f0-9-]{36}', path) for path in directories):
-    sys.exit('Expected staging-directory records for both remote agents; update the SSH upload interceptor.')
-PY
