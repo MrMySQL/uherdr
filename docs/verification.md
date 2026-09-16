@@ -14,11 +14,37 @@ output and same-text redraws. The keyboard, paste, file-drop and URL checks in
 the native harness passed. The release app built and its strict signature check
 passed.
 
-Application mouse forwarding is a separate server capability. Stock Herdr 0.9.0
-omits application mouse modes from JSON terminal frames, so application clicks
-such as expanding tool calls are unavailable through that stream. The optional
-`scripts/test-terminal-mouse.sh` capability check is retained for future upstream
-support; it is expected to fail on stock 0.9.0 and is not part of the default suite.
+Application mouse and clipboard events are available in stock Herdr 0.9.0's
+binary protocol 22, although its JSON terminal stream discards them. The native
+client now uses that protocol and a focused client-shell connection. The optional
+`scripts/test-terminal-mouse.sh` exercises application press/drag/release,
+OSC 52 clipboard delivery, Shift-drag local copying, PTY dimensions, reconnect,
+and mode-only changes against a disposable stock server.
+
+The native mouse suite passed on stock Herdr 0.9.0 (protocol 22), including final
+clipboard delivery when the application exits and disables mouse reporting.
+The AppKit harness supplies deterministic key-window state and injects mouse
+handlers into the production SwiftUI/Ghostty bridge; it does not claim a manual
+foreground-window or actual Claude Code check. Wire and Unix-socket lifecycle
+tests passed, including fragmented messages, malformed data, input ordering,
+custom API socket names and graceful detach before reconnect.
+
+The repository regression components passed after targeted reruns: core/live API,
+hotkeys, search, agent-worktree fixtures, pane transfers, native keyboard/paste,
+retained-tab performance, terminal stream and SSH forwarding. The first full run
+hit an intermittent pane-transfer shell-environment assertion; both the committed
+baseline and this branch passed isolated reruns. Performance validation caught an
+extra mouse-reset sequence on legacy startup; resetting only when capture changes
+restored the existing exact-byte check. No authenticated agent tests ran.
+The release app build, strict signature verification, plist validation and
+`git diff --check` passed. Packaging builds the `Herdr` product explicitly,
+leaving debug-only test executables out of the release build.
+
+Stock clipboard messages lack originating-pane identity. The necessary active
+client-shell endpoint can also resize tabs without direct resize locks; see
+[paste compatibility](terminal-paste.md#upgrade-compatibility). It starts only
+after mouse capture is requested and closes on blur, hide or disconnect.
+
 
 ## Multi-device SSH — 2026-09-08
 

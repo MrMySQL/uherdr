@@ -29,7 +29,7 @@ enum GhosttyLiveTests {
         let host = NSHostingView(rootView: AnyView(HerdrMac.TerminalSurface(
             controller: transport, pane: pane, store: store, dark: true, fontSize: store.fontSize, selected: store.selectedPane == pane.id
         )))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 400),
+        let window = NativeFocusTestWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 400),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
@@ -314,6 +314,19 @@ enum GhosttyLiveTests {
             }
             throw HerdrError.message(message + ": " + (session.readViewportText() ?? "<no viewport>"))
         }
+        let board = NSPasteboard.general
+        let saved = (board.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        }
+        defer {
+            board.clearContents()
+            let items = saved.map { entries -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, data) in entries { item.setData(data, forType: type) }
+                return item
+            }
+            board.writeObjects(items)
+        }
         let path = FileManager.default.currentDirectoryPath + "/Tests/Fixtures/terminal-mouse.py"
         precondition(view.paste(text: "python3 '" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"))
         precondition(view.sendKey(.enter))
@@ -342,8 +355,71 @@ enum GhosttyLiveTests {
         }
         print("PASS: native click expands a tool call through the real Herdr stream")
 
+        // Command-line AppKit tests cannot reliably become the foreground app.
+        // Supply key-window state while exercising the production focus observer.
+        let focusWindow = window as! NativeFocusTestWindow
+        window.makeFirstResponder(view)
+        focusWindow.setTestKey(true)
+        try await waitFor("Clipboard endpoint did not acknowledge pane focus") { transport.clipboardReady }
+        let baseline = session.readViewportText() ?? ""
+        let sizeLine = baseline.components(separatedBy: "\n").first { $0.contains("pty-size:") }?
+            .trimmingCharacters(in: .whitespaces)
+        func drag(modifiers: NSEvent.ModifierFlags = []) {
+            let start = NSPoint(x: 6, y: view.bounds.height - 85)
+            let end = NSPoint(x: 180, y: start.y)
+            for (type, point) in [(NSEvent.EventType.leftMouseDown, start), (.leftMouseDragged, end), (.leftMouseUp, end)] {
+                let event = NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil), modifierFlags: modifiers,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
+                switch type {
+                case .leftMouseDown: view.mouseDown(with: event)
+                case .leftMouseDragged: view.mouseDragged(with: event)
+                default: view.mouseUp(with: event)
+                }
+            }
+        }
+        board.clearContents(); board.setString("before-application-copy", forType: .string)
+        drag()
+        try await waitFor("Application press/drag/release or OSC 52 clipboard forwarding failed") {
+            board.string(forType: .string) == "Native application selection café"
+                && session.readViewportText()?.contains("application-copy-count: 1") == true
+        }
+        transport.send(Data("s".utf8))
+        try await Task.sleep(for: .milliseconds(150))
+        guard let sizeLine, session.readViewportText()?.contains(sizeLine) == true else {
+            throw HerdrError.message("Clipboard endpoint changed the directly controlled PTY dimensions")
+        }
+        board.clearContents(); board.setString("before-local-copy", forType: .string)
+        drag(modifiers: .shift)
+        try await waitFor("Shift-drag did not preserve native local copy-on-selection") {
+            board.string(forType: .string)?.contains("application-own") == true
+        }
+        guard session.readViewportText()?.contains("application-copy-count: 1") == true else {
+            throw HerdrError.message("Shift-drag unexpectedly reached the application")
+        }
+        print("PASS: application drag copies OSC 52 text, Shift-drag copies locally, and clipboard focus preserves PTY size")
+
+        focusWindow.setTestKey(false)
+        try await waitFor("Losing native focus retained clipboard ownership") { !transport.clipboardReady }
+        board.clearContents(); board.setString("unfocused-clipboard-sentinel", forType: .string)
+        transport.send(Data("c".utf8))
+        try await waitFor("Unfocused fixture did not emit its clipboard request") {
+            session.readViewportText()?.contains("unfocused-copy-requested") == true
+        }
+        guard board.string(forType: .string) == "unfocused-clipboard-sentinel" else {
+            throw HerdrError.message("An unfocused native terminal changed the clipboard")
+        }
+        focusWindow.setTestKey(true)
+        try await waitFor("Returning native focus did not restore clipboard ownership") { transport.clipboardReady }
+        drag()
+        try await waitFor("Returning native focus did not restore application copying") {
+            board.string(forType: .string) == "Native application selection café"
+                && session.readViewportText()?.contains("application-copy-count: 2") == true
+        }
+        print("PASS: losing native focus blocks clipboard writes and refocusing restores application copying")
+
         // Reset only the test renderer to prove a new stream restores mode state.
-        session.receive("\u{1b}[?1000l\u{1b}[?1006l")
+        session.receive("\u{1b}[?1000;1002;1003;1006l")
         session.waitForPendingOutput()
         precondition(!view.isMouseCaptured)
         transport.retry()
@@ -360,7 +436,8 @@ enum GhosttyLiveTests {
         try await waitFor("Enabling mouse mode without drawing did not update capture") { view.isMouseCaptured }
         transport.send(Data("q".utf8))
         try await waitFor("Exiting the application did not restore ordinary terminal input") {
-            !view.isMouseCaptured && session.readViewportText()?.contains("mouse-fixture-finished") == true
+            !view.isMouseCaptured && board.string(forType: .string) == "final-application-copy"
+                && session.readViewportText()?.contains("mouse-fixture-finished") == true
         }
         print("PASS: mode-only changes and application exit update native mouse capture")
     }
@@ -754,4 +831,15 @@ enum GhosttyLiveTests {
         }
     }
 
+}
+
+@MainActor
+private final class NativeFocusTestWindow: NSWindow {
+    private var testKey: Bool?
+    override var isKeyWindow: Bool { testKey ?? super.isKeyWindow }
+    func setTestKey(_ value: Bool) {
+        testKey = value
+        NotificationCenter.default.post(name: value ? NSWindow.didBecomeKeyNotification : NSWindow.didResignKeyNotification,
+                                        object: self)
+    }
 }

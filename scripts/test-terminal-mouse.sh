@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-# Optional upstream capability check, not needed for local selection/copy.
-# Stock Herdr 0.9.0 omits application mouse modes and is expected to fail.
+# End-to-end native mouse and application clipboard checks on stock Herdr 0.9.0.
 cd "$(dirname "$0")/.."
 HERDR_TEST_BIN="${HERDR_BIN:-$(command -v herdr || true)}"
 if [ -z "$HERDR_TEST_BIN" ]; then
@@ -24,5 +23,4 @@ for _ in {1..50}; do
     sleep 0.1
 done
 if [ ! -S "$TEST_SOCKET" ]; then cat "$TEST_ROOT/server.log" >&2; exit 1; fi
-python3 scripts/test-terminal-stream.py "$TEST_SOCKET" "$HERDR_TEST_BIN" --check-mouse-modes
-HERDR_TEST_MOUSE=1 bash scripts/test-terminal-keyboard.sh --live "$TEST_SOCKET" "$HERDR_TEST_BIN"
+HERDR_TEST_PASTE_AGENTS=0 HERDR_TEST_MOUSE=1 bash scripts/test-terminal-keyboard.sh --live "$TEST_SOCKET" "$HERDR_TEST_BIN"
