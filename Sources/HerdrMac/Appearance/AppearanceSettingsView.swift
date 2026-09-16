@@ -16,6 +16,12 @@ struct AppearanceSettingsView: View {
             }
             .pickerStyle(.segmented)
 
+            Picker("Theme", selection: unifiedPresetBinding) {
+                if store.unifiedPreset == nil {
+                    Text("Custom (mixed)").tag("")
+                }
+                ForEach(BuiltInThemes.names, id: \.self) { Text(themeLabel($0)).tag($0) }
+            }
             Picker("Light theme", selection: lightPresetBinding) {
                 ForEach(BuiltInThemes.names, id: \.self) { Text(themeLabel($0)).tag($0) }
             }
@@ -78,6 +84,16 @@ struct AppearanceSettingsView: View {
 
     private var fontSizeBinding: Binding<Double> {
         Binding(get: { store.fontSize }, set: store.setFontSize)
+    }
+
+    private var unifiedPresetBinding: Binding<String> {
+        Binding(
+            get: { store.unifiedPreset ?? "" },
+            set: { selection in
+                guard !selection.isEmpty else { return }
+                try? store.setPreset(selection)
+            }
+        )
     }
 
     private var lightPresetBinding: Binding<String> {

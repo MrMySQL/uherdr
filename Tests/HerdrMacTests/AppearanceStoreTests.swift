@@ -10,9 +10,35 @@ struct AppearanceStoreTests {
         testLegacyMigrationAndSecondInitialization()
         testInvalidPersistenceIsPreservedUntilAnEdit()
         try testResolutionAndNoOpPublication()
+        try testMainPresetSelection()
         try testImportedFixedThemeResolutionBoundary()
         testSharedSessionAndDevicePublication()
         print("PASS: appearance migration, invalid fallback, resolution, shared publication, and device isolation")
+    }
+
+    @MainActor
+    private static func testMainPresetSelection() throws {
+        try withDefaults { defaults in
+            let store = AppearanceStore(defaults: defaults)
+            var publications = 0
+            let observation = store.objectWillChange.sink { publications += 1 }
+            defer { observation.cancel() }
+
+            precondition(store.unifiedPreset == "uherdr")
+            store.setLightPreset("nord")
+            precondition(store.unifiedPreset == nil)
+            precondition(publications == 1)
+
+            try store.setPreset("dracula")
+            precondition(store.unifiedPreset == "dracula")
+            precondition(store.lightPreset == "dracula" && store.darkPreset == "dracula")
+            precondition(store.resolvedSnapshot.light.colors["accent"] == .rgb(189, 147, 249))
+            precondition(store.resolvedSnapshot.dark.colors["accent"] == .rgb(189, 147, 249))
+            precondition(publications == 2)
+
+            try store.setPreset("dracula")
+            precondition(publications == 2, "Repeated main preset selection must stay silent")
+        }
     }
 
     @MainActor

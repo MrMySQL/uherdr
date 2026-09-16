@@ -100,6 +100,11 @@ final class AppearanceStore: ObservableObject {
     private(set) var resolvedSnapshot: ResolvedAppearanceSnapshot
     private(set) var revision = 0
 
+    var unifiedPreset: String? {
+        guard lightPreset == darkPreset else { return nil }
+        return lightPreset
+    }
+
     private let defaults: UserDefaults
     private let encoder = JSONEncoder()
 
