@@ -1,6 +1,6 @@
 # uherdr coloring design
 
-Status: implementation delivered in three increments on `feat/coloring`; acceptance evidence is recorded in `docs/verification.md`. Final review is pending.
+Status: implementation delivered in three increments on `feat/coloring`; acceptance evidence is recorded in `docs/verification.md`. The broad whole-branch review at `c183a4c` found no blocking issues, and its three minor follow-ups have been applied.
 
 ## Outcome and scope
 

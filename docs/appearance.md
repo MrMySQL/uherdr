@@ -37,7 +37,7 @@ Colors resolve in this order:
 3. Imported light/dark overrides when auto-switching is enabled.
 4. Native common overrides, then native active-mode overrides.
 
-Supported override keys are `accent`, `panel_bg`, `sidebar_bg`, `active_row_bg`, `selection_bg`, `surface0`, `surface1`, `surface_dim`, `overlay0`, `overlay1`, `text`, `subtext0`, `mauve`, `green`, `yellow`, `red`, `blue`, `teal`, and `peach`. Mode tables accept the same keys. Reset/default/transparent values restore the native role fallback; they do not make text invisible.
+Supported override keys are `accent`, `panel_bg`, `sidebar_bg`, `active_row_bg`, `selection_bg`, `surface0`, `surface1`, `surface_dim`, `overlay0`, `overlay1`, `text`, `subtext0`, `mauve`, `green`, `yellow`, `red`, `blue`, `teal`, and `peach`. Mode tables accept the same keys. Reset/default/transparent values restore the selected base palette's value for that role. Native role fallback applies only when the base role is itself reset; reset never makes text invisible.
 
 ## Sidebar rows and rules
 

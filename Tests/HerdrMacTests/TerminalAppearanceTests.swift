@@ -309,8 +309,9 @@ import HerdrCore
         precondition(hidden.sendKey(.enter))
         try await wait("input after theme changes") { viewport(hidden).contains("INPUT_CONTINUES_yes") }
         let afterHistory = try await store.readPaneForSearch(first.id).text
+        let historyLines = Set(afterHistory.split(whereSeparator: \.isNewline).map(String.init))
         guard afterHistory.contains("AFTER_" + pidLine), afterHistory.contains("SCROLLBACK_SENTINEL_before"),
-              afterHistory.contains("history-line-1"), afterHistory.contains("history-line-120") else {
+              historyLines.contains("history-line-1"), historyLines.contains("history-line-120") else {
             throw HerdrError.message("Shell PID or server scrollback changed across themes")
         }
         print("PASS: live \(pidLine), output sentinel, exact native selection, 120-line scrollback, subsequent input, renderer and writable controller survive light/dark and UI theme changes")

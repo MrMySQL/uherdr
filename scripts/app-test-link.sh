@@ -4,9 +4,11 @@
 APP_TEST_CONFIGURATION="${APP_TEST_CONFIGURATION:-debug}"
 APP_TEST_BUILD="$(swift build -c "$APP_TEST_CONFIGURATION" --show-bin-path)"
 APP_TEST_LINK_FILE="$APP_TEST_BUILD/Herdr.product/Objects.LinkFileList"
+APP_TEST_LINK_LAYOUT=swiftpm
 if [ ! -f "$APP_TEST_LINK_FILE" ]; then
     case "$APP_TEST_CONFIGURATION" in release) APP_TEST_LAYOUT=Release ;; *) APP_TEST_LAYOUT=Debug ;; esac
     APP_TEST_LINK_FILE="$(find .build -path "*/$APP_TEST_LAYOUT/Herdr-p.build/Objects-normal/*/Herdr.LinkFileList" -print -quit)"
+    APP_TEST_LINK_LAYOUT=xcode
 fi
 if [ ! -f "$APP_TEST_LINK_FILE" ]; then
     printf 'Could not locate the Herdr app object link list.\n' >&2
@@ -14,13 +16,23 @@ if [ ! -f "$APP_TEST_LINK_FILE" ]; then
 fi
 APP_TEST_MODULE_DIR="$(dirname "$APP_TEST_LINK_FILE")"
 APP_TEST_OBJECTS=()
-while IFS= read -r object || [ -n "$object" ]; do
-    [ -n "$object" ] || continue
+app_test_append_object() {
+    local object="$1"
+    [ -n "$object" ] || return 0
     case "$object" in
         */HerdrApp.swift.o|*/HerdrApp.o) ;;
         *) APP_TEST_OBJECTS+=("$object") ;;
     esac
-done < <(tr ' ' '\n' < "$APP_TEST_LINK_FILE")
+}
+if [ "$APP_TEST_LINK_LAYOUT" = swiftpm ]; then
+    while IFS= read -r object || [ -n "$object" ]; do
+        app_test_append_object "$object"
+    done < "$APP_TEST_LINK_FILE"
+else
+    while IFS= read -r object || [ -n "$object" ]; do
+        app_test_append_object "$object"
+    done < <(xargs -n 1 printf '%s\n' < "$APP_TEST_LINK_FILE")
+fi
 APP_TEST_CTOML_MAP="$APP_TEST_BUILD/CTOML.build/module.modulemap"
 if [ ! -f "$APP_TEST_CTOML_MAP" ]; then
     APP_TEST_CTOML_MAP=".build/out/Intermediates.noindex/GeneratedModuleMaps/CTOML.modulemap"

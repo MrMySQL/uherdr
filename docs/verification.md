@@ -243,3 +243,20 @@ cross-machine preference sync, individual resource colors or new terminal
 palette controls were added. The [tested minimal TOML](appearance-example.toml)
 is exercised by the default appearance runner. Historical verification sections
 above describe earlier work and have been preserved.
+
+### Final review follow-ups
+
+The broad whole-branch review at `c183a4c` found no blocking issues. Its three
+minor follow-ups now use exact newline-delimited scrollback records, describe
+reset as restoring the selected base palette before any native fallback, and
+preserve object paths with spaces in both supported generated linker-list
+layouts. A focused fixture covers SwiftPM's one-object-per-line layout and the
+Swift 6.4/Xcode space-separated response layout with quoted and escaped paths.
+
+With `HERDR_TEST_PASTE_AGENTS` unset and the process-local SDK 26.5 path above,
+`bash scripts/test-app-test-link.sh`, `bash scripts/test-appearance.sh`, and
+`./scripts/test.sh` all exited 0 on the amended code. The mounted appearance
+run observed exact `history-line-1` and `history-line-120` records while
+preserving the live shell, selection, renderer and writable controller. The
+full suite exercised all shared-helper consumers. Existing linker warning
+noise remained unchanged.
