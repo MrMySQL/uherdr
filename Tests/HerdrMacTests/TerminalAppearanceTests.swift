@@ -11,6 +11,7 @@ import HerdrCore
         setbuf(stdout, nil)
         Task { @MainActor in
             do {
+                try await sidebarEditorControls()
                 try await settingsPresetControls()
                 try await retainedAppearance(socket: CommandLine.arguments[1], executable: CommandLine.arguments[2])
                 print("PASS: mounted terminal appearance regressions")
@@ -18,6 +19,43 @@ import HerdrCore
             } catch { print("FAIL: \(error)"); exit(1) }
         }
         NSApp.run()
+    }
+
+    @MainActor static func sidebarEditorControls() async throws {
+        let suite = "dev.herdr.sidebar-mounted.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AppearanceStore(defaults: defaults)
+        try store.applyImportedSettings(HerdrAppearanceConfig.parse("""
+        [ui.sidebar.spaces]
+        rows = [["state_icon", {token="workspace",rules=[{contains="prod",fg="#ff8040",bold=true,hide=false}]}], ["$owner"]]
+        """))
+        let host = NSHostingView(rootView: SidebarRulesEditor(store: store).padding(24)
+            .environment(\.resolvedAppearance, store.resolvedSnapshot)
+            .background(Color(nsColor: .windowBackgroundColor)))
+        let window = NSWindow(contentRect: NSRect(x: 60, y: 60, width: 900, height: 900), styleMask: [.titled], backing: .buffered, defer: false)
+        window.title = "Sidebar rules acceptance"
+        window.contentView = host
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil); window.contentView = nil }
+        for source in [AppearanceThemeSource.herdrConfig, .native] {
+            if source == .native { try store.copySidebarToNative() }
+            try await Task.sleep(for: .milliseconds(200))
+            host.layoutSubtreeIfNeeded()
+            let controls = descendants(host).compactMap { $0 as? NSPopUpButton }.filter { $0.itemTitles.contains("Inherit") }
+            guard !controls.isEmpty && controls.allSatisfy({ $0.isEnabled == (source == .native) }) else {
+                throw HerdrError.message("Sidebar style controls must be read-only until copied to Native")
+            }
+            if let directory = ProcessInfo.processInfo.environment["HERDR_SETTINGS_CAPTURE_DIR"] {
+                let path = URL(fileURLWithPath: directory).appendingPathComponent("sidebar-\(source.rawValue)-native-cache.png").path
+                guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { throw HerdrError.message("Sidebar capture unavailable") }
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                guard let data = bitmap.representation(using: .png, properties: [:]) else { throw HerdrError.message("Sidebar PNG unavailable") }
+                try data.write(to: URL(fileURLWithPath: path))
+                print("CAPTURE: mounted sidebar editor and conditional preview \(path)")
+            }
+        }
+        print("PASS: mounted sidebar editor is read-only for import and editable after full native copy")
     }
 
     @MainActor static func settingsPresetControls() async throws {

@@ -8,6 +8,7 @@ import HerdrCore
 struct AppearanceStoreTests {
     @MainActor
     static func main() async throws {
+        try testSidebarCopyAndDeviceCache()
         testLegacyMigrationAndSecondInitialization()
         testInvalidPersistenceIsPreservedUntilAnEdit()
         try testResolutionAndNoOpPublication()
@@ -18,6 +19,51 @@ struct AppearanceStoreTests {
         try await testSuspendedImportCannotOverrideNativeSelection()
         try testExplicitNamesAndTerminalSource()
         print("PASS: appearance migration, import atomicity, bounded regular-file loading, unchanged TOML, offline persistence, source precedence, terminal palette, shared publication, and device isolation")
+    }
+
+    @MainActor
+    private static func testSidebarCopyAndDeviceCache() throws {
+        let suite = "uherdr.sidebar.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AppearanceStore(defaults: defaults)
+        let imported = try HerdrAppearanceConfig.parse("""
+        [ui.sidebar.agents]
+        rows = [["agent"]]
+        row_gap = 3
+        [ui.sidebar.agents.rows_by_agent]
+        codex = [[{token="$load",bold=true,rules=[{gt=80,bold=false,hide=false}]}]]
+        [ui.sidebar.spaces]
+        rows = [["workspace", "$owner"]]
+        """)
+        try store.applyImportedSettings(imported)
+        try store.copySidebarToNative()
+        precondition(store.themeSource == .native && store.sidebarConfiguration == imported.sidebar)
+        precondition(AppearanceStore(defaults: defaults).sidebarConfiguration == imported.sidebar)
+        let first = SessionStore(profile: DeviceProfile(name: "one", executable: "/unused"), defaults: defaults, appearanceStore: store)
+        let second = SessionStore(profile: DeviceProfile(name: "two", executable: "/unused"), defaults: defaults, appearanceStore: store)
+        let base = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Fixtures")
+        let data = try Data(contentsOf: base.appendingPathComponent("snapshot-metadata.json"))
+        let value = try JSONDecoder().decode(JSONValue.self, from: data)
+        let snapshot = try value["snapshot"].decode(SessionSnapshot.self)
+        first.workspaces = snapshot.workspaces; first.agents = snapshot.agents
+        second.workspaces = snapshot.workspaces; second.agents = snapshot.agents
+        precondition(first.agentSidebarRows["w_1:p_1"]![0][0].style.bold == false)
+        let old = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: base.appendingPathComponent("snapshot-0.9.json")))["snapshot"].decode(SessionSnapshot.self)
+        first.agents = old.agents; first.workspaces = old.workspaces
+        precondition(first.agentSidebarRows["w_1:p_1"]!.isEmpty)
+        precondition(second.agentSidebarRows["w_1:p_1"]![0][0].value == "91")
+        precondition(first.spaceSidebarRows["w_1"]![0].count == 1 && second.spaceSidebarRows["w_1"]![0].count == 2)
+        let count = second.sidebarResolutionCount
+        store.setFontSize(17)
+        second.agents = snapshot.agents
+        precondition(second.sidebarResolutionCount == count, "Unrelated changes must not rematch rows")
+        first.agents = []; precondition(first.agentSidebarRows.isEmpty)
+        var invalid = imported.sidebar!
+        invalid.spaces!.rows = [[SidebarOccurrence(token: "invalid")]]
+        do { try store.setNativeSidebar(invalid); preconditionFailure("Invalid native sidebar was accepted") } catch {}
+        precondition(store.sidebarConfiguration == imported.sidebar, "Invalid edits must preserve the last saved native layout")
+        print("PASS: full sidebar native copy/persistence, validated saves, metadata removal/expiry, device-overlapping IDs/labels, and unchanged-row cache")
     }
 
     @MainActor
@@ -39,7 +85,7 @@ struct AppearanceStoreTests {
         let reloadedBytes = try Data(contentsOf: url)
         precondition(reloadedBytes == data, "Reload must never write the source TOML")
         precondition(store.lastGoodImportedSettings?.sidebar != nil)
-        precondition(store.lastGoodImportedSettings?.diagnostics?.count == 2)
+        precondition(store.lastGoodImportedSettings?.diagnostics?.count == 1)
         store.setNativeOverride(.rgb(1, 2, 3), for: "accent", scope: .common)
         precondition(store.resolvedSnapshot.dark.colors["accent"] == .rgb(1, 2, 3))
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)

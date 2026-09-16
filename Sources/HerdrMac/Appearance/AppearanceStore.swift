@@ -55,6 +55,7 @@ struct ResolvedAppearanceSnapshot: Equatable, Sendable {
 @MainActor
 final class AppearanceStore: ObservableObject {
     enum PreferenceKey {
+        static let nativeSidebar = "appearance.nativeSidebar"
         static let mode = "appearance"
         static let fontSize = "fontSize"
         static let themeSource = "appearance.themeSource"
@@ -66,6 +67,10 @@ final class AppearanceStore: ObservableObject {
     }
 
     static let supportedOverrideRoles = HerdrAppearanceConfig.colorRoles
+
+    private(set) var nativeSidebar: SidebarConfiguration?
+    let sidebarChanges = PassthroughSubject<Void, Never>()
+    var sidebarConfiguration: SidebarConfiguration? { themeSource == .herdrConfig ? lastGoodImportedSettings?.sidebar : nativeSidebar }
 
     private(set) var mode: AppearanceMode
     private(set) var fontSize: Double
@@ -100,6 +105,7 @@ final class AppearanceStore: ObservableObject {
     ) {
         self.configLoader = configLoader
         self.defaults = defaults
+        nativeSidebar = Self.decode(SidebarConfiguration.self, from: defaults, key: PreferenceKey.nativeSidebar)
         herdrConfigPath = defaults.string(forKey: PreferenceKey.herdrConfigPath)
         mode = defaults.string(forKey: PreferenceKey.mode).flatMap(AppearanceMode.init(rawValue:)) ?? .system
         if let number = defaults.object(forKey: PreferenceKey.fontSize) as? NSNumber,
@@ -131,6 +137,23 @@ final class AppearanceStore: ObservableObject {
             nativeOverrides: nativeOverrides,
             imported: lastGoodImportedSettings
         )
+    }
+
+    func setNativeSidebar(_ configuration: SidebarConfiguration?) throws {
+        let normalized = try configuration?.validated()
+        invalidateLoad()
+        publishChange {
+            nativeSidebar = normalized
+            themeSource = .native
+            refreshSnapshot()
+        }
+        if let normalized { persist(normalized, key: PreferenceKey.nativeSidebar) }
+        else { defaults.removeObject(forKey: PreferenceKey.nativeSidebar) }
+        defaults.set(AppearanceThemeSource.native.rawValue, forKey: PreferenceKey.themeSource)
+    }
+
+    func copySidebarToNative() throws {
+        try setNativeSidebar(lastGoodImportedSettings?.sidebar)
     }
 
     func setMode(_ mode: AppearanceMode) {
@@ -234,6 +257,7 @@ final class AppearanceStore: ObservableObject {
             throw HerdrError.message("Could not read the embedded terminal ANSI palette")
         }
         var sanitized = settings
+        sanitized.sidebar = try settings.sidebar?.validated()
         sanitized.commonOverrides = Self.sanitized(settings.commonOverrides)
         sanitized.lightOverrides = Self.sanitized(settings.lightOverrides)
         sanitized.darkOverrides = Self.sanitized(settings.darkOverrides)
@@ -294,9 +318,11 @@ final class AppearanceStore: ObservableObject {
     }
 
     private func publishChange(_ update: () -> Void) {
+        let oldSidebar = sidebarConfiguration
         revision += 1
         objectWillChange.send()
         update()
+        if oldSidebar != sidebarConfiguration { sidebarChanges.send() }
     }
 
     private func refreshSnapshot() {
@@ -388,6 +414,7 @@ final class AppearanceStore: ObservableObject {
                   (try? HerdrAppearanceConfig.validateThemeName($0)) != nil
               }) else { return nil }
         var result = settings
+        result.diagnostics = settings.diagnostics?.filter { $0 != "Sidebar styles are not applied in this build." }
         result.commonOverrides = sanitized(settings.commonOverrides)
         result.lightOverrides = sanitized(settings.lightOverrides)
         result.darkOverrides = sanitized(settings.darkOverrides)

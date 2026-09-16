@@ -107,6 +107,9 @@ struct AppearanceSettingsView: View {
             }
             .frame(height: 210)
 
+            Divider()
+            SidebarRulesEditor(store: store)
+
             Text("Theme changes preview immediately. Terminal programs keep their existing ANSI colors.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

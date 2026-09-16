@@ -32,18 +32,16 @@ enum HerdrAppearanceConfigTests {
         precondition(value.lightName == "nord" && value.darkName == "terminal")
         precondition(value.commonOverrides["accent"] == .rgb(18, 52, 86))
         precondition(value.lightOverrides["accent"] == .rgb(171, 205, 239))
-        precondition(value.diagnostics?.count == 3)
-        guard case .array(let rows) = value.sidebar?["agents"]["rows"],
-              case .array(let row) = rows[0], case .array(let rules) = row[1]["rules"] else {
-            preconditionFailure("Missing normalized sidebar")
-        }
-        precondition(rules[0]["hide"] == .bool(true) && rules[0]["dim"] == .bool(false))
+        precondition(value.diagnostics?.count == 2)
+        let rule = value.sidebar!.agents!.rows![0][1].rules[0]
+        precondition(rule.hide == true && rule.style.dim == false)
         let data = try JSONEncoder().encode(value)
         let restored = try JSONDecoder().decode(HerdrAppearanceConfig.self, from: data)
         precondition(restored == value)
         let defaults = try HerdrAppearanceConfig.parse("[server]\nport = 2")
         precondition(defaults.themeName == "catppuccin" && !defaults.autoSwitch)
         for bad in [
+            "[ui.sidebar.agents]\nrows = [[\"unsupported_token\"]]",
             "[theme", "[theme]\nname = 'uherdr'", "[theme]\nname = 'typo'", "[theme]\nauto_switch = 'true'",
             "[theme.custom]\naccent = 'bad'", "[theme.custom]\naccent = 10",
             "[theme.custom.light]\naccent = 'bad'", "theme = 1", "theme = []",

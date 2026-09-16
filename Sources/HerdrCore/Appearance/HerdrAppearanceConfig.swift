@@ -16,14 +16,13 @@ public struct HerdrAppearanceConfig: Codable, Equatable, Sendable {
     public var commonOverrides: ThemeOverrides
     public var lightOverrides: ThemeOverrides
     public var darkOverrides: ThemeOverrides
-    /// Intermediate representation: Task 5 supplies complete typed sidebar validation.
-    public var sidebar: JSONValue?
+    public var sidebar: SidebarConfiguration?
     public var diagnostics: [String]?
 
     public init(themeName: String, autoSwitch: Bool = true, commonOverrides: ThemeOverrides = [:],
                 lightOverrides: ThemeOverrides = [:], darkOverrides: ThemeOverrides = [:],
                 lightName: String? = nil, darkName: String? = nil,
-                sidebar: JSONValue? = nil, diagnostics: [String]? = nil) {
+                sidebar: SidebarConfiguration? = nil, diagnostics: [String]? = nil) {
         self.themeName = themeName
         self.autoSwitch = autoSwitch
         self.commonOverrides = commonOverrides
@@ -84,12 +83,11 @@ public struct HerdrAppearanceConfig: Codable, Equatable, Sendable {
         let common = try overrides(custom, "theme.custom", modes: true)
         let light = try overrides(section(custom, "light", "theme.custom.light"), "theme.custom.light")
         let dark = try overrides(section(custom, "dark", "theme.custom.dark"), "theme.custom.dark")
-        var sidebar: JSONValue?
+        var sidebar: SidebarConfiguration?
         if let rawUI = root["ui"], rawUI.type == .table, let ui = rawUI.table, let raw = ui["sidebar"] {
             guard raw.type == .table, let table = raw.table else { throw failure("ui.sidebar", "expected a table") }
-            sidebar = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(table))
-            try validateSidebar(sidebar!, diagnostics: &messages)
-            messages.append("Sidebar styles are not applied in this build.")
+            let rawSidebar = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(table))
+            sidebar = try SidebarConfiguration.parse(rawSidebar, diagnostics: &messages)
         }
         return try Self(themeName: name("name") ?? "catppuccin", autoSwitch: autoSwitch,
                         commonOverrides: common, lightOverrides: light, darkOverrides: dark,
@@ -101,74 +99,4 @@ public struct HerdrAppearanceConfig: Codable, Equatable, Sendable {
         .message("\(path): \(message)")
     }
 
-    private static func validateSidebar(_ value: JSONValue, diagnostics: inout [String]) throws {
-        func object(_ value: JSONValue, _ path: String) throws -> [String: JSONValue] {
-            guard case .object(let result) = value else { throw failure(path, "expected a table") }
-            return result
-        }
-        func rows(_ value: JSONValue, _ path: String) throws {
-            guard case .array(let rows) = value, rows.count <= 16 else { throw failure(path, "expected at most 16 rows") }
-            for (i, row) in rows.enumerated() {
-                let path = "\(path)[\(i)]"
-                guard case .array(let tokens) = row, tokens.count <= 16 else { throw failure(path, "expected at most 16 tokens") }
-                for (j, token) in tokens.enumerated() {
-                    if case .string = token { continue }
-                    let path = "\(path)[\(j)]"
-                    let fields = try object(token, path)
-                    guard fields["token"]?.string != nil else { throw failure(path, "expected token string") }
-                    guard Set(fields.keys).isSubset(of: ["token", "fg", "bold", "dim", "rules"]) else {
-                        throw failure(path, "unsupported token style key")
-                    }
-                    try style(fields, path)
-                    if let rules = fields["rules"] {
-                        guard case .array(let values) = rules, values.count <= 16 else { throw failure(path, "expected at most 16 rules") }
-                        for (index, value) in values.enumerated() {
-                            let path = "\(path).rules[\(index)]"
-                            let rule = try object(value, path)
-                            let conditions = ["equals", "contains", "starts_with", "gt", "lt"].filter { rule[$0] != nil }
-                            guard conditions.count == 1,
-                                  Set(rule.keys).isSubset(of: ["equals", "contains", "starts_with", "gt", "lt", "ignore_case", "fg", "bold", "dim", "hide"]) else {
-                                throw failure(path, "expected exactly one supported condition and supported style keys")
-                            }
-                            let condition = conditions[0]
-                            if ["gt", "lt"].contains(condition) {
-                                guard case .number(let n) = rule[condition], n.isFinite, rule["ignore_case"] == nil else {
-                                    throw failure(path, "numeric condition requires a finite number and no ignore_case")
-                                }
-                            } else if rule[condition]?.string == nil { throw failure(path, "text condition requires a string") }
-                            try style(rule, path)
-                        }
-                    }
-                }
-            }
-        }
-        for (section, raw) in try object(value, "ui.sidebar") {
-            let path = "ui.sidebar.\(section)"
-            guard ["agents", "spaces"].contains(section) else { diagnostics.append("Unsupported \(path); ignored."); continue }
-            for (key, value) in try object(raw, path) {
-                switch key {
-                case "rows": try rows(value, "\(path).rows")
-                case "row_gap":
-                    guard case .number(let n) = value, n >= 0, n <= 65535, n.rounded() == n else {
-                        throw failure("\(path).row_gap", "expected an unsigned 16-bit integer")
-                    }
-                case "rows_by_agent" where section == "agents":
-                    for (agent, layout) in try object(value, "\(path).rows_by_agent") { try rows(layout, "\(path).rows_by_agent.\(agent)") }
-                default: diagnostics.append("Unsupported \(path).\(key); ignored.")
-                }
-            }
-        }
-    }
-
-    private static func style(_ fields: [String: JSONValue], _ path: String) throws {
-        for key in ["bold", "dim", "hide", "ignore_case"] {
-            if let value = fields[key], case .bool = value {} else if fields[key] != nil {
-                throw failure("\(path).\(key)", "expected a boolean")
-            }
-        }
-        if let value = fields["fg"] {
-            guard let string = value.string, string.hasPrefix("#"), [4, 7].contains(string.utf8.count),
-                  (try? ColorValue.parse(string)) != nil else { throw failure("\(path).fg", "expected #RGB or #RRGGBB") }
-        }
-    }
 }

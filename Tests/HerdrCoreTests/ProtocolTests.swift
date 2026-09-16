@@ -19,8 +19,23 @@ import HerdrCore
         try await FileTransferTests.run()
         try AppearanceTests.run()
         try HerdrAppearanceConfigTests.run()
+        try SidebarRuleTests.run()
+        try testSnapshotMetadata()
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--live" { try await LiveTests.run(socket: CommandLine.arguments[2]) }
     }
+    static func testSnapshotMetadata() throws {
+        let base = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Fixtures")
+        let live = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: base.appendingPathComponent("snapshot-0.9-live.json")))["snapshot"].decode(SessionSnapshot.self)
+        precondition(live.version == "0.9.0" && live.workspaces[0].tokens.isEmpty && live.panes[0].terminalTitle == nil)
+        let old = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: base.appendingPathComponent("snapshot-0.9.json")))["snapshot"].decode(SessionSnapshot.self)
+        let new = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: base.appendingPathComponent("snapshot-metadata.json")))["snapshot"].decode(SessionSnapshot.self)
+        precondition(old.workspaces[0].tokens.isEmpty && old.panes[0].tokens.isEmpty && old.agents[0].tokens.isEmpty)
+        precondition(old.agents[0].terminalTitle == nil)
+        precondition(new.workspaces[0].tokens["owner"] == "infra" && new.agents[0].tokens["load"] == "91")
+        precondition(new.agents[0].terminalTitle == "codex - Review" && new.panes[0].terminalTitleStripped == "Review")
+        print("PASS: old/new public snapshot metadata fixtures")
+    }
+
     func testNestedLayoutPreservesDirectionRatiosAndPaneOrder() throws {
         let data = Data(#"{"type":"split","direction":"right","ratio":0.6,"first":{"type":"pane","pane_id":"w1:p1"},"second":{"type":"split","direction":"down","ratio":0.4,"first":{"type":"pane","pane_id":"w1:p2"},"second":{"type":"pane","pane_id":"w1:p3"}}}"#.utf8)
         let node = try JSONDecoder().decode(LayoutNode.self, from: data)
