@@ -47,31 +47,52 @@ struct SplitTree: View {
     }
 }
 
-struct PaneResizeState {
-    var appliedRatio: Double?
-    private(set) var previewRatio: Double?
+@MainActor
+final class PaneResizeState: ObservableObject {
+    @Published var appliedRatio: Double?
+    @Published private(set) var previewRatio: Double?
     private var startRatio: Double?
+    private var canceled = false
+    private var escapeMonitor: Any?
 
     func layoutRatio(fallback: Double) -> Double { appliedRatio ?? fallback }
 
-    mutating func update(translation: CGFloat, available: CGFloat, ratio: Double) {
-        guard available > 0 else { return }
-        if startRatio == nil { startRatio = layoutRatio(fallback: ratio) }
+    func update(translation: CGFloat, available: CGFloat, ratio: Double) {
+        guard !canceled, available > 0 else { return }
+        if startRatio == nil {
+            startRatio = layoutRatio(fallback: ratio)
+            escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, event.keyCode == 53 else { return event }
+                self.cancel()
+                return nil
+            }
+        }
         previewRatio = min(0.9, max(0.1, (startRatio ?? ratio) + translation / available))
     }
 
-    mutating func finish(translation: CGFloat, available: CGFloat, ratio: Double) -> Double? {
-        guard available > 0 else { cancel(); return nil }
+    func finish(translation: CGFloat, available: CGFloat, ratio: Double) -> Double? {
+        defer { endGesture() }
+        guard !canceled, available > 0 else { return nil }
         update(translation: translation, available: available, ratio: ratio)
         appliedRatio = previewRatio
-        cancel()
         return appliedRatio
     }
 
-    mutating func cancel() {
+    func cancel() {
+        // Keep the rest of this drag inert, including its eventual mouse-up.
+        canceled = canceled || startRatio != nil
         startRatio = nil
         previewRatio = nil
+        if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+        escapeMonitor = nil
     }
+
+    func endGesture() {
+        cancel()
+        canceled = false
+    }
+
+    deinit { if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) } }
 }
 
 struct ResizablePair<First: View, Second: View>: View {
@@ -81,7 +102,7 @@ struct ResizablePair<First: View, Second: View>: View {
     let onCommit: (Double) -> Void
     @ViewBuilder let first: () -> First
     @ViewBuilder let second: () -> Second
-    @State private var resize = PaneResizeState()
+    @StateObject private var resize = PaneResizeState()
     @GestureState private var dragging = false
     @State private var hovering = false
     var body: some View {
@@ -131,9 +152,9 @@ struct ResizablePair<First: View, Second: View>: View {
             }
         }
         .onChange(of: ratio) { _, _ in resize.appliedRatio = nil }
-        .onChange(of: dragging) { _, active in if !active { resize.cancel() } }
+        .onChange(of: dragging) { _, active in if !active { resize.endGesture() } }
         .onChange(of: expandedFirst) { _, _ in resize.cancel() }
-        .onDisappear { resize.cancel() }
+        .onDisappear { resize.endGesture() }
     }
     private var resizePreview: some View {
         RoundedRectangle(cornerRadius: 8)
