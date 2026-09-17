@@ -15,6 +15,7 @@ import HerdrCore
             do {
                 let args = CommandLine.arguments.dropFirst().filter { $0 != "--retention-only" }
                 if !CommandLine.arguments.contains("--retention-only") {
+                    try await paneResizePreview()
                     try await resizeReplayRecovery()
                     try await repaintRequests()
                     try await publications()

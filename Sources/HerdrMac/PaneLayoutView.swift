@@ -47,6 +47,33 @@ struct SplitTree: View {
     }
 }
 
+struct PaneResizeState {
+    var appliedRatio: Double?
+    private(set) var previewRatio: Double?
+    private var startRatio: Double?
+
+    func layoutRatio(fallback: Double) -> Double { appliedRatio ?? fallback }
+
+    mutating func update(translation: CGFloat, available: CGFloat, ratio: Double) {
+        guard available > 0 else { return }
+        if startRatio == nil { startRatio = layoutRatio(fallback: ratio) }
+        previewRatio = min(0.9, max(0.1, (startRatio ?? ratio) + translation / available))
+    }
+
+    mutating func finish(translation: CGFloat, available: CGFloat, ratio: Double) -> Double? {
+        guard available > 0 else { cancel(); return nil }
+        update(translation: translation, available: available, ratio: ratio)
+        appliedRatio = previewRatio
+        cancel()
+        return appliedRatio
+    }
+
+    mutating func cancel() {
+        startRatio = nil
+        previewRatio = nil
+    }
+}
+
 struct ResizablePair<First: View, Second: View>: View {
     let direction: SplitDirection
     let ratio: Double
@@ -54,14 +81,14 @@ struct ResizablePair<First: View, Second: View>: View {
     let onCommit: (Double) -> Void
     @ViewBuilder let first: () -> First
     @ViewBuilder let second: () -> Second
-    @State private var draggedRatio: Double?
-    @State private var dragStart: Double?
+    @State private var resize = PaneResizeState()
+    @GestureState private var dragging = false
     @State private var hovering = false
     var body: some View {
         GeometryReader { geometry in
             let size = direction == .right ? geometry.size.width : geometry.size.height
             let available = max(0, size - 8)
-            let fraction = draggedRatio ?? ratio
+            let fraction = resize.layoutRatio(fallback: ratio)
             let horizontal = direction == .right
             let firstSize = expandedFirst == true ? size : max(0, available * fraction)
             let secondSize = expandedFirst == false ? size : max(0, available * (1 - fraction))
@@ -82,6 +109,18 @@ struct ResizablePair<First: View, Second: View>: View {
                     .opacity(expandedFirst == true ? 0 : 1)
                     .allowsHitTesting(expandedFirst != true)
                     .accessibilityHidden(expandedFirst == true)
+                if dragging, expandedFirst == nil, let previewRatio = resize.previewRatio {
+                    let previewFirstSize = available * previewRatio
+                    let previewSecondSize = available * (1 - previewRatio)
+                    resizePreview
+                        .frame(width: horizontal ? previewFirstSize : geometry.size.width,
+                               height: horizontal ? geometry.size.height : previewFirstSize)
+                    resizePreview
+                        .frame(width: horizontal ? previewSecondSize : geometry.size.width,
+                               height: horizontal ? geometry.size.height : previewSecondSize)
+                        .offset(x: horizontal ? previewFirstSize + 8 : 0,
+                                y: horizontal ? 0 : previewFirstSize + 8)
+                }
                 divider(available: available)
                     .frame(width: horizontal ? 8 : geometry.size.width,
                            height: horizontal ? geometry.size.height : 8)
@@ -91,32 +130,45 @@ struct ResizablePair<First: View, Second: View>: View {
                     .accessibilityHidden(expandedFirst != nil)
             }
         }
-        .onChange(of: ratio) { _, _ in draggedRatio = nil }
+        .onChange(of: ratio) { _, _ in resize.appliedRatio = nil }
+        .onChange(of: dragging) { _, active in if !active { resize.cancel() } }
+        .onChange(of: expandedFirst) { _, _ in resize.cancel() }
+        .onDisappear { resize.cancel() }
+    }
+    private var resizePreview: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color.accentColor.opacity(0.5))
+            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor, lineWidth: 2) }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
     private func divider(available: CGFloat) -> some View {
         Rectangle().fill(Color.clear)
             .overlay {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(hovering || dragStart != nil ? Color.accentColor.opacity(0.65) : Color.primary.opacity(0.09))
+                    .fill(hovering || dragging ? Color.accentColor.opacity(0.65) : Color.primary.opacity(0.09))
                     .frame(width: direction == .right ? 2 : 34, height: direction == .right ? 34 : 2)
             }
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
             .gesture(DragGesture(minimumDistance: 0)
+                .updating($dragging) { _, active, _ in active = true }
                 .onChanged { value in
-                    guard available > 0 else { return }
-                    if dragStart == nil { dragStart = draggedRatio ?? ratio }
                     let translation = direction == .right ? value.translation.width : value.translation.height
-                    draggedRatio = min(0.9, max(0.1, (dragStart ?? ratio) + translation / available))
+                    resize.update(translation: translation, available: available, ratio: ratio)
                 }
-                .onEnded { _ in
-                    onCommit(draggedRatio ?? ratio)
-                    dragStart = nil
+                .onEnded { value in
+                    let translation = direction == .right ? value.translation.width : value.translation.height
+                    if let finalRatio = resize.finish(translation: translation, available: available, ratio: ratio) {
+                        onCommit(finalRatio)
+                    }
                 })
             .accessibilityLabel(direction == .right ? "Resize side-by-side panes" : "Resize stacked panes")
             .accessibilityAdjustableAction { adjustment in
-                let value = min(0.9, max(0.1, (draggedRatio ?? ratio) + (adjustment == .increment ? 0.05 : -0.05)))
-                draggedRatio = value; onCommit(value)
+                let value = min(0.9, max(0.1, resize.layoutRatio(fallback: ratio) + (adjustment == .increment ? 0.05 : -0.05)))
+                resize.cancel()
+                resize.appliedRatio = value
+                onCommit(value)
             }
     }
 }

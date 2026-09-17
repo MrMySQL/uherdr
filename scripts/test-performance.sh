@@ -17,7 +17,7 @@ done < "$PERFORMANCE_BUILD/Herdr.product/Objects.LinkFileList"
 swiftc -parse-as-library -I "$PERFORMANCE_BUILD/Modules" \
     -I .build/artifacts/ghosttyterminal/libghostty/GhosttyKit.xcframework/macos-arm64_x86_64/Headers \
     -L "$PERFORMANCE_BUILD" -lghostty -lc++ -framework Carbon \
-    Tests/HerdrMacTests/TerminalPerformanceTests.swift Tests/HerdrMacTests/TerminalRepaintTests.swift "${PERFORMANCE_OBJECTS[@]}" \
+    Tests/HerdrMacTests/TerminalPerformanceTests.swift Tests/HerdrMacTests/TerminalRepaintTests.swift Tests/HerdrMacTests/PaneResizeTests.swift "${PERFORMANCE_OBJECTS[@]}" \
     -o "$PERFORMANCE_BUILD/TerminalPerformanceTests"
 if [ "$#" -eq 3 ] && [ "$1" = "--live" ]; then
     "$PERFORMANCE_BUILD/TerminalPerformanceTests" "$2" "$3"
