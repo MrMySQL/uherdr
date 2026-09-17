@@ -76,6 +76,8 @@ final class SessionStore: ObservableObject {
     private var paneMoveID: UUID?
     private var layoutRevision = 0
     private var pendingLayoutRefresh: Set<String> = []
+    private var pendingSplitResizes = 0
+    private var splitResizeTask: Task<Void, Never>?
 
     init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil, fileTransfer: RemoteFileTransfer? = nil) {
         self.profile = profile
@@ -174,6 +176,8 @@ final class SessionStore: ObservableObject {
         for transfer in fileTransfers.values { transfer.cancel() }
         paneMoveID = nil
         pendingLayoutRefresh = []
+        splitResizeTask?.cancel(); splitResizeTask = nil
+        pendingSplitResizes = 0
         tunnel.stop()
         suspended = true; connected = false; connecting = false; busy = false
         if isRemote { effectiveSocketPath = "" }
@@ -188,7 +192,8 @@ final class SessionStore: ObservableObject {
     }
 
     func refresh() async {
-        guard !suspended, paneMoveID == nil, refreshingGeneration != connectionGeneration, Date() >= retryAfter else { return }
+        guard !suspended, paneMoveID == nil, pendingSplitResizes == 0,
+              refreshingGeneration != connectionGeneration, Date() >= retryAfter else { return }
         let generation = connectionGeneration
         refreshingGeneration = generation
         if connecting != !connected { connecting = !connected }
@@ -345,11 +350,44 @@ final class SessionStore: ObservableObject {
     }
 
     func setRatio(tabID: String, path: [Bool], ratio: Double) {
-        perform("layout.set_split_ratio", params: ["tab_id": .string(tabID), "path": .array(path.map(JSONValue.bool)), "ratio": .number(min(0.9, max(0.1, ratio)))], showBusy: false)
+        guard connected, !suspended, paneMoveID == nil else { return }
+        let activeClient = client
+        let generation = connectionGeneration
+        let precedingResize = splitResizeTask
+        pendingSplitResizes += 1
+        pendingLayoutRefresh.insert(tabID)
+        // Reject exports already in flight, and hold new polls until the
+        // queued commits finish so they cannot publish intermediate ratios.
+        layoutRevision += 1
+        splitResizeTask = Task {
+            await precedingResize?.value
+            guard generation == connectionGeneration, !Task.isCancelled else { return }
+            defer {
+                if generation == connectionGeneration {
+                    pendingSplitResizes -= 1
+                    if pendingSplitResizes == 0 { splitResizeTask = nil }
+                }
+            }
+            do {
+                let result = try await activeClient.request("layout.set_split_ratio", params: [
+                    "tab_id": .string(tabID), "path": .array(path.map(JSONValue.bool)),
+                    "ratio": .number(min(0.9, max(0.1, ratio)))
+                ])
+                guard generation == connectionGeneration, !Task.isCancelled else { return }
+                let layout = try result["layout"].decode(TabLayout.self)
+                if pendingSplitResizes == 1 {
+                    if layouts[tabID] != layout { layouts[tabID] = layout }
+                    pendingLayoutRefresh.remove(tabID)
+                }
+            } catch {
+                guard generation == connectionGeneration, !Task.isCancelled else { return }
+                operationError = error.localizedDescription
+            }
+        }
     }
 
     func paneDragPayload(for paneID: String) -> PaneDragPayload? {
-        guard connected, !suspended, !busy, paneMoveID == nil, sheet == nil, pendingClose == nil,
+        guard connected, !suspended, !busy, paneMoveID == nil, pendingSplitResizes == 0, sheet == nil, pendingClose == nil,
               let pane = panes.first(where: { $0.id == paneID }),
               selectedTab == pane.tabID, let layout = layouts[pane.tabID],
               !layout.zoomed, layout.root.paneIDs.contains(paneID) else { return nil }
