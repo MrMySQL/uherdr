@@ -37,12 +37,46 @@ struct SplitTree: View {
                 if second.paneIDs.contains(id) { return false }
                 return nil
             }
-            return AnyView(ResizablePair(direction: direction, ratio: ratio, expandedFirst: expandedFirst,
+            return AnyView(ResizablePair(direction: direction, ratio: ratio,
+                                        firstLayout: first, secondLayout: second, expandedFirst: expandedFirst,
                                         onCommit: { store.setRatio(tabID: tabID, path: path, ratio: $0) }) {
                 SplitTree(node: first, tabID: tabID, path: path + [false], store: store, snapshot: snapshot, zoomedPaneID: zoomedPaneID, visible: visible)
             } second: {
                 SplitTree(node: second, tabID: tabID, path: path + [true], store: store, snapshot: snapshot, zoomedPaneID: zoomedPaneID, visible: visible)
             })
+        }
+    }
+}
+
+struct PaneResizeLayoutKey: PreferenceKey {
+    static var defaultValue: LayoutNode? { nil }
+    static func reduce(value: inout LayoutNode?, nextValue: () -> LayoutNode?) {
+        value = nextValue() ?? value
+    }
+}
+
+struct PaneResizePreviewFrame: Identifiable, Equatable {
+    let id: String
+    let rect: CGRect
+
+    static func frames(for node: LayoutNode, in bounds: CGRect) -> [Self] {
+        switch node {
+        case .pane(let id):
+            return [Self(id: id, rect: bounds)]
+        case .split(let direction, let ratio, let first, let second):
+            // Match ResizablePair at every level, including each divider's gap.
+            let horizontal = direction == .right
+            let available = max(0, (horizontal ? bounds.width : bounds.height) - 8)
+            let firstSize = available * ratio
+            let secondSize = available * (1 - ratio)
+            let firstBounds = CGRect(x: bounds.minX, y: bounds.minY,
+                                     width: horizontal ? firstSize : bounds.width,
+                                     height: horizontal ? bounds.height : firstSize)
+            let secondBounds = CGRect(x: bounds.minX + (horizontal ? firstSize + 8 : 0),
+                                      y: bounds.minY + (horizontal ? 0 : firstSize + 8),
+                                      width: horizontal ? secondSize : bounds.width,
+                                      height: horizontal ? bounds.height : secondSize)
+            return frames(for: first, in: firstBounds) + frames(for: second, in: secondBounds)
         }
     }
 }
@@ -98,6 +132,8 @@ final class PaneResizeState: ObservableObject {
 struct ResizablePair<First: View, Second: View>: View {
     let direction: SplitDirection
     let ratio: Double
+    let firstLayout: LayoutNode
+    let secondLayout: LayoutNode
     var expandedFirst: Bool? = nil
     let onCommit: (Double) -> Void
     @ViewBuilder let first: () -> First
@@ -105,6 +141,13 @@ struct ResizablePair<First: View, Second: View>: View {
     @StateObject private var resize = PaneResizeState()
     @GestureState private var dragging = false
     @State private var hovering = false
+    @State private var displayedFirstLayout: LayoutNode?
+    @State private var displayedSecondLayout: LayoutNode?
+
+    private func displayedLayout(ratio: Double) -> LayoutNode {
+        .split(direction, ratio, displayedFirstLayout ?? firstLayout, displayedSecondLayout ?? secondLayout)
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let size = direction == .right ? geometry.size.width : geometry.size.height
@@ -118,12 +161,14 @@ struct ResizablePair<First: View, Second: View>: View {
             // terminal stream and rebuilds its renderer. Only geometry changes.
             ZStack(alignment: .topLeading) {
                 first()
+                    .onPreferenceChange(PaneResizeLayoutKey.self) { displayedFirstLayout = $0 }
                     .frame(width: horizontal ? firstSize : geometry.size.width,
                            height: horizontal ? geometry.size.height : firstSize)
                     .opacity(expandedFirst == false ? 0 : 1)
                     .allowsHitTesting(expandedFirst != false)
                     .accessibilityHidden(expandedFirst == false)
                 second()
+                    .onPreferenceChange(PaneResizeLayoutKey.self) { displayedSecondLayout = $0 }
                     .frame(width: horizontal ? secondSize : geometry.size.width,
                            height: horizontal ? geometry.size.height : secondSize)
                     .offset(x: horizontal ? secondOffset : 0, y: horizontal ? 0 : secondOffset)
@@ -131,16 +176,12 @@ struct ResizablePair<First: View, Second: View>: View {
                     .allowsHitTesting(expandedFirst != true)
                     .accessibilityHidden(expandedFirst == true)
                 if dragging, expandedFirst == nil, let previewRatio = resize.previewRatio {
-                    let previewFirstSize = available * previewRatio
-                    let previewSecondSize = available * (1 - previewRatio)
-                    resizePreview
-                        .frame(width: horizontal ? previewFirstSize : geometry.size.width,
-                               height: horizontal ? geometry.size.height : previewFirstSize)
-                    resizePreview
-                        .frame(width: horizontal ? previewSecondSize : geometry.size.width,
-                               height: horizontal ? geometry.size.height : previewSecondSize)
-                        .offset(x: horizontal ? previewFirstSize + 8 : 0,
-                                y: horizontal ? 0 : previewFirstSize + 8)
+                    let previewLayout = displayedLayout(ratio: previewRatio)
+                    ForEach(PaneResizePreviewFrame.frames(for: previewLayout, in: CGRect(origin: .zero, size: geometry.size))) { pane in
+                        resizePreview
+                            .frame(width: pane.rect.width, height: pane.rect.height)
+                            .offset(x: pane.rect.minX, y: pane.rect.minY)
+                    }
                 }
                 divider(available: available)
                     .frame(width: horizontal ? 8 : geometry.size.width,
@@ -151,6 +192,9 @@ struct ResizablePair<First: View, Second: View>: View {
                     .accessibilityHidden(expandedFirst != nil)
             }
         }
+        // Ancestors need the ratios actually on screen, including local
+        // commits that the server has not acknowledged yet.
+        .preference(key: PaneResizeLayoutKey.self, value: displayedLayout(ratio: resize.layoutRatio(fallback: ratio)))
         .onChange(of: ratio) { _, _ in resize.appliedRatio = nil }
         .onChange(of: dragging) { _, active in if !active { resize.endGesture() } }
         .onChange(of: expandedFirst) { _, _ in resize.cancel() }
