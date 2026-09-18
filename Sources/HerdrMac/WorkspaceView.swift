@@ -133,7 +133,7 @@ struct WorkspaceView: View {
                             .overlay(alignment: .bottom) { if store.selectedTab == tab.id { Capsule().fill(herdrAccentColor).frame(height: 2).padding(.horizontal, 12) } }
                         }
                         .buttonStyle(.plain)
-                        .modifier(PaneTabDropTarget(tabID: tab.id, store: store))
+                        .modifier(TabStripDragTarget(tabID: tab.id, store: store))
                         .contextMenu {
                             Button("Rename tab…") { store.sheet = .rename(ResourceTarget(kind: "tab", id: tab.id, label: tab.label)) }
                             Button("Close tab…", role: .destructive) { store.pendingClose = ResourceTarget(kind: "tab", id: tab.id, label: tab.label) }
@@ -146,6 +146,7 @@ struct WorkspaceView: View {
             Text("\(store.visiblePanes.count) \(store.visiblePanes.count == 1 ? "pane" : "panes")")
                 .font(.system(size: 11)).foregroundStyle(.tertiary).padding(.horizontal, 14)
         }.frame(height: 32)
+        .modifier(PaneDragLifecycle())
     }
 
     private var statusBar: some View {

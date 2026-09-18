@@ -27,6 +27,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>UTTypeIdentifier</key><string>dev.herdr.native.pane</string>
 <key>UTTypeDescription</key><string>Herdr pane</string>
 <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+</dict><dict>
+<key>UTTypeIdentifier</key><string>dev.herdr.native.tab</string>
+<key>UTTypeDescription</key><string>Herdr tab</string>
+<key>UTTypeConformsTo</key><array><string>public.data</string></array>
 </dict></array>
 </dict></plist>
 PLIST
