@@ -13,8 +13,8 @@ public enum DevicePowerStatus: Equatable, Sendable {
         guard let battery = lines.first(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("-InternalBattery-") }) else {
             return external ? .mains : nil
         }
-        guard !battery.contains("present: false"),
-              let range = battery.range(of: #"\b[0-9]+(?=%;)"#, options: .regularExpression),
+        if battery.contains("present: false") { return external ? .mains : nil }
+        guard let range = battery.range(of: #"\b[0-9]+(?=%;)"#, options: .regularExpression),
               let percentage = Int(battery[range]), (0...100).contains(percentage) else { return nil }
         return .battery(percentage: percentage, externallyPowered: external)
     }
