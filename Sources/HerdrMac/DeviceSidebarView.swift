@@ -158,7 +158,7 @@ struct DeviceSidebarView: View {
     }
 }
 
-/// A fixed-width outline leaves enough room for a readable three-digit percentage.
+/// A compact outline leaves enough room for a three-digit battery level.
 struct DevicePowerIndicator: View {
     let status: DevicePowerStatus
 
@@ -168,10 +168,10 @@ struct DevicePowerIndicator: View {
             case let .battery(percentage, external):
                 HStack(spacing: 3) {
                     HStack(spacing: 1) {
-                        Text("\(percentage)%")
+                        Text("\(percentage)")
                             .font(.system(size: 8, weight: .semibold, design: .rounded))
                             .monospacedDigit()
-                            .frame(width: 29, height: 13)
+                            .frame(width: 22, height: 13)
                             .overlay(RoundedRectangle(cornerRadius: 2).stroke(lineWidth: 1))
                         RoundedRectangle(cornerRadius: 1).frame(width: 2, height: 5)
                     }
