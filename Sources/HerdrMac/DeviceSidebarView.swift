@@ -5,7 +5,7 @@ struct DeviceSidebarView: View {
     @ObservedObject var devices: DeviceStore
     @State private var search = ""
     @State private var collapsed: Set<UUID> = []
-    @StateObject private var commandKey = CommandKeyMonitor()
+    let showShortcutHints: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,8 +38,6 @@ struct DeviceSidebarView: View {
                 Button("Add device…") { addDevice() }
             }.font(.system(size: 11)).buttonStyle(.plain).padding(12)
         }
-        .onAppear { commandKey.start() }
-        .onDisappear { commandKey.stop() }
     }
 
     private func addDevice() {
@@ -119,8 +117,8 @@ struct DeviceSidebarView: View {
                     if space.agentStatus == .working || space.agentStatus == .blocked || space.agentStatus == .done { StatusDot(status: space.agentStatus) }
                     if let shortcut {
                         Text("⌘\(shortcut + 1)").font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(Color.accentColor).opacity(commandKey.isHeld ? 1 : 0)
-                            .accessibilityHidden(!commandKey.isHeld)
+                            .foregroundStyle(Color.accentColor).opacity(showShortcutHints ? 1 : 0)
+                            .accessibilityHidden(!showShortcutHints)
                     }
                 }
                 Text("\(space.tabCount) tabs · \(space.paneCount) panes").font(.system(size: 10)).foregroundStyle(.secondary)

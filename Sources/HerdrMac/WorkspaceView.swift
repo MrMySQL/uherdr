@@ -6,10 +6,11 @@ let herdrAccentColor = Color(red: 0.34, green: 0.73, blue: 0.58)
 struct WorkspaceView: View {
     @ObservedObject var store: SessionStore
     @ObservedObject var devices: DeviceStore
+    @StateObject private var shortcutHints = ShortcutHintMonitor()
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
     var body: some View {
         NavigationSplitView(columnVisibility: $sidebarVisibility) {
-            DeviceSidebarView(devices: devices)
+            DeviceSidebarView(devices: devices, showShortcutHints: shortcutHints.isHeld)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 360)
                 .toolbar(removing: .sidebarToggle)
         } detail: {
@@ -90,6 +91,8 @@ struct WorkspaceView: View {
         }
         .background(WindowAccessor())
         .task { devices.start() }
+        .onAppear { shortcutHints.start() }
+        .onDisappear { shortcutHints.stop() }
     }
 
     private var terminalDeck: some View {
@@ -118,11 +121,16 @@ struct WorkspaceView: View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(store.visibleTabs) { tab in
+                    ForEach(Array(store.visibleTabs.enumerated()), id: \.element.id) { index, tab in
                         Button { store.selectTab(tab) } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "terminal").font(.system(size: 10))
                                 Text(tab.label).lineLimit(1)
+                                if let key = AppHotkeys.tabSelectionKey(at: index) {
+                                    Text("⌃\(String(key))").font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(Color.accentColor).opacity(shortcutHints.isHeld ? 1 : 0)
+                                        .accessibilityHidden(!shortcutHints.isHeld)
+                                }
                                 if tab.agentStatus != .unknown && tab.agentStatus != .idle { StatusDot(status: tab.agentStatus) }
                                 Text("\(tab.paneCount)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                             }

@@ -3,7 +3,7 @@ import Combine
 
 /// Observe modifier changes without consuming terminal or application keyboard events.
 @MainActor
-final class CommandKeyMonitor: ObservableObject {
+final class ShortcutHintMonitor: ObservableObject {
     @Published private(set) var isHeld = false
     private var monitor: Any?
     private var notifications: [NSObjectProtocol] = []
@@ -34,7 +34,7 @@ final class CommandKeyMonitor: ObservableObject {
     }
 
     func update(flags: NSEvent.ModifierFlags, isActive: Bool) {
-        let held = isActive && flags.contains(.command)
+        let held = isActive && !flags.intersection([.command, .control]).isEmpty
         if isHeld != held { isHeld = held }
     }
 
