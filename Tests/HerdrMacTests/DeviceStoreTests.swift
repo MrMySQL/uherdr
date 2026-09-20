@@ -63,13 +63,23 @@ import HerdrCore
 
         // Exercise the remote SessionStore with a controlled SSH process forwarding to server B.
         let fixture = FileManager.default.currentDirectoryPath + "/Tests/Fixtures/ssh-fixture.py"
-        let remote = SessionStore(profile: DeviceProfile(name: "Remote fixture", host: "fixture.test", socketPath: socketB, executable: exe), defaults: defaults, tunnel: SSHTunnel(sshExecutable: fixture))
+        let remoteTunnel = SSHTunnel(sshExecutable: fixture)
+        var remotePower: DevicePowerStatus = .mains
+        let remote = SessionStore(profile: DeviceProfile(name: "Remote fixture", host: "fixture.test", socketPath: socketB, executable: exe), defaults: defaults, tunnel: remoteTunnel, powerReader: { _ in remotePower })
         defer { remote.disconnect() }
         await remote.refresh()
         precondition(remote.connected && remote.isRemote)
         precondition(remote.defaultDirectory == "/Users/remote")
         precondition(remote.effectiveSocketPath != socketB && remote.effectiveSocketPath.hasPrefix("/tmp/uh-"))
         precondition(remote.workspaces.first { $0.id == b.id }?.label == "Renamed on B")
+        for _ in 0..<80 where remote.powerStatus != .mains { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(remote.powerStatus == .mains)
+        // A tunnel can restart between successful snapshots without a connection error.
+        remotePower = .battery(percentage: 73, externallyPowered: true)
+        remoteTunnel.stop()
+        await remote.refresh()
+        for _ in 0..<80 where remote.powerStatus != remotePower { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(remote.powerStatus == remotePower, "Replacing a tunnel must immediately refresh device power")
         // The normal terminal stream integration suite also runs through the forwarded socket.
         let testSocket = URL(fileURLWithPath: socketB).deletingLastPathComponent().appendingPathComponent("forwarded.sock").path
         try FileManager.default.createSymbolicLink(atPath: testSocket, withDestinationPath: remote.effectiveSocketPath)

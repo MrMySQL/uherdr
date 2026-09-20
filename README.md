@@ -21,7 +21,7 @@ open dist/Herdr.app
 
 Open `Package.swift` in Xcode to develop the app, or use `swift build` and `swift run HerdrCoreTests` from a terminal. Swift Package Manager downloads GhosttyTerminal's checksummed native XCFramework and MSDisplayLink on the first build. The pinned Swift wrapper is vendored in this repository.
 
-The sidebar groups spaces and agents by device. **This Mac** uses your default local herdr socket and preserves existing connection preferences. Use the menu beside a device to edit its socket and local herdr executable. Start herdr first, or use the local device's Start Server button. Quit detaches the client; shells and agents remain owned by herdr.
+The sidebar groups spaces and agents by device. Beside each computer icon, a battery outline shows that Mac’s charge percentage, with a bolt when connected to power; Macs without an internal battery show a plug. Power status refreshes on connection or reconnection and every minute while connected. Disconnected devices and unavailable readings hide the indicator. **This Mac** uses your default local herdr socket and preserves existing connection preferences. Use the menu beside a device to edit its socket and local herdr executable. Start herdr first, or use the local device's Start Server button. Quit detaches the client; shells and agents remain owned by herdr.
 
 ## Connect another device over SSH
 

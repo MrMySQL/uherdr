@@ -19,6 +19,7 @@ import HerdrCore
         try NativeTerminalTests.runSocketLifecycle()
         try NativeTerminalTests.runSocketBackpressure()
         try await DeviceProfileTests.run()
+        try await DevicePowerTests.run()
         try await FileTransferTests.run()
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--live" { try await LiveTests.run(socket: CommandLine.arguments[2]) }
     }
