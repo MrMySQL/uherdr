@@ -10,7 +10,7 @@ import HerdrCore
             defer { defaults.removePersistentDomain(forName: suite) }
             let client = FixtureClient(empty: empty)
             let store = SessionStore(profile: DeviceProfile(name: "Fixture", kind: .local,
-                socketPath: "/tmp/nonexistent-probe.sock", executable: "/tmp/unused"), defaults: defaults, client: client)
+                socketPath: "/tmp/nonexistent-probe.sock", executable: "/tmp/unused"), defaults: defaults, client: client, powerReader: { _ in nil })
             await store.refresh()
             var notifications = 0
             let observation = store.objectWillChange.sink { notifications += 1 }
@@ -47,7 +47,7 @@ import HerdrCore
             defer { defaults.removePersistentDomain(forName: suite) }
             let client = ResizePollClient()
             let store = SessionStore(profile: DeviceProfile(name: "Resize fixture", kind: .local,
-                socketPath: "/tmp/resize-poll.sock", executable: "/tmp/unused"), defaults: defaults, client: client)
+                socketPath: "/tmp/resize-poll.sock", executable: "/tmp/unused"), defaults: defaults, client: client, powerReader: { _ in nil })
             await store.refresh()
             await client.prepareRace(holdCommit: pollStartsDuringCommit)
             if pollStartsDuringCommit {
@@ -103,7 +103,7 @@ import HerdrCore
         defer { defaults.removePersistentDomain(forName: suite) }
         let client = ResizePollClient()
         let store = SessionStore(profile: DeviceProfile(name: "Resize queue", kind: .local,
-            socketPath: "/tmp/resize-queue.sock", executable: "/tmp/unused"), defaults: defaults, client: client)
+            socketPath: "/tmp/resize-queue.sock", executable: "/tmp/unused"), defaults: defaults, client: client, powerReader: { _ in nil })
         await store.refresh()
         guard store.paneDragPayload(for: "new-pane") != nil else { throw HerdrError.message("Fixture pane must initially allow dragging") }
         var published: [LayoutNode] = []

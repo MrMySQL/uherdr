@@ -50,6 +50,7 @@ final class SessionStore: ObservableObject {
     @Published var selectedTab: String?
     @Published var selectedPane: String?
     @Published var paneSearchRequest: (paneID: String, token: UUID)?
+    @Published private(set) var powerStatus: DevicePowerStatus?
     @Published var connected = false
     @Published var connecting = false
     @Published var busy = false
@@ -78,6 +79,10 @@ final class SessionStore: ObservableObject {
     private var retryAfter = Date.distantPast
     private var client: any HerdrRequesting
     private var pollTask: Task<Void, Never>?
+    private let powerReader: @MainActor (DeviceProfile) async throws -> DevicePowerStatus?
+    private var powerTask: Task<Void, Never>?
+    private var powerReadID: UUID?
+    private var nextPowerRefresh = Date.distantPast
     private var refreshingGeneration: UUID?
     private var serverProcess: Process?
     private var selectionRevision = 0
@@ -87,9 +92,10 @@ final class SessionStore: ObservableObject {
     private var pendingSplitResizes = 0
     private var splitResizeTask: Task<Void, Never>?
 
-    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil, fileTransfer: RemoteFileTransfer? = nil) {
+    init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil, fileTransfer: RemoteFileTransfer? = nil, powerReader: @escaping @MainActor (DeviceProfile) async throws -> DevicePowerStatus? = { try await DevicePowerStatus.read($0) }) {
         self.profile = profile
         self.defaults = defaults
+        self.powerReader = powerReader
         tabOrder = defaults.dictionary(forKey: "tabOrder:\(profile.id.uuidString)") as? [String: [String]] ?? [:]
         self.tunnel = tunnel ?? SSHTunnel()
         self.fileTransfer = fileTransfer ?? RemoteFileTransfer()
@@ -214,6 +220,7 @@ final class SessionStore: ObservableObject {
 
     func disconnect() {
         pollTask?.cancel(); pollTask = nil
+        clearPowerStatus()
         connectionGeneration = UUID()
         for transfer in fileTransfers.values { transfer.cancel() }
         paneMoveID = nil
@@ -254,6 +261,7 @@ final class SessionStore: ObservableObject {
                 if remoteHome != tunnel.remoteHome { remoteHome = tunnel.remoteHome }
             } else { path = (socketPath as NSString).expandingTildeInPath }
             if effectiveSocketPath != path {
+                clearPowerStatus()
                 effectiveSocketPath = path
                 client = HerdrClient(socketPath: path)
             }
@@ -298,14 +306,40 @@ final class SessionStore: ObservableObject {
                 }
             }
             if !connected { connected = true }
+            refreshPowerIfNeeded()
             if connectionError != nil { connectionError = nil }
             persistSelection()
         } catch {
             guard generation == connectionGeneration, !Task.isCancelled, expectedLayoutRevision == layoutRevision else { return }
             if connected { connected = false }
+            clearPowerStatus()
             if connectionError != error.localizedDescription { connectionError = error.localizedDescription }
             if isRemote { retryAfter = Date().addingTimeInterval(10) }
         }
+    }
+
+    /// Called by the session poll, but power queries run independently of workspace requests.
+    func refreshPowerIfNeeded(now: Date = Date()) {
+        guard connected, !suspended, powerTask == nil, now >= nextPowerRefresh else { return }
+        let id = UUID()
+        powerReadID = id
+        nextPowerRefresh = now.addingTimeInterval(60)
+        let profile = profile, reader = powerReader
+        powerTask = Task { [weak self] in
+            let status = try? await reader(profile)
+            guard let self, !Task.isCancelled, self.powerReadID == id else { return }
+            if self.powerStatus != status { self.powerStatus = status }
+            self.powerTask = nil
+            self.powerReadID = nil
+        }
+    }
+
+    private func clearPowerStatus() {
+        powerTask?.cancel()
+        powerTask = nil
+        powerReadID = nil
+        nextPowerRefresh = .distantPast
+        if powerStatus != nil { powerStatus = nil }
     }
 
     func selectSpace(_ space: Workspace) {

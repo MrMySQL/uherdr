@@ -64,6 +64,7 @@ struct DeviceSidebarView: View {
                     Button { devices.select(session) } label: {
                         HStack(spacing: 6) {
                             Image(systemName: session.isRemote ? "desktopcomputer" : "laptopcomputer")
+                            if let power = session.powerStatus { DevicePowerIndicator(status: power) }
                             Text(session.profile.name).fontWeight(.semibold).lineLimit(1)
                             Spacer(minLength: 0)
                             Circle().fill(session.connected ? Color.accentColor : session.connecting ? .orange : .secondary).frame(width: 6, height: 6)
@@ -154,5 +155,45 @@ struct DeviceSidebarView: View {
             }.padding(8).padding(.leading, 16).contentShape(Rectangle())
                 .background(devices.selectedDeviceID == session.profile.id && session.selectedPane == agent.paneID ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 7))
         }.buttonStyle(.plain).disabled(!session.connected)
+    }
+}
+
+/// A fixed-width outline leaves enough room for a readable three-digit percentage.
+struct DevicePowerIndicator: View {
+    let status: DevicePowerStatus
+
+    var body: some View {
+        Group {
+            switch status {
+            case let .battery(percentage, external):
+                HStack(spacing: 3) {
+                    HStack(spacing: 1) {
+                        Text("\(percentage)%")
+                            .font(.system(size: 8, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .frame(width: 29, height: 13)
+                            .overlay(RoundedRectangle(cornerRadius: 2).stroke(lineWidth: 1))
+                        RoundedRectangle(cornerRadius: 1).frame(width: 2, height: 5)
+                    }
+                    if external { Image(systemName: "bolt.fill").font(.system(size: 8)) }
+                }
+                .foregroundStyle(!external && percentage <= 20 ? Color.red : .secondary)
+            case .mains:
+                Image(systemName: "powerplug.fill").foregroundStyle(.secondary)
+            }
+        }
+        .fixedSize()
+        .help(description)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(description)
+    }
+
+    private var description: String {
+        switch status {
+        case let .battery(percentage, external):
+            return "Battery: \(percentage)% · \(external ? "Connected to power" : "On battery")"
+        case .mains:
+            return "Connected to power · No internal battery"
+        }
     }
 }
