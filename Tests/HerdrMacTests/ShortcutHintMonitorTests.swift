@@ -1,0 +1,45 @@
+import AppKit
+
+@main
+struct ShortcutHintMonitorTests {
+    @MainActor static func main() {
+        _ = NSApplication.shared
+        let monitor = ShortcutHintMonitor()
+        monitor.start()
+        monitor.update(flags: .command, isActive: true)
+        precondition(monitor.isHeld, "Holding Command should reveal shortcuts")
+        monitor.update(flags: [.command, .shift], isActive: true)
+        precondition(monitor.isHeld, "Other modifiers must not hide a held Command key")
+        monitor.update(flags: .shift, isActive: true)
+        precondition(!monitor.isHeld, "Releasing Command should hide shortcuts")
+        monitor.update(flags: .control, isActive: true)
+        precondition(monitor.isHeld, "Holding Control should reveal shortcuts")
+        monitor.update(flags: [.control, .shift], isActive: true)
+        precondition(monitor.isHeld, "Other modifiers must not hide a held Control key")
+        monitor.update(flags: [.command, .control], isActive: true)
+        precondition(monitor.isHeld, "Holding both modifiers should reveal shortcuts")
+        monitor.update(flags: .control, isActive: true)
+        precondition(monitor.isHeld, "Releasing Command while Control remains held must keep hints visible")
+        monitor.update(flags: [], isActive: true)
+        precondition(!monitor.isHeld, "Releasing both modifiers should hide shortcuts")
+        monitor.update(flags: .option, isActive: true)
+        precondition(!monitor.isHeld, "Option alone must not reveal shortcuts")
+        monitor.update(flags: .control, isActive: true)
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApplication.shared)
+        precondition(!monitor.isHeld, "Switching apps while Control is held must clear hints")
+        monitor.update(flags: [.command, .control], isActive: false)
+        precondition(!monitor.isHeld, "Neither modifier may reveal hints in an inactive app")
+        monitor.update(flags: .command, isActive: true)
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApplication.shared)
+        precondition(!monitor.isHeld, "Switching apps while Command is held must clear hints")
+        monitor.update(flags: .command, isActive: false)
+        precondition(!monitor.isHeld, "Inactive apps must not display held-key hints")
+        monitor.update(flags: .command, isActive: true)
+        monitor.stop()
+        precondition(!monitor.isHeld, "Removing the workspace view should clear hints")
+        monitor.update(flags: .command, isActive: true)
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApplication.shared)
+        precondition(monitor.isHeld, "Stopping must remove notification observers")
+        print("PASS: Command/Control hints show, release, mixed modifiers, app deactivation, inactive state, and observer cleanup")
+    }
+}

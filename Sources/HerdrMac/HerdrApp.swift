@@ -70,10 +70,12 @@ struct HerdrApp: App {
                     .disabled(!entry.session.connected || !canInteract)
                 }
                 Divider()
-                ForEach(Array(store.visibleTabs.prefix(9).enumerated()), id: \.element.id) { index, tab in
-                    Button("Switch to Tab \(index + 1): \(tab.label)") { store.selectTab(tab) }
-                        .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .control)
-                        .disabled(!canNavigateTabs)
+                ForEach(Array(store.visibleTabs.prefix(10).enumerated()), id: \.element.id) { index, tab in
+                    if let key = AppHotkeys.tabSelectionKey(at: index) {
+                        Button("Switch to Tab \(index + 1): \(tab.label)") { store.selectTab(tab) }
+                            .keyboardShortcut(KeyEquivalent(key), modifiers: .control)
+                            .disabled(!canNavigateTabs)
+                    }
                 }
                 Divider()
                 Button("Next Tab") { moveTab(1) }

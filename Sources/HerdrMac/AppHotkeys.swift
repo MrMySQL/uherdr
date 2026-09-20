@@ -17,6 +17,11 @@ enum AppHotkeyAction: Equatable {
 }
 
 enum AppHotkeys {
+    static func tabSelectionKey(at index: Int) -> Character? {
+        guard (0..<10).contains(index) else { return nil }
+        return Character(String((index + 1) % 10))
+    }
+
     static let renameCurrentTab = AppHotkey(key: "r", modifiers: .command)
     static let renameCurrentWorkspace = AppHotkey(key: "r", modifiers: [.command, .shift])
     static let togglePaneZoom = AppHotkey(key: "\r", modifiers: .command)
