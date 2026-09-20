@@ -8,6 +8,13 @@ struct PaneDragPayload: Codable, Equatable, Sendable {
     let paneID: String
 }
 
+struct TabDragPayload: Codable, Equatable, Sendable {
+    let deviceID: UUID
+    let connectionGeneration: UUID
+    let workspaceID: String
+    let tabID: String
+}
+
 enum PaneDockEdge: CaseIterable {
     case left, right, top, bottom
 
@@ -63,6 +70,7 @@ final class SessionStore: ObservableObject {
     var executable: String { profile.executable }
     var isRemote: Bool { profile.kind == .ssh }
     var defaultDirectory: String { isRemote ? remoteHome ?? "/tmp" : NSHomeDirectory() }
+    @Published private var tabOrder: [String: [String]]
     private let defaults: UserDefaults
     private let tunnel: SSHTunnel
     private let fileTransfer: RemoteFileTransfer
@@ -82,6 +90,7 @@ final class SessionStore: ObservableObject {
     init(profile: DeviceProfile, defaults: UserDefaults = .standard, tunnel: SSHTunnel? = nil, client: (any HerdrRequesting)? = nil, fileTransfer: RemoteFileTransfer? = nil) {
         self.profile = profile
         self.defaults = defaults
+        tabOrder = defaults.dictionary(forKey: "tabOrder:\(profile.id.uuidString)") as? [String: [String]] ?? [:]
         self.tunnel = tunnel ?? SSHTunnel()
         self.fileTransfer = fileTransfer ?? RemoteFileTransfer()
         let socket = profile.kind == .local ? (profile.socketPath as NSString).expandingTildeInPath : ""
@@ -101,7 +110,40 @@ final class SessionStore: ObservableObject {
     var currentSpace: Workspace? { workspaces.first { $0.id == selectedSpace } }
     var currentTab: HerdrCore.Tab? { tabs.first { $0.id == selectedTab } }
     var currentPane: Pane? { panes.first { $0.id == selectedPane } }
-    var visibleTabs: [HerdrCore.Tab] { tabs.filter { $0.workspaceID == selectedSpace } }
+    var visibleTabs: [HerdrCore.Tab] {
+        let visible = tabs.filter { $0.workspaceID == selectedSpace }
+        guard let space = selectedSpace, let order = tabOrder[space] else { return visible }
+        let byID = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0) })
+        var seen = Set<String>()
+        let ordered = order.compactMap { id -> HerdrCore.Tab? in
+            guard seen.insert(id).inserted else { return nil }
+            return byID[id]
+        }
+        return ordered + visible.filter { !seen.contains($0.id) }
+    }
+
+    func tabDragPayload(for tabID: String) -> TabDragPayload? {
+        guard connected, !suspended, !busy, paneMoveID == nil, sheet == nil,
+              pendingClose == nil, operationError == nil,
+              let tab = visibleTabs.first(where: { $0.id == tabID }) else { return nil }
+        return TabDragPayload(deviceID: profile.id, connectionGeneration: connectionGeneration,
+                              workspaceID: tab.workspaceID, tabID: tab.id)
+    }
+
+    @discardableResult
+    func moveTab(_ source: TabDragPayload, relativeTo targetID: String, after: Bool) -> Bool {
+        guard tabDragPayload(for: source.tabID) == source, source.tabID != targetID,
+              visibleTabs.contains(where: { $0.id == targetID }) else { return false }
+        let current = visibleTabs.map(\.id)
+        var order = current.filter { $0 != source.tabID }
+        guard let target = order.firstIndex(of: targetID) else { return false }
+        order.insert(source.tabID, at: target + (after ? 1 : 0))
+        if order != current {
+            tabOrder[source.workspaceID] = order
+            defaults.set(tabOrder, forKey: "tabOrder:\(profile.id.uuidString)")
+        }
+        return true
+    }
     var visiblePanes: [Pane] { panes.filter { $0.tabID == selectedTab } }
     var currentLayout: TabLayout? { selectedTab.flatMap { layouts[$0] } }
     var attentionCount: Int { agents.filter { $0.agentStatus == .blocked || $0.agentStatus == .done }.count }
@@ -186,6 +228,7 @@ final class SessionStore: ObservableObject {
     func updateProfile(_ value: DeviceProfile) {
         disconnect()
         profile = value
+        tabOrder = defaults.dictionary(forKey: "tabOrder:\(value.id.uuidString)") as? [String: [String]] ?? [:]
         workspaces = []; tabs = []; panes = []; agents = []; layouts = [:]
         selectedSpace = nil; selectedTab = nil; selectedPane = nil
         reconnect()

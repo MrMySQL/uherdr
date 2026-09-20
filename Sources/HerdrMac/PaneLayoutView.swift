@@ -3,12 +3,19 @@ import HerdrCore
 import UniformTypeIdentifiers
 
 private extension UTType {
+    static let herdrTab = UTType(exportedAs: "dev.herdr.native.tab", conformingTo: .data)
     static let herdrPane = UTType(exportedAs: "dev.herdr.native.pane", conformingTo: .data)
 }
 
 extension PaneDragPayload: Transferable {
     static var transferRepresentation: some TransferRepresentation {
         CodableRepresentation(contentType: .herdrPane)
+    }
+}
+
+extension TabDragPayload: Transferable {
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .herdrTab)
     }
 }
 
@@ -459,33 +466,109 @@ struct PaneDragLifecycle: ViewModifier {
 }
 
 
-struct PaneTabDropTarget: ViewModifier {
+struct TabStripDragTarget: ViewModifier {
     let tabID: String
     @ObservedObject var store: SessionStore
-    @State private var targeted = false
+    @StateObject private var drop = PaneDropState()
+    @State private var size: CGSize = .zero
 
-    private var enabled: Bool {
+    func body(content: Content) -> some View {
+        draggable(content)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .overlay(alignment: drop.edge == .right ? .trailing : .leading) {
+                if let edge = drop.edge {
+                    if edge == .left || edge == .right {
+                        Capsule().fill(Color.accentColor).frame(width: 2)
+                            .allowsHitTesting(false)
+                    } else {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Color.accentColor.opacity(0.2))
+                            .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) }
+                            .allowsHitTesting(false)
+                    }
+                }
+            }
+            .onDrop(of: [.herdrTab, .herdrPane], delegate: TabStripDropDelegate(
+                tabID: tabID, size: size, store: store, state: drop
+            ))
+            .onChange(of: store.connectionGeneration) { _, _ in drop.reset() }
+            .onChange(of: store.selectedSpace) { _, _ in drop.reset() }
+            .onChange(of: store.busy) { _, _ in drop.reset() }
+            .onDisappear { drop.reset() }
+    }
+
+    @ViewBuilder private func draggable(_ content: Content) -> some View {
+        if let payload = store.tabDragPayload(for: tabID) {
+            content.draggable(payload)
+                .help("Drag to reorder tabs")
+                .accessibilityHint("Drag to reorder tabs")
+        } else {
+            content
+        }
+    }
+}
+
+struct TabStripDropDelegate: DropDelegate {
+    let tabID: String
+    let size: CGSize
+    let store: SessionStore
+    let state: PaneDropState
+
+    private var acceptsPane: Bool {
         store.visiblePanes.contains { pane in
             guard let source = store.paneDragPayload(for: pane.id) else { return false }
             return store.canMovePane(source, toTab: tabID)
         }
     }
 
-    func body(content: Content) -> some View {
-        content
-            .overlay {
-                if targeted && enabled {
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(Color.accentColor.opacity(0.2))
-                        .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) }
-                        .allowsHitTesting(false)
+    func validateDrop(info: DropInfo) -> Bool {
+        if info.hasItemsConforming(to: [.herdrTab]) {
+            return store.tabDragPayload(for: tabID) != nil && store.visibleTabs.count > 1
+        }
+        return info.hasItemsConforming(to: [.herdrPane]) && acceptsPane
+    }
+
+    func dropEntered(info: DropInfo) { updatePreview(info: info) }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        updatePreview(info: info)
+        return DropProposal(operation: state.edge == nil ? .cancel : .move)
+    }
+
+    func dropExited(info: DropInfo) { state.reset() }
+
+    func performDrop(info: DropInfo) -> Bool {
+        PaneDropState.endDrag()
+        guard validateDrop(info: info) else { return false }
+        if info.hasItemsConforming(to: [.herdrTab]) {
+            let providers = info.itemProviders(for: [.herdrTab])
+            guard providers.count == 1, let provider = providers.first else { return false }
+            let after = info.location.x >= size.width / 2
+            _ = provider.loadTransferable(type: TabDragPayload.self) { result in
+                Task { @MainActor in
+                    guard case .success(let source) = result else { return }
+                    store.moveTab(source, relativeTo: tabID, after: after)
                 }
             }
-            .dropDestination(for: PaneDragPayload.self) { sources, _ in
-                PaneDropState.endDrag()
-                guard sources.count == 1, let source = sources.first else { return false }
-                return store.movePane(source, toTab: tabID)
-            } isTargeted: { targeted = $0 }
+        } else {
+            let providers = info.itemProviders(for: [.herdrPane])
+            guard providers.count == 1, let provider = providers.first else { return false }
+            _ = provider.loadTransferable(type: PaneDragPayload.self) { result in
+                Task { @MainActor in
+                    guard case .success(let source) = result else { return }
+                    store.movePane(source, toTab: tabID)
+                }
+            }
+        }
+        return true
+    }
+
+    private func updatePreview(info: DropInfo) {
+        guard validateDrop(info: info) else { state.reset(); return }
+        // Provider contents are only readable on drop. Use the type and pointer
+        // for hover feedback, then validate the source identity in SessionStore.
+        state.edge = info.hasItemsConforming(to: [.herdrTab])
+            ? (info.location.x < size.width / 2 ? .left : .right) : .top
     }
 }
 
