@@ -11,7 +11,7 @@ struct DeviceSidebarView: View {
         VStack(spacing: 0) {
             HStack {
                 Image(systemName: "square.split.2x2.fill").foregroundStyle(Color.accentColor)
-                Text("herdr").font(.system(size: 25, weight: .semibold, design: .rounded))
+                Text("uHerdr").font(.system(size: 25, weight: .semibold, design: .rounded))
                 Spacer()
                 Button { addDevice() } label: { Image(systemName: "plus") }.buttonStyle(.plain).help("Add device")
             }.padding(18)
