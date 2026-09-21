@@ -1,8 +1,8 @@
-# Herdr client for macOS
+# uHerdr client for macOS
 
 A native SwiftUI + AppKit client for the herdr runtime. Spaces map to herdr workspaces; each space has tabs with nested, resizable terminal panes. The Agents view shows detected agents and their status.
 
-![Herdr for macOS showing spaces, tabs, and two terminal panes running coding agents](docs/images/uherdr.png)
+![uHerdr for macOS showing spaces, tabs, and two terminal panes running coding agents](docs/images/uherdr.png)
 
 ## Requirements
 

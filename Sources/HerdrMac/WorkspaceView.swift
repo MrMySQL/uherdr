@@ -32,7 +32,7 @@ struct WorkspaceView: View {
                 statusBar
             }
             .background(Color(nsColor: .windowBackgroundColor))
-            .navigationTitle("\(store.profile.name) — \(store.currentSpace?.label ?? "Herdr")")
+            .navigationTitle("\(store.profile.name) — \(store.currentSpace?.label ?? "uHerdr")")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 2) {
@@ -87,7 +87,7 @@ struct WorkspaceView: View {
                 store.pendingClose = nil
             }
         } message: {
-            Text("Closing “\(store.pendingClose?.label ?? "")” terminates its terminals and running agents. You can quit Herdr instead to keep them running.")
+            Text("Closing “\(store.pendingClose?.label ?? "")” terminates its terminals and running agents. You can quit uHerdr instead to keep them running.")
         }
         .background(WindowAccessor())
         .task { devices.start() }

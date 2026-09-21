@@ -14,8 +14,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>Herdr</string>
 <key>CFBundleIdentifier</key><string>dev.herdr.native</string>
-<key>CFBundleName</key><string>Herdr</string>
-<key>CFBundleDisplayName</key><string>Herdr</string>
+<key>CFBundleName</key><string>uHerdr</string>
+<key>CFBundleDisplayName</key><string>uHerdr</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>
@@ -25,7 +25,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>UTExportedTypeDeclarations</key><array><dict>
 <key>UTTypeIdentifier</key><string>dev.herdr.native.pane</string>
-<key>UTTypeDescription</key><string>Herdr pane</string>
+<key>UTTypeDescription</key><string>uHerdr pane</string>
 <key>UTTypeConformsTo</key><array><string>public.data</string></array>
 </dict><dict>
 <key>UTTypeIdentifier</key><string>dev.herdr.native.tab</string>

@@ -7,7 +7,7 @@ struct HerdrApp: App {
     @StateObject private var devices = DeviceStore()
     private var store: SessionStore { devices.activeSession }
     var body: some Scene {
-        Window("Herdr", id: "main") {
+        Window("uHerdr", id: "main") {
             WorkspaceView(store: store, devices: devices)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in devices.stop() }
         }
