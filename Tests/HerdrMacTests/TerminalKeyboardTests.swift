@@ -73,6 +73,29 @@ struct TerminalKeyboardTests {
         }
         precondition(lifecycle.surface != nil, "Ghostty surface must attach")
         precondition(engine.lastConfigurationIssue == nil, engine.lastConfigurationIssue ?? "")
+        // Ghostty's contrast correction replaces failing foregrounds with black
+        // or white; it does not preserve their hue. These independently computed
+        // WCAG ratios cover actual Claude RGB output on our light background,
+        // plus near-invisible text that still needs correction in either theme.
+        let contrastLine = engine.renderedConfig.split(separator: "\n").last {
+            $0.hasPrefix("minimum-contrast = ")
+        }!
+        let minimumContrast = Double(contrastLine.split(separator: "=")[1]
+            .trimmingCharacters(in: .whitespaces))!
+        for (label, ratio, shouldCorrect) in [
+            ("Claude green #4eba65 on #fafaf7", 2.3528, false),
+            ("Claude lavender #b1b9f9 on #fafaf7", 1.7967, false),
+            ("Claude gray #999999 on #fafaf7", 2.7245, false),
+            ("white on the light terminal background", 1.0457, true),
+            ("default dark text on Claude's #373737 input", 1.2513, true),
+            ("#101010 on the dark terminal background", 1.0042, true)
+        ] {
+            guard (ratio < minimumContrast) == shouldCorrect else {
+                print("FAIL: terminal contrast policy changes \(label) incorrectly (threshold \(minimumContrast))")
+                exit(1)
+            }
+        }
+        print("PASS: terminal contrast preserves agent colors and corrects nearly invisible text")
         bridge.receive(Data("Ghostty café 世界\r\n".utf8))
         bridge.session.waitForPendingOutput()
         precondition(bridge.session.readViewportText()?.contains("Ghostty café 世界") == true)
