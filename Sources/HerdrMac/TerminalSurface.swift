@@ -779,9 +779,10 @@ final class HerdrTerminalView: AppTerminalView {
     static var baseConfiguration: TerminalConfiguration {
         TerminalConfiguration.default
             .fontFamily("Menlo")
-            // TUI input fields can supply dark backgrounds even in light mode.
-            // Keep text readable against each cell's actual background.
-            .minimumContrast(4.5)
+            // Ghostty replaces low-contrast colors with black or white. Limit
+            // correction to nearly invisible text so agent accent colors survive,
+            // while dark TUI input fields remain readable in light mode.
+            .minimumContrast(1.3)
             .windowPaddingX(0).windowPaddingY(0)
             .custom("macos-option-as-alt", "true")
             .custom("mouse-shift-capture", "never")
