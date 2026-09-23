@@ -2,7 +2,7 @@
 
 A native SwiftUI + AppKit client for the herdr runtime. Spaces map to herdr workspaces; each space has tabs with nested, resizable terminal panes. The Agents view shows detected agents and their status.
 
-![uHerdr for macOS showing spaces, tabs, and two terminal panes running coding agents](docs/images/uherdr.png)
+<img width="1299" height="909" alt="Screenshot 2026-09-23 at 16 18 45" src="https://github.com/user-attachments/assets/dfc6656a-3202-41ab-bbf7-e28acb92b190" />
 
 ## Requirements
 
