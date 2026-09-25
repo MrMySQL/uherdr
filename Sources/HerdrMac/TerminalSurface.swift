@@ -374,6 +374,7 @@ struct TerminalSurface: NSViewRepresentable {
         let controller: TerminalController
         weak var store: SessionStore?
         let paneID: String
+        private let workspace: NSWorkspace
         weak var view: HerdrTerminalView?
         let engine = GhosttyTerminal.TerminalController(
             configuration: HerdrTerminalView.baseConfiguration,
@@ -413,10 +414,11 @@ struct TerminalSurface: NSViewRepresentable {
         private var fontSize: Double?
         private var dark: Bool?
 
-        init(controller: TerminalController, store: SessionStore, paneID: String) {
+        init(controller: TerminalController, store: SessionStore, paneID: String, workspace: NSWorkspace = .shared) {
             self.controller = controller
             self.store = store
             self.paneID = paneID
+            self.workspace = workspace
         }
 
         func updateAppearance(fontSize: Double, dark: Bool) {
@@ -506,9 +508,22 @@ struct TerminalSurface: NSViewRepresentable {
         }
         func terminalDidRingBell() { NSSound.beep() }
         func terminalDidRequestOpenURL(_ text: String, kind: TerminalOpenURLKind) {
-            guard let url = URL(string: text),
-                  ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else { return }
-            NSWorkspace.shared.open(url)
+            guard let url = URL(string: text) else { return }
+            if url.isFileURL {
+                // A remote pane's path belongs to that device, even if the
+                // same path happens to exist on this Mac.
+                guard store?.isRemote == false,
+                      let components = URLComponents(string: text),
+                      components.user == nil, components.password == nil, components.port == nil,
+                      ["", "localhost", ProcessInfo.processInfo.hostName.lowercased()]
+                        .contains(components.host?.lowercased() ?? ""),
+                      components.path.hasPrefix("/"), !components.path.utf8.contains(0),
+                      FileManager.default.fileExists(atPath: components.path) else { return }
+                // Decode the path once and omit line fragments such as #L12.
+                workspace.activateFileViewerSelecting([URL(fileURLWithPath: components.path)])
+            } else if ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") {
+                workspace.open(url)
+            }
         }
         func terminalDidRequestClipboardConfirmation(_ request: TerminalClipboardConfirmationRequest) {
             // Preserve explicit user paste/copy while denying programmatic reads.

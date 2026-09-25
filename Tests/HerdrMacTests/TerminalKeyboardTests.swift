@@ -453,6 +453,65 @@ struct TerminalKeyboardTests {
         linkClick("ordinary terminal text")
         precondition(capture.bytes.isEmpty, "Disabling mouse capture must restore local selection without sending mouse input")
         print("PASS: terminal URL clicks preserve destinations, selection, and mouse capture")
+        // Keep the real coordinator and Ghostty click path; intercept only the
+        // OS calls so this test cannot launch Finder or a browser.
+        let fileRoot = FileManager.default.temporaryDirectory.appendingPathComponent("herdr-links-\(UUID())")
+        try! FileManager.default.createDirectory(at: fileRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fileRoot) }
+        let file = fileRoot.appendingPathComponent("it's café #1.txt")
+        try! Data("link fixture".utf8).write(to: file)
+        let workspace = LinkWorkspace()
+        let localStore = SessionStore(profile: DeviceProfile(name: "Local links", kind: .local,
+            socketPath: "/tmp/unused-links.sock", executable: "/usr/bin/false"))
+        let linkCoordinator = TerminalSurface.Coordinator(controller: HerdrMac.TerminalController(),
+            store: localStore, paneID: "link-test", workspace: workspace)
+        view.delegate = linkCoordinator
+        let fileLink = "\u{1b}]8;;\(file.absoluteString)\u{1b}\\Linked file\u{1b}]8;;\u{1b}\\"
+        for mouseCaptured in [false, true] {
+            bridge.receive(Data((mouseCaptured ? "\u{1b}[?1000h\u{1b}[?1006h" : "\u{1b}[?1000l\u{1b}[?1006l").utf8))
+            for modifiers: NSEvent.ModifierFlags in [[], .command] {
+                workspace.revealed = []
+                linkClick(fileLink, modifiers: modifiers)
+                precondition(workspace.revealed.map(\.path) == [file.path],
+                             "File hyperlinks must reveal the decoded file in Finder (capture: \(mouseCaptured))")
+                precondition(workspace.opened.isEmpty, "File hyperlinks must not launch their associated app")
+            }
+            workspace.revealed = []
+            linkClick(fileLink, drag: true)
+            precondition(workspace.revealed.isEmpty, "Dragging a file link must select text without opening Finder")
+        }
+        for host in ["localhost", ProcessInfo.processInfo.hostName] {
+            var components = URLComponents(url: file, resolvingAgainstBaseURL: false)!
+            components.host = host
+            components.fragment = "L12"
+            workspace.revealed = []
+            linkCoordinator.terminalDidRequestOpenURL(components.string!, kind: .text)
+            precondition(workspace.revealed.map(\.path) == [file.path], "Local host file URLs must reveal their file")
+            precondition(workspace.revealed[0].fragment == nil, "Line fragments must not reach Finder")
+        }
+        workspace.revealed = []
+        var remoteURL = URLComponents(url: file, resolvingAgainstBaseURL: false)!
+        remoteURL.host = "another-machine.invalid"
+        for ignored in [remoteURL.string!, fileRoot.appendingPathComponent("missing.txt").absoluteString,
+                        "file:relative.txt", "javascript:alert(1)", "ssh://example.com"] {
+            linkCoordinator.terminalDidRequestOpenURL(ignored, kind: .text)
+        }
+        precondition(workspace.revealed.isEmpty && workspace.opened.isEmpty,
+                     "Missing files, remote hosts and unsupported schemes must not open anything")
+        let remoteStore = SessionStore(profile: DeviceProfile(name: "Remote links", kind: .ssh,
+            host: "remote.invalid", executable: "/usr/bin/false"))
+        linkCoordinator.store = remoteStore
+        linkCoordinator.terminalDidRequestOpenURL(file.absoluteString, kind: .text)
+        precondition(workspace.revealed.isEmpty, "Remote pane paths must not reveal unrelated local files")
+        for external in [url, "http://example.com", "mailto:test@example.com"] {
+            linkCoordinator.terminalDidRequestOpenURL(external, kind: .text)
+        }
+        precondition(workspace.opened.map(\.absoluteString) == [url, "http://example.com", "mailto:test@example.com"],
+                     "Web and email links must retain their existing handlers")
+        view.delegate = lifecycle
+        bridge.receive(Data("\u{1b}[?1000l\u{1b}[?1006l".utf8))
+        bridge.session.waitForPendingOutput()
+        print("PASS: file links reveal local files, preserve selection and reject remote paths")
         lifecycle.surface = nil
         view.controller = nil
         precondition(bridge.session.readViewportText() == nil)
@@ -632,6 +691,13 @@ private func checkClipboardFiles(view: HerdrTerminalView, capture: StreamCapture
 private final class ShortcutTarget: NSObject {
     var invocations = 0
     @objc func invoke(_ sender: NSMenuItem) { invocations += 1 }
+}
+
+private final class LinkWorkspace: NSWorkspace {
+    var revealed: [URL] = []
+    var opened: [URL] = []
+    override func activateFileViewerSelecting(_ fileURLs: [URL]) { revealed += fileURLs }
+    override func open(_ url: URL) -> Bool { opened.append(url); return true }
 }
 
 private final class StreamCapture: @unchecked Sendable {
