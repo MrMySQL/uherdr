@@ -170,7 +170,12 @@ struct WorkspaceView: View {
                     ForEach(Array(store.visibleTabs.enumerated()), id: \.element.id) { index, tab in
                         Button { store.selectTab(tab) } label: {
                             HStack(spacing: 6) {
-                                Image(systemName: "terminal").font(.system(size: 10))
+                                let agents = store.panes.filter { $0.tabID == tab.id }.compactMap(\.agent)
+                                if agents.isEmpty {
+                                    Image(systemName: "terminal").font(.system(size: 10))
+                                } else {
+                                    AgentIconStack(agents: agents, background: Color(nsColor: .windowBackgroundColor))
+                                }
                                 Text(tab.label).lineLimit(1)
                                 if let key = AppHotkeys.tabSelectionKey(at: index) {
                                     Text("⌃\(String(key))").font(.system(size: 10, design: .monospaced))
