@@ -8,17 +8,24 @@ final class DeviceStore: ObservableObject {
     @Published private(set) var selectedDeviceID: UUID
     @Published var editor: DeviceEditorTarget?
     @Published var pendingRemoval: UUID?
+    @Published var pendingSessionAction: SessionAction?
+    @Published var pendingMachineRemoval: String?
+    /// The latest `herdr session list`, refreshed by discovery and after actions.
+    @Published private(set) var herdrSessions: [HerdrSessionEntry] = []
     @Published var sidebarMode = "spaces"
     private let defaults: UserDefaults
     private var subscriptions: [AnyCancellable] = []
     private let sessionLister: @MainActor (String) async throws -> [HerdrSessionEntry]
+    private let sessionRunner: @MainActor (String) -> SessionControl.Runner
     private var discoveryTask: Task<Void, Never>?
     private var discovering = false
 
     init(defaults: UserDefaults = .standard, profiles: [DeviceProfile]? = nil,
-         sessionLister: @escaping @MainActor (String) async throws -> [HerdrSessionEntry] = { try await SessionDiscovery.list(executable: $0) }) {
+         sessionLister: @escaping @MainActor (String) async throws -> [HerdrSessionEntry] = { try await SessionDiscovery.list(executable: $0) },
+         sessionRunner: @escaping @MainActor (String) -> SessionControl.Runner = { SessionControl.runner(executable: $0) }) {
         self.defaults = defaults
         self.sessionLister = sessionLister
+        self.sessionRunner = sessionRunner
         let profiles = profiles ?? DeviceProfile.load(from: defaults, environment: ProcessInfo.processInfo.environment, home: NSHomeDirectory(), executable: SessionStore.findExecutable())
         precondition(!profiles.isEmpty)
         sessions = profiles.map { SessionStore(profile: $0, defaults: defaults) }
@@ -69,6 +76,7 @@ final class DeviceStore: ObservableObject {
         defer { discovering = false }
         let executable = sessions.first { !$0.isRemote }?.executable ?? SessionStore.findExecutable()
         guard let found = try? await sessionLister(executable) else { return }
+        herdrSessions = found
         if includeDismissed { defaults.removeObject(forKey: SessionDiscovery.dismissedKey) }
         let dismissed = Set(defaults.stringArray(forKey: SessionDiscovery.dismissedKey) ?? [])
         for profile in SessionDiscovery.newProfiles(for: found, existing: sessions.map(\.profile), dismissed: dismissed, executable: executable) {
@@ -86,8 +94,18 @@ final class DeviceStore: ObservableObject {
         if let workspace { session.selectSpace(workspace) }
     }
 
-    func save(_ profile: DeviceProfile) {
+    /// A machine edit also applies its SSH connection to the machine's other sessions.
+    func save(_ profile: DeviceProfile, machine machineID: String? = nil) {
         guard profile.validationError == nil else { return }
+        if let machineID, let machine = machine(machineID), machine.isRemote {
+            for other in machine.sessions where other.profile.id != profile.id {
+                var updated = other.profile
+                updated.host = profile.host; updated.user = profile.user
+                updated.port = profile.port; updated.identityFile = profile.identityFile
+                updated.executable = profile.executable
+                if updated.validationError == nil, updated != other.profile { other.updateProfile(updated) }
+            }
+        }
         if let existing = sessions.first(where: { $0.profile.id == profile.id }) {
             existing.updateProfile(profile)
         } else {
@@ -99,9 +117,11 @@ final class DeviceStore: ObservableObject {
         persist()
     }
 
-    func remove(_ id: UUID) {
+    func remove(_ id: UUID) { remove(id, dismiss: true) }
+
+    private func remove(_ id: UUID, dismiss: Bool) {
         guard sessions.count > 1, let session = sessions.first(where: { $0.profile.id == id }) else { return }
-        if !session.isRemote {
+        if dismiss, !session.isRemote {
             // Keep a removed local session from being discovered again.
             var dismissed = defaults.stringArray(forKey: SessionDiscovery.dismissedKey) ?? []
             dismissed.append(SessionDiscovery.normalized(session.profile.socketPath))
@@ -112,6 +132,87 @@ final class DeviceStore: ObservableObject {
         if selectedDeviceID == id { selectedDeviceID = sessions[0].profile.id }
         observeSessions()
         persist()
+    }
+
+    /// The herdr session behind a local device, if herdr lists its socket.
+    func herdrSession(for session: SessionStore) -> HerdrSessionEntry? {
+        SessionControl.session(for: session.profile, in: herdrSessions)
+    }
+
+    func canRemoveHerdrSession(_ session: SessionStore) -> Bool {
+        sessions.count > 1 && herdrSession(for: session).map(SessionControl.canDelete) == true
+    }
+
+    func machine(_ id: String) -> MachineGroup? { machineGroups.first { $0.id == id } }
+
+    func reconnectAll(_ machineID: String) { machine(machineID)?.sessions.forEach { $0.reconnect() } }
+    func disconnectAll(_ machineID: String) { machine(machineID)?.sessions.forEach { $0.disconnect() } }
+
+    /// Removes a saved SSH machine and every session on it; its herdr
+    /// sessions keep running. At least one device always remains.
+    func removeMachine(_ machineID: String) {
+        guard let machine = machine(machineID), machine.isRemote, sessions.count > machine.sessions.count else { return }
+        for session in machine.sessions { remove(session.profile.id, dismiss: false) }
+    }
+
+    func canRemoveMachine(_ machineID: String) -> Bool {
+        guard let machine = machine(machineID) else { return false }
+        return machine.isRemote && sessions.count > machine.sessions.count
+    }
+
+    /// Whether this Mac's default herdr session is known and stopped.
+    var canStartDefaultServer: Bool { herdrSessions.first(where: \.isDefault).map { !$0.running } ?? false }
+
+    func startDefaultServer() {
+        guard let entry = herdrSessions.first(where: \.isDefault), !entry.running else { return }
+        let socket = SessionDiscovery.normalized(entry.socketPath)
+        var target = sessions.first { !$0.isRemote && SessionDiscovery.normalized($0.profile.socketPath) == socket }
+        if target == nil {
+            save(DeviceProfile(name: entry.name, kind: .local, socketPath: socket, executable: localExecutable))
+            target = sessions.last
+        }
+        target?.startServer()
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            await self?.discoverSessions()
+        }
+    }
+
+    func stopHerdrSession(_ session: SessionStore) async {
+        await runSessionAction(on: session) { entry, run in try await SessionControl.stop(entry.name, run) }
+    }
+
+    /// Stops the session if needed, deletes it from herdr, then removes it here.
+    func removeHerdrSession(_ session: SessionStore) async {
+        guard canRemoveHerdrSession(session) else { return }
+        let id = session.profile.id
+        if await runSessionAction(on: session, { entry, run in try await SessionControl.delete(entry, run) }) {
+            remove(id, dismiss: false)
+        }
+    }
+
+    /// Re-reads the session list first, so the action uses herdr's current state.
+    @discardableResult
+    private func runSessionAction(on session: SessionStore,
+                                  _ action: @MainActor (HerdrSessionEntry, SessionControl.Runner) async throws -> Void) async -> Bool {
+        let run = sessionRunner(session.executable)
+        do {
+            let current = try await SessionControl.list(run)
+            herdrSessions = current
+            guard let entry = SessionControl.session(for: session.profile, in: current) else {
+                throw HerdrError.message("herdr no longer lists this session.")
+            }
+            try await action(entry, run)
+            await discoverSessions()
+            return true
+        } catch {
+            activeSession.operationError = error.localizedDescription
+            return false
+        }
+    }
+
+    private var localExecutable: String {
+        sessions.first { !$0.isRemote }?.executable ?? SessionStore.findExecutable()
     }
 
     private func observeSessions() {
@@ -139,4 +240,19 @@ struct DeviceEditorTarget: Identifiable {
     let id = UUID()
     var profile: DeviceProfile
     var isNew = false
+    /// Set when editing a whole SSH machine's connection.
+    var machineID: String?
+}
+
+enum SessionAction: Identifiable {
+    case stop(UUID), remove(UUID)
+    var id: String {
+        switch self {
+        case .stop(let id): "stop:\(id)"
+        case .remove(let id): "remove:\(id)"
+        }
+    }
+    var deviceID: UUID {
+        switch self { case .stop(let id), .remove(let id): id }
+    }
 }
