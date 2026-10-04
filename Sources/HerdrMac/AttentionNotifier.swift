@@ -48,7 +48,7 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func post(_ agent: Agent, in session: SessionStore) {
-        guard let center else { return }
+        guard let center, AgentNotificationPreference.isEnabled(in: .standard) else { return }
         // Already looking at it.
         if NSApp.isActive, devices?.activeSession === session, session.selectedPane == agent.paneID { return }
         let content = UNMutableNotificationContent()

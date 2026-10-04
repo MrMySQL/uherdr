@@ -5,6 +5,12 @@ extension AgentStatus {
     public var needsAttention: Bool { self == .blocked || self == .done }
 }
 
+/// The user's choice in Settings; notifications are on unless turned off.
+public enum AgentNotificationPreference {
+    public static let key = "agentNotificationsEnabled"
+    public static func isEnabled(in defaults: UserDefaults) -> Bool { defaults.object(forKey: key) as? Bool ?? true }
+}
+
 /// Finds agents that just finished or started waiting. Only a change from a
 /// known status counts, so agents already waiting at launch, on reconnect,
 /// or when first seen raise nothing. Pane IDs repeat across servers, so
