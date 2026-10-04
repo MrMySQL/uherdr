@@ -20,6 +20,12 @@ struct HerdrApp: App {
                 Button("New Space…") { store.sheet = .space }.keyboardShortcut(shortcut(.newSpace)).disabled(!store.connected || !canInteract)
                 Button("New Tab…") { store.sheet = .tab }.keyboardShortcut(shortcut(.newTab)).disabled(store.selectedSpace == nil || !store.connected || !canInteract)
             }
+            // ⌘W closes the current tab (after confirming), not the window.
+            CommandGroup(replacing: .saveItem) {
+                Button("Close Tab…") {
+                    if let tab = store.currentTab { store.pendingClose = ResourceTarget(kind: "tab", id: tab.id, label: tab.label) }
+                }.keyboardShortcut(shortcut(.closeTab)).disabled(!canUseCurrentTab)
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { store.sheet = .settings }.keyboardShortcut(shortcut(.settings)).disabled(!canInteract)
                 Button("Keyboard Shortcuts…") { store.sheet = .shortcuts }.keyboardShortcut(shortcut(.keyboardShortcuts)).disabled(!canInteract)
