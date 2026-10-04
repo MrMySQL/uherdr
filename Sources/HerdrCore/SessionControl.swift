@@ -26,6 +26,31 @@ public enum SessionControl {
         return sessions.first { SessionDiscovery.normalized($0.socketPath) == socket }
     }
 
+    /// How to start a local device's server. herdr serves a named session
+    /// only with `--session <name>`: a bare `herdr server` uses the default
+    /// session's data whatever socket it listens on. Inherited `HERDR_*`
+    /// variables (a herdr pane's session, socket and pane ids) are dropped.
+    public struct ServerLaunch: Equatable, Sendable {
+        public let arguments: [String]
+        public let environment: [String: String]
+        public init(arguments: [String], environment: [String: String]) {
+            self.arguments = arguments
+            self.environment = environment
+        }
+    }
+
+    public static func serverLaunch(for profile: DeviceProfile, in sessions: [HerdrSessionEntry],
+                                    environment: [String: String]) -> ServerLaunch? {
+        guard profile.kind == .local else { return nil }
+        var env = environment.filter { !$0.key.hasPrefix("HERDR_") }
+        if let entry = session(for: profile, in: sessions) {
+            return ServerLaunch(arguments: entry.isDefault ? ["server"] : ["--session", entry.name, "server"], environment: env)
+        }
+        // A custom socket that herdr doesn't list as a session.
+        env["HERDR_SOCKET_PATH"] = SessionDiscovery.normalized(profile.socketPath)
+        return ServerLaunch(arguments: ["server"], environment: env)
+    }
+
     /// herdr refuses to delete its default session.
     public static func canDelete(_ session: HerdrSessionEntry) -> Bool { !session.isDefault }
 

@@ -87,11 +87,14 @@ struct WorkspaceView: View {
                 Button("Stop Session") { runSessionAction(action) }.keyboardShortcut(.defaultAction)
             case .remove:
                 Button("Remove Session", role: .destructive) { runSessionAction(action) }
+            case .restart:
+                Button("Restart Session") { runSessionAction(action) }.keyboardShortcut(.defaultAction)
             }
         } message: { action in
             switch action {
             case .stop: Text("Its shells and agents end. You can start it again from herdr.")
             case .remove: Text("This stops the session if it’s running and deletes it from herdr, including its saved snapshots. This can’t be undone.")
+            case .restart: Text("Its shells and agents end, and the session reopens from its saved state.")
             }
         }
         .alert(machineRemovalTitle, isPresented: Binding(get: { devices.pendingMachineRemoval != nil }, set: { if !$0 { devices.pendingMachineRemoval = nil } })) {
@@ -127,6 +130,7 @@ struct WorkspaceView: View {
         switch action {
         case .stop: return "Stop “\(name)”?"
         case .remove: return "Remove “\(name)”?"
+        case .restart: return "Restart “\(name)”?"
         }
     }
 
@@ -141,6 +145,7 @@ struct WorkspaceView: View {
             switch action {
             case .stop: await devices.stopHerdrSession(session)
             case .remove: await devices.removeHerdrSession(session)
+            case .restart: await devices.restartHerdrSession(session)
             }
         }
     }
@@ -255,7 +260,7 @@ struct WorkspaceView: View {
                 Button("Edit device…") { devices.editor = DeviceEditorTarget(profile: store.profile) }
                 Button(store.connecting ? "Connecting…" : "Connect") { store.reconnect() }.disabled(store.connecting)
                 if !store.isRemote {
-                    Button("Start server") { store.startServer(); store.reconnect() }.buttonStyle(.borderedProminent)
+                    Button("Start server") { Task { await devices.startServer(for: store) } }.buttonStyle(.borderedProminent)
                 }
             }
             Text("Your sessions keep running when you close this app.").font(.caption).foregroundStyle(.tertiary)

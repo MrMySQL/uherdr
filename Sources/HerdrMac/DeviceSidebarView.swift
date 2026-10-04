@@ -155,7 +155,11 @@ struct DeviceSidebarView: View {
                 }
             } else {
                 Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
-                Button("Start herdr server") { devices.startDefaultServer() }.disabled(!devices.canStartDefaultServer)
+                Menu("Start session") {
+                    ForEach(devices.stoppedHerdrSessions, id: \.socketPath) { entry in
+                        Button(entry.name) { Task { await devices.startHerdrSession(entry) } }
+                    }
+                }.disabled(devices.stoppedHerdrSessions.isEmpty)
             }
         } label: { Image(systemName: "ellipsis") }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Machine actions")
@@ -166,9 +170,13 @@ struct DeviceSidebarView: View {
         return Menu {
             Button("Reconnect") { session.reconnect() }
             Button("Disconnect") { session.disconnect() }.disabled(session.suspended)
-            if herdrSession != nil {
-                Button("Stop session…") { devices.pendingSessionAction = .stop(session.profile.id) }
-                    .disabled(herdrSession?.running != true)
+            if let herdrSession {
+                if herdrSession.running {
+                    Button("Restart session…") { devices.pendingSessionAction = .restart(session.profile.id) }
+                    Button("Stop session…") { devices.pendingSessionAction = .stop(session.profile.id) }
+                } else {
+                    Button("Start session") { Task { await devices.startServer(for: session) } }
+                }
             }
             Button("Edit socket…") { devices.editor = DeviceEditorTarget(profile: session.profile) }
             if devices.canRemoveHerdrSession(session) {
