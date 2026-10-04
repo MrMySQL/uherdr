@@ -21,6 +21,7 @@ import HerdrCore
         try await DeviceProfileTests.run()
         try await DevicePowerTests.run()
         try await FileTransferTests.run()
+        TerminalStartSizeTests.run()
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--live" { try await LiveTests.run(socket: CommandLine.arguments[2]) }
     }
     func testNestedLayoutPreservesDirectionRatiosAndPaneOrder() throws {

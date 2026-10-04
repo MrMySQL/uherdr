@@ -391,7 +391,7 @@ struct TerminalSurface: NSViewRepresentable {
             },
             resize: { [weak self] viewport in
                 DispatchQueue.main.async { [weak self] in
-                    self?.resize(cols: Int(viewport.columns), rows: Int(viewport.rows))
+                    self?.viewportChanged(viewport)
                 }
             },
             pasteRejected: { [weak self] in
@@ -428,6 +428,28 @@ struct TerminalSurface: NSViewRepresentable {
                 view?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                 engine.setColorScheme(dark ? .dark : .light)
                 self.dark = dark
+            }
+        }
+
+        private var pendingViewport: InMemoryTerminalViewport?
+
+        private func viewportChanged(_ viewport: InMemoryTerminalViewport) {
+            guard !started else { return resize(cols: Int(viewport.columns), rows: Int(viewport.rows)) }
+            let bounds = view?.bounds ?? .zero
+            if TerminalStartSize.fillsView(widthPixels: viewport.widthPixels, heightPixels: viewport.heightPixels,
+                                           viewWidth: bounds.width, viewHeight: bounds.height,
+                                           scale: Double(view?.window?.backingScaleFactor ?? 0)) {
+                pendingViewport = nil
+                return resize(cols: Int(viewport.columns), rows: Int(viewport.rows))
+            }
+            // Wait for the laid-out size, but never leave the pane unattached.
+            let waiting = pendingViewport != nil
+            pendingViewport = viewport
+            guard !waiting else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + TerminalStartSize.fallbackDelay) { [weak self] in
+                guard let self, !self.started, let latest = self.pendingViewport else { return }
+                self.pendingViewport = nil
+                self.resize(cols: Int(latest.columns), rows: Int(latest.rows))
             }
         }
 
