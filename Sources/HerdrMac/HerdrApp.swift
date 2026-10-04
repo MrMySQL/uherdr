@@ -7,6 +7,7 @@ struct HerdrApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var devices = DeviceStore()
     @State private var attention = AttentionNotifier()
+    @ObservedObject private var shortcuts = ShortcutSettings.shared
     private var store: SessionStore { devices.activeSession }
     var body: some Scene {
         Window("uHerdr", id: "main") {
@@ -104,9 +105,9 @@ struct HerdrApp: App {
             }
         }
     }
-    private func shortcut(_ action: ShortcutAction) -> KeyboardShortcut { action.defaultChord.keyboardShortcut }
-    private func rangeShortcut(_ action: ShortcutAction, digit: Character) -> KeyboardShortcut {
-        action.defaultChord.keyboardShortcut(digit: digit)
+    private func shortcut(_ action: ShortcutAction) -> KeyboardShortcut? { shortcuts.bindings.chord(for: action)?.keyboardShortcut }
+    private func rangeShortcut(_ action: ShortcutAction, digit: Character) -> KeyboardShortcut? {
+        shortcuts.bindings.chord(for: action)?.keyboardShortcut(digit: digit)
     }
     private var canInteract: Bool {
         store.sheet == nil && store.pendingClose == nil && store.operationError == nil && devices.editor == nil && devices.pendingRemoval == nil
