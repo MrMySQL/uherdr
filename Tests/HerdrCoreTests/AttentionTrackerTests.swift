@@ -50,6 +50,15 @@ enum AttentionTrackerTests {
         XCTAssertTrue(AttentionTracker.notificationID(device: a, paneID: "wC:p1") != AttentionTracker.notificationID(device: b, paneID: "wC:p1"))
         XCTAssertTrue(AgentStatus.blocked.needsAttention && AgentStatus.done.needsAttention)
         XCTAssertTrue(!AgentStatus.working.needsAttention && !AgentStatus.idle.needsAttention && !AgentStatus.unknown.needsAttention)
+        // Notifications are on until turned off in Settings.
+        let suite = "dev.herdr.notification-pref-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertTrue(AgentNotificationPreference.isEnabled(in: defaults))
+        defaults.set(false, forKey: AgentNotificationPreference.key)
+        XCTAssertTrue(!AgentNotificationPreference.isEnabled(in: defaults))
+        defaults.set(true, forKey: AgentNotificationPreference.key)
+        XCTAssertTrue(AgentNotificationPreference.isEnabled(in: defaults))
         print("PASS: alerts on waiting and on every finish, once per agent per cooldown, per device, with baselines at first sight and after disconnect")
     }
 }

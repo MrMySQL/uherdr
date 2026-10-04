@@ -1,6 +1,8 @@
 import SwiftUI
+import HerdrCore
 
 struct EditorSheet: View {
+    @AppStorage(AgentNotificationPreference.key) private var agentNotifications = true
     let sheet: AppSheet
     @ObservedObject var store: SessionStore
     @Environment(\.dismiss) private var dismiss
@@ -93,6 +95,12 @@ struct EditorSheet: View {
                 Text("Terminal text").font(.callout)
                 Slider(value: $store.fontSize, in: 10...22, step: 1)
                 Text("\(Int(store.fontSize)) pt").font(.system(size: 11, design: .monospaced)).frame(width: 38)
+            }
+            HStack {
+                Text("Notify me when an agent finishes or needs me").font(.callout)
+                Spacer()
+                Toggle("Notify me when an agent finishes or needs me", isOn: $agentNotifications)
+                    .toggleStyle(.switch).controlSize(.small).labelsHidden()
             }
             Text("Quitting detaches the client. Your herdr sessions continue running.").font(.caption).foregroundStyle(.secondary)
         }
