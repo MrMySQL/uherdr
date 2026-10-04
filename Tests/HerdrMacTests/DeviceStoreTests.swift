@@ -15,6 +15,7 @@ import HerdrCore
         try await testFileTransferCancellation(defaults: defaults)
         try await testSessionDiscovery(socketA: socketA, socketB: socketB, exe: exe)
         try testMachineGroups(exe: exe)
+        testMachineActions(exe: exe)
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -101,6 +102,8 @@ import HerdrCore
         await second.refresh()
         precondition(second.connected)
         print("PASS: two-device ID isolation, action routing, selection, persistence, disconnect/reconnect, remote paths, forwarded terminal stream and detach preservation")
+        // Last: this stops and deletes server A's session.
+        try await testSessionActions(socketA: socketA, socketB: socketB, exe: exe)
     }
 
     @MainActor static func testFileTransferCancellation(defaults: UserDefaults) async throws {
@@ -213,5 +216,83 @@ import HerdrCore
         await devices.discoverSessions()
         precondition(devices.sessions.count == 2 && devices.activeSession.operationError == nil)
         print("PASS: session discovery adds running sessions once, keeps saved devices, honours removal, and ignores CLI failures")
+    }
+
+    @MainActor static func testMachineActions(exe: String) {
+        let suiteName = "dev.herdr.machine-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let local = DeviceProfile(name: "This Mac", kind: .local, socketPath: "/tmp/uh-machine/herdr.sock", executable: exe)
+        let mini = DeviceProfile(name: "Mac mini", host: "alex@mini.invalid", executable: exe)
+        var miniWork = DeviceProfile(name: "Mini work", host: "alex@mini.invalid", executable: exe)
+        miniWork.socketPath = "~/.config/herdr/sessions/work/herdr.sock"
+        let devices = DeviceStore(defaults: defaults, profiles: [local, mini, miniWork]) { _ in [] }
+        defer { devices.stop() }
+        let ssh = devices.machineGroups[1].id
+        precondition(!devices.canRemoveMachine(devices.machineGroups[0].id), "This Mac is never removed as a machine")
+        // Editing the machine's connection applies it to every session on it.
+        var edited = mini; edited.host = "alex@mini2.invalid"; edited.port = "2222"
+        devices.save(edited, machine: ssh)
+        precondition(devices.sessions.filter(\.isRemote).allSatisfy { $0.profile.host == "alex@mini2.invalid" && $0.profile.port == "2222" })
+        precondition(devices.sessions[2].profile.socketPath == miniWork.socketPath, "A machine edit keeps each session's own socket")
+        // Removing the machine removes all its sessions and hides nothing locally.
+        let machine = devices.machineGroups[1].id
+        precondition(devices.canRemoveMachine(machine))
+        devices.removeMachine(machine)
+        precondition(devices.sessions.map(\.profile.id) == [local.id])
+        precondition((defaults.stringArray(forKey: SessionDiscovery.dismissedKey) ?? []).isEmpty)
+        // A machine holding every device can't be removed.
+        let onlySSH = DeviceStore(defaults: defaults, profiles: [mini, miniWork]) { _ in [] }
+        defer { onlySSH.stop() }
+        precondition(!onlySSH.canRemoveMachine(onlySSH.machineGroups[0].id))
+        onlySSH.removeMachine(onlySSH.machineGroups[0].id)
+        precondition(onlySSH.sessions.count == 2)
+        print("PASS: machine edits apply to every session, and removing a machine keeps at least one device")
+    }
+
+    /// Stops and deletes server A's real session through herdr's CLI.
+    @MainActor static func testSessionActions(socketA: String, socketB: String, exe: String) async throws {
+        let suiteName = "dev.herdr.session-action-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        // socketA is <root>/config/herdr/sessions/<name>/herdr.sock.
+        let root = URL(fileURLWithPath: socketA).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        var env = ProcessInfo.processInfo.environment
+        env["XDG_CONFIG_HOME"] = root.appendingPathComponent("config").path
+        env["XDG_STATE_HOME"] = root.appendingPathComponent("state").path
+        let run = SessionControl.runner(executable: exe, environment: env)
+        let first = DeviceProfile(name: "A", kind: .local, socketPath: socketA, executable: exe)
+        let second = DeviceProfile(name: "B", kind: .local, socketPath: socketB, executable: exe)
+        let devices = DeviceStore(defaults: defaults, profiles: [first, second],
+                                  sessionLister: { _ in try await SessionControl.list(run) },
+                                  sessionRunner: { _ in run })
+        defer { devices.stop() }
+        await devices.discoverSessions()
+        let a = devices.sessions[0], b = devices.sessions[1]
+        precondition(devices.herdrSession(for: a)?.name == "native-client-test" && devices.herdrSession(for: a)?.running == true)
+        precondition(devices.herdrSession(for: b) == nil, "B lives under another config, so this CLI can't stop or delete it")
+        precondition(devices.canRemoveHerdrSession(a) && !devices.canRemoveHerdrSession(b))
+        // A session herdr doesn't list reports an error instead of acting.
+        await devices.stopHerdrSession(b)
+        precondition(devices.activeSession.operationError != nil)
+        devices.activeSession.operationError = nil
+        // Stop: the server ends, the device stays listed.
+        await devices.stopHerdrSession(a)
+        precondition(devices.activeSession.operationError == nil, devices.activeSession.operationError ?? "")
+        precondition(!FileManager.default.fileExists(atPath: socketA), "Stopping must end server A")
+        precondition(devices.herdrSession(for: a)?.running == false && devices.sessions.count == 2)
+        // Remove: herdr deletes the session directory and the device goes away.
+        let sessionDir = URL(fileURLWithPath: socketA).deletingLastPathComponent().path
+        precondition(FileManager.default.fileExists(atPath: sessionDir))
+        await devices.removeHerdrSession(a)
+        precondition(devices.activeSession.operationError == nil, devices.activeSession.operationError ?? "")
+        precondition(!FileManager.default.fileExists(atPath: sessionDir), "herdr must delete the session")
+        let remaining = try await SessionControl.list(run)
+        precondition(remaining.allSatisfy { $0.name != "native-client-test" })
+        precondition(devices.sessions.map(\.profile.id) == [second.id])
+        // The last device can't be removed, even through a herdr session.
+        precondition(!devices.canRemoveHerdrSession(devices.sessions[0]))
+        print("PASS: Stop ends a real herdr session and keeps its device; Remove deletes it in herdr and here")
     }
 }

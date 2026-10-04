@@ -77,6 +77,27 @@ struct WorkspaceView: View {
                 devices.pendingRemoval = nil
             }
         } message: { Text("This removes the saved connection. Workspaces and running processes on the device are kept.") }
+        .alert(sessionActionTitle, isPresented: Binding(get: { devices.pendingSessionAction != nil }, set: { if !$0 { devices.pendingSessionAction = nil } }), presenting: devices.pendingSessionAction) { action in
+            Button("Cancel", role: .cancel) { devices.pendingSessionAction = nil }
+            switch action {
+            case .stop:
+                Button("Stop Session") { runSessionAction(action) }.keyboardShortcut(.defaultAction)
+            case .remove:
+                Button("Remove Session", role: .destructive) { runSessionAction(action) }
+            }
+        } message: { action in
+            switch action {
+            case .stop: Text("Its shells and agents end. You can start it again from herdr.")
+            case .remove: Text("This stops the session if it’s running and deletes it from herdr, including its saved snapshots. This can’t be undone.")
+            }
+        }
+        .alert(machineRemovalTitle, isPresented: Binding(get: { devices.pendingMachineRemoval != nil }, set: { if !$0 { devices.pendingMachineRemoval = nil } })) {
+            Button("Cancel", role: .cancel) { devices.pendingMachineRemoval = nil }
+            Button("Remove Machine", role: .destructive) {
+                if let id = devices.pendingMachineRemoval { devices.removeMachine(id) }
+                devices.pendingMachineRemoval = nil
+            }
+        } message: { Text("This removes the saved SSH connection from uHerdr. The herdr sessions on \(devices.pendingMachineRemoval.flatMap { devices.machine($0)?.name } ?? "that machine") keep running.") }
         .alert("Couldn’t complete the action", isPresented: Binding(get: { store.operationError != nil }, set: { if !$0 { store.operationError = nil } })) {
             Button("OK") { store.operationError = nil }
         } message: { Text(store.operationError ?? "") }
@@ -93,6 +114,31 @@ struct WorkspaceView: View {
         .task { devices.start() }
         .onAppear { shortcutHints.start() }
         .onDisappear { shortcutHints.stop() }
+    }
+
+    private var sessionActionTitle: String {
+        guard let action = devices.pendingSessionAction,
+              let session = devices.sessions.first(where: { $0.profile.id == action.deviceID }) else { return "" }
+        let name = session.profile.sessionName
+        switch action {
+        case .stop: return "Stop “\(name)”?"
+        case .remove: return "Remove “\(name)”?"
+        }
+    }
+
+    private var machineRemovalTitle: String {
+        "Remove “\(devices.pendingMachineRemoval.flatMap { devices.machine($0)?.name } ?? "machine")”?"
+    }
+
+    private func runSessionAction(_ action: SessionAction) {
+        devices.pendingSessionAction = nil
+        guard let session = devices.sessions.first(where: { $0.profile.id == action.deviceID }) else { return }
+        Task {
+            switch action {
+            case .stop: await devices.stopHerdrSession(session)
+            case .remove: await devices.removeHerdrSession(session)
+            }
+        }
     }
 
     private var terminalDeck: some View {

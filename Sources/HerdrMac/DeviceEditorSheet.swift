@@ -14,7 +14,7 @@ struct DeviceEditorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(target.isNew ? "Add a device" : "Edit device").font(.system(size: 22, weight: .semibold))
+            Text(target.isNew ? "Add a device" : target.machineID != nil ? "Edit SSH connection" : "Edit device").font(.system(size: 22, weight: .semibold))
             Form {
                 TextField("Name", text: $profile.name)
                 if profile.kind == .ssh {
@@ -40,7 +40,7 @@ struct DeviceEditorSheet: View {
             HStack {
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Save and connect") { devices.save(normalized); dismiss() }
+                Button("Save and connect") { devices.save(normalized, machine: target.machineID); dismiss() }
                     .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
                     .disabled(normalized.validationError != nil)
             }
