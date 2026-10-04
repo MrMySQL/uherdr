@@ -16,6 +16,7 @@ import HerdrCore
         try await testSessionDiscovery(socketA: socketA, socketB: socketB, exe: exe)
         try testMachineGroups(exe: exe)
         testMachineActions(exe: exe)
+        try await testServerStart(exe: exe)
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -317,5 +318,67 @@ import HerdrCore
         for _ in 0..<80 where !(a.connected && b.connected) { try await Task.sleep(for: .milliseconds(50)) }
         precondition(a.connected && b.connected, "Reconnect all must bring every session back")
         print("PASS: Reconnect and Disconnect all act on every session of a machine")
+    }
+
+    /// Start and Restart name the session; no real herdr server is started or stopped.
+    @MainActor static func testServerStart(exe: String) async throws {
+        let suiteName = "dev.herdr.server-start-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = URL(fileURLWithPath: "/tmp/uh-start-fake-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("sessions/side-projects"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("sessions/simplied"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaultSocket = root.appendingPathComponent("herdr.sock").path
+        let sideSocket = root.appendingPathComponent("sessions/side-projects/herdr.sock").path
+        let stoppedSocket = root.appendingPathComponent("sessions/simplied/herdr.sock").path
+        // The fake herdr: a session runs while its socket file exists.
+        func listing() -> String {
+            func entry(_ name: String, _ socket: String, _ isDefault: Bool) -> String {
+                #"{"default":\#(isDefault),"name":"\#(name)","running":\#(FileManager.default.fileExists(atPath: socket)),"session_dir":"x","socket_path":"\#(socket)"}"#
+            }
+            return #"{"sessions":[\#(entry("default", defaultSocket, true)),\#(entry("side-projects", sideSocket, false)),\#(entry("simplied", stoppedSocket, false))]}"#
+        }
+        FileManager.default.createFile(atPath: sideSocket, contents: Data())
+        var commands: [[String]] = []
+        var launches: [SessionControl.ServerLaunch] = []
+        let socketFor = ["side-projects": sideSocket, "simplied": stoppedSocket]
+        let run: SessionControl.Runner = { args in
+            commands.append(args)
+            if args.starts(with: ["session", "stop"]), let socket = socketFor[args[2]] { try? FileManager.default.removeItem(atPath: socket) }
+            return args.starts(with: ["session", "list"]) ? listing() : ""
+        }
+        let devices = DeviceStore(defaults: defaults, profiles: [
+            DeviceProfile(name: "This Mac", kind: .local, socketPath: sideSocket, executable: exe),
+        ], sessionLister: { _ in try SessionDiscovery.parse(listing()) }, sessionRunner: { _ in run }, launchServer: { _, launch in
+            launches.append(launch)
+            let name = launch.arguments.count == 3 ? launch.arguments[1] : "default"
+            FileManager.default.createFile(atPath: socketFor[name] ?? defaultSocket, contents: Data())
+        })
+        defer { devices.stop() }
+        await devices.discoverSessions()
+        let side = devices.sessions[0]
+        precondition(Set(devices.stoppedHerdrSessions.map(\.name)) == ["default", "simplied"])
+        precondition(devices.herdrSession(for: side)?.running == true)
+        // Pretend to run inside a herdr pane; only the fake launcher can see these.
+        setenv("HERDR_PANE_ID", "test-pane", 1); setenv("HERDR_SESSION", "menqal", 1)
+        defer { unsetenv("HERDR_PANE_ID"); unsetenv("HERDR_SESSION") }
+        precondition(ProcessInfo.processInfo.environment["HERDR_PANE_ID"] == "test-pane", "The test must see the pane variables it set")
+        // Restart stops what answers on the session's socket, then starts the session's own server.
+        await devices.restartHerdrSession(side)
+        precondition(devices.activeSession.operationError == nil, devices.activeSession.operationError ?? "")
+        precondition(commands.contains(["session", "stop", "side-projects"]))
+        precondition(launches.map(\.arguments) == [["--session", "side-projects", "server"]])
+        precondition(launches[0].environment.keys.allSatisfy { !$0.hasPrefix("HERDR_") }, "Inherited herdr pane variables must not reach the server")
+        precondition(launches[0].environment["PATH"] != nil, "The rest of the environment is kept")
+        // A stopped session starts from the machine menu and gets its device.
+        await devices.startHerdrSession(devices.stoppedHerdrSessions.first { $0.name == "simplied" }!)
+        precondition(launches.last?.arguments == ["--session", "simplied", "server"])
+        precondition(devices.sessions.contains { $0.profile.socketPath == stoppedSocket })
+        precondition(devices.stoppedHerdrSessions.map(\.name) == ["default"])
+        // The default session starts with a plain `herdr server` (its own data).
+        await devices.startHerdrSession(devices.stoppedHerdrSessions[0])
+        precondition(launches.last?.arguments == ["server"] && launches.count == 3)
+        print("PASS: Start and Restart run herdr with the session's own name and no inherited herdr variables")
     }
 }

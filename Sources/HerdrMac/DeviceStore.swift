@@ -17,15 +17,18 @@ final class DeviceStore: ObservableObject {
     private var subscriptions: [AnyCancellable] = []
     private let sessionLister: @MainActor (String) async throws -> [HerdrSessionEntry]
     private let sessionRunner: @MainActor (String) -> SessionControl.Runner
+    private let launchServer: @MainActor (String, SessionControl.ServerLaunch) throws -> Void
     private var discoveryTask: Task<Void, Never>?
     private var discovering = false
 
     init(defaults: UserDefaults = .standard, profiles: [DeviceProfile]? = nil,
          sessionLister: @escaping @MainActor (String) async throws -> [HerdrSessionEntry] = { try await SessionDiscovery.list(executable: $0) },
-         sessionRunner: @escaping @MainActor (String) -> SessionControl.Runner = { SessionControl.runner(executable: $0) }) {
+         sessionRunner: @escaping @MainActor (String) -> SessionControl.Runner = { SessionControl.runner(executable: $0) },
+         launchServer: @escaping @MainActor (String, SessionControl.ServerLaunch) throws -> Void = DeviceStore.launchDetachedServer) {
         self.defaults = defaults
         self.sessionLister = sessionLister
         self.sessionRunner = sessionRunner
+        self.launchServer = launchServer
         let profiles = profiles ?? DeviceProfile.load(from: defaults, environment: ProcessInfo.processInfo.environment, home: NSHomeDirectory(), executable: SessionStore.findExecutable())
         precondition(!profiles.isEmpty)
         sessions = profiles.map { SessionStore(profile: $0, defaults: defaults) }
@@ -160,22 +163,63 @@ final class DeviceStore: ObservableObject {
         return machine.isRemote && sessions.count > machine.sessions.count
     }
 
-    /// Whether this Mac's default herdr session is known and stopped.
-    var canStartDefaultServer: Bool { herdrSessions.first(where: \.isDefault).map { !$0.running } ?? false }
+    /// This Mac's herdr sessions that are not running, for the machine menu.
+    var stoppedHerdrSessions: [HerdrSessionEntry] { herdrSessions.filter { !$0.running } }
 
-    func startDefaultServer() {
-        guard let entry = herdrSessions.first(where: \.isDefault), !entry.running else { return }
+    /// Starts a stopped session from the machine menu, adding its device if needed.
+    func startHerdrSession(_ entry: HerdrSessionEntry) async {
         let socket = SessionDiscovery.normalized(entry.socketPath)
         var target = sessions.first { !$0.isRemote && SessionDiscovery.normalized($0.profile.socketPath) == socket }
         if target == nil {
             save(DeviceProfile(name: entry.name, kind: .local, socketPath: socket, executable: localExecutable))
             target = sessions.last
         }
-        target?.startServer()
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
-            await self?.discoverSessions()
+        if let target { await startServer(for: target) }
+    }
+
+    /// Starts the server for a local device with its own session's data.
+    func startServer(for session: SessionStore) async {
+        guard !session.isRemote else { return }
+        let run = sessionRunner(session.executable)
+        do {
+            let current = (try? await SessionControl.list(run)) ?? herdrSessions
+            herdrSessions = current
+            guard let launch = SessionControl.serverLaunch(for: session.profile, in: current, environment: ProcessInfo.processInfo.environment) else { return }
+            try launchServer(session.executable, launch)
+            await waitForSocket(session.profile.socketPath, present: true)
+            session.reconnect()
+            await discoverSessions()
+        } catch {
+            activeSession.operationError = error.localizedDescription
         }
+    }
+
+    /// Stops whatever server answers on the session's socket (even one
+    /// started with the wrong data) and starts the session's own.
+    func restartHerdrSession(_ session: SessionStore) async {
+        guard await runSessionAction(on: session, { entry, run in try await SessionControl.stop(entry.name, run) }) else { return }
+        await waitForSocket(session.profile.socketPath, present: false)
+        await startServer(for: session)
+    }
+
+    private func waitForSocket(_ path: String, present: Bool) async {
+        let socket = SessionDiscovery.normalized(path)
+        for _ in 0..<100 where FileManager.default.fileExists(atPath: socket) != present {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    /// Runs herdr detached from the app, so quitting uHerdr leaves it running.
+    static func launchDetachedServer(executable: String, launch: SessionControl.ServerLaunch) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+        process.arguments = [(executable as NSString).expandingTildeInPath] + launch.arguments
+        process.environment = launch.environment
+        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
     }
 
     func stopHerdrSession(_ session: SessionStore) async {
@@ -245,14 +289,15 @@ struct DeviceEditorTarget: Identifiable {
 }
 
 enum SessionAction: Identifiable {
-    case stop(UUID), remove(UUID)
+    case stop(UUID), remove(UUID), restart(UUID)
     var id: String {
         switch self {
         case .stop(let id): "stop:\(id)"
         case .remove(let id): "remove:\(id)"
+        case .restart(let id): "restart:\(id)"
         }
     }
     var deviceID: UUID {
-        switch self { case .stop(let id), .remove(let id): id }
+        switch self { case .stop(let id), .remove(let id), .restart(let id): id }
     }
 }

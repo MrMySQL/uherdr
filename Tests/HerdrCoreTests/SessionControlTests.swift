@@ -42,6 +42,18 @@ enum SessionControlTests {
         do { try await SessionControl.delete(sessions.first { $0.name == "menqal" }!, run) } catch { threw = true }
         XCTAssertTrue(threw)
         XCTAssertEqual(calls, [["session", "stop", "menqal"]])
+        // Starting a server names its session; a bare `herdr server` would use the default
+        // session's data on any socket. Inherited herdr pane variables never reach it.
+        let inherited = ["PATH": "/usr/bin", "XDG_CONFIG_HOME": "/Users/alex/.config", "HERDR_SESSION": "side-projects",
+                         "HERDR_SOCKET_PATH": "/x/herdr.sock", "HERDR_PANE_ID": "p1", "HERDR_ENV": "1", "HERDR_CLIENT_SOCKET_PATH": "/y"]
+        let clean = ["PATH": "/usr/bin", "XDG_CONFIG_HOME": "/Users/alex/.config"]
+        XCTAssertEqual(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/menqal/herdr.sock"), in: sessions, environment: inherited),
+                       SessionControl.ServerLaunch(arguments: ["--session", "menqal", "server"], environment: clean))
+        XCTAssertEqual(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/herdr.sock"), in: sessions, environment: inherited),
+                       SessionControl.ServerLaunch(arguments: ["server"], environment: clean))
+        XCTAssertEqual(SessionControl.serverLaunch(for: local("/tmp/custom.sock"), in: sessions, environment: inherited),
+                       SessionControl.ServerLaunch(arguments: ["server"], environment: clean.merging(["HERDR_SOCKET_PATH": "/tmp/custom.sock"]) { $1 }))
+        XCTAssertTrue(SessionControl.serverLaunch(for: remote, in: sessions, environment: inherited) == nil)
         print("PASS: session stop and delete use herdr's CLI, stop before delete, and never delete default")
     }
 }
