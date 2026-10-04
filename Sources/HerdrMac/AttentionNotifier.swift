@@ -48,9 +48,9 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func post(_ agent: Agent, in session: SessionStore) {
-        guard let center, AgentNotificationPreference.isEnabled(in: .standard) else { return }
-        // Already looking at it.
-        if NSApp.isActive, devices?.activeSession === session, session.selectedPane == agent.paneID { return }
+        guard let center, AttentionDelivery.shouldNotify(
+            enabled: AgentNotificationPreference.isEnabled(in: .standard), appActive: NSApp.isActive,
+            showingPane: devices?.activeSession === session && session.selectedPane == agent.paneID) else { return }
         let content = UNMutableNotificationContent()
         content.title = agent.agentStatus == .blocked ? "\(agent.displayName) needs you" : "\(agent.displayName) finished"
         let space = session.workspaces.first { $0.id == agent.workspaceID }?.label
