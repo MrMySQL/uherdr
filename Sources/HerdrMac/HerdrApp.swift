@@ -62,7 +62,7 @@ struct HerdrApp: App {
             }
             CommandMenu("Navigate") {
                 ForEach(Array(devices.workspaceShortcuts.enumerated()), id: \.offset) { index, entry in
-                    Button("\(entry.session.profile.name): \(entry.workspace.label)") {
+                    Button("\(entry.session.displayName): \(entry.workspace.label)") {
                         devices.sidebarMode = "spaces"
                         devices.select(entry.session, workspace: entry.workspace)
                     }

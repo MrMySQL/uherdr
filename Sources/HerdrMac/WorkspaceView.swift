@@ -32,7 +32,7 @@ struct WorkspaceView: View {
                 statusBar
             }
             .background(Color(nsColor: .windowBackgroundColor))
-            .navigationTitle("\(store.profile.name) — \(store.currentSpace?.label ?? "uHerdr")")
+            .navigationTitle("\(store.displayName) — \(store.currentSpace?.label ?? "uHerdr")")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 2) {
@@ -160,7 +160,7 @@ struct WorkspaceView: View {
     private var statusBar: some View {
         HStack(spacing: 8) {
             Circle().fill(store.connected ? herdrAccentColor : Color.orange).frame(width: 6, height: 6)
-            Text(store.profile.name)
+            Text(store.displayName)
             Text(store.connected ? "Connected to herdr \(store.version)" : store.connecting ? "Connecting…" : "Disconnected")
             Spacer()
             if store.connected {
@@ -188,7 +188,7 @@ struct WorkspaceView: View {
     private var connectionView: some View {
         VStack(spacing: 18) {
             Image(systemName: "square.split.2x2").font(.system(size: 50, weight: .ultraLight)).foregroundStyle(herdrAccentColor)
-            Text(store.profile.name).font(.system(size: 26, weight: .medium))
+            Text(store.displayName).font(.system(size: 26, weight: .medium))
             Text(store.isRemote ? "Connect over SSH to see this device’s workspaces." : "Connect to herdr on this Mac to see your workspaces.")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
             if let error = store.connectionError {

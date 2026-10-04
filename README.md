@@ -21,13 +21,15 @@ open dist/Herdr.app
 
 Open `Package.swift` in Xcode to develop the app, or use `swift build` and `swift run HerdrCoreTests` from a terminal. Swift Package Manager downloads GhosttyTerminal's checksummed native XCFramework and MSDisplayLink on the first build. The pinned Swift wrapper is vendored in this repository.
 
-The sidebar groups spaces and agents by device. Beside each computer icon, a battery outline shows that Mac’s charge percentage, with a bolt when connected to power; Macs without an internal battery show a plug. Power status refreshes on connection or reconnection and every minute while connected. Disconnected devices and unavailable readings hide the indicator. **This Mac** uses your default local herdr socket and preserves existing connection preferences. Use the menu beside a device to edit its socket and local herdr executable. Start herdr first, or use the local device's Start Server button. Quit detaches the client; shells and agents remain owned by herdr.
+The sidebar groups spaces and agents by machine, then by herdr session. **This Mac** holds every local session; SSH devices with the same host, user, and port share a group. Each session is named from its socket: `~/.config/herdr/sessions/<name>/herdr.sock` is `<name>`, and the main socket is `default`. Beside each machine's computer icon, a battery outline shows that Mac’s charge percentage, with a bolt when connected to power; Macs without an internal battery show a plug. Power status refreshes on connection or reconnection and every minute while connected. Disconnected devices and unavailable readings hide the indicator. On first launch the app connects to your default local herdr socket and preserves existing connection preferences.
+
+Every running herdr session on this Mac is added automatically, using `herdr session list` (checked at launch and every 15 seconds). Stopped sessions are skipped, and a saved device is never renamed. Remove a session from its menu to hide it; it then stays hidden until you choose **Add device → Discover sessions on this Mac**, which also brings back removed sessions. Older herdr CLIs without `session list` simply add nothing. Use the menu beside a session to edit its socket and local herdr executable. Start herdr first, or use the local device's Start Server button. Quit detaches the client; shells and agents remain owned by herdr.
 
 ## Connect another device over SSH
 
 1. On the other Mac, enable Remote Login and start herdr. Install a compatible herdr CLI on this Mac too; the app uses it for compatibility with other server protocol versions.
 2. Configure SSH key authentication and connect once from Terminal (for example, `ssh alex@mac-mini.local`) to verify the host key. Existing SSH aliases, keys, agents, ports, and jump hosts in `~/.ssh/config` are supported. Password-only authentication and interactive passphrase prompts are not supported in the app; unlock encrypted keys in your SSH agent first.
-3. Click **Add device…** in the sidebar. Enter a name and SSH host, such as `alex@mac-mini.local` or an SSH-config alias. Username, port, and identity file are optional overrides.
+3. Choose **Add device → SSH device…** in the sidebar. Enter a name and SSH host, such as `alex@mac-mini.local` or an SSH-config alias. Username, port, and identity file are optional overrides.
 4. Leave **Remote socket** empty to discover the remote default socket. For a named session, enter `~/.config/herdr/sessions/<name>/herdr.sock`. The executable field always refers to the herdr CLI on this Mac.
 5. Click **Save and connect**. All devices stay visible together. Click a space to work on its device; each device remembers its selection. When creating a remote space, enter an absolute folder path on that device.
 
@@ -37,7 +39,7 @@ Connection errors appear under the affected device and in its detail view. Faile
 
 ## Interaction
 
-- Sidebar: switch between Spaces and Agents, grouped by device; select a space or jump to an agent. Command-1 through Command-9 select the first nine spaces across devices in sidebar order. Hold Command or Control to reveal shortcut badges on the space cards and tabs. Search filtering and collapsing devices do not renumber shortcuts. Command-Shift-R renames the current space.
+- Sidebar: switch between Spaces and Agents, grouped by machine and session; select a space or jump to an agent. A count beside a session shows its agents that are blocked or done. Command-1 through Command-9 select the first nine spaces across devices in sidebar order. Hold Command or Control to reveal shortcut badges on the space cards and tabs. Search filtering and collapsing machines or sessions do not renumber shortcuts. Command-Shift-R renames the current space.
 - Tabs: create with Command-T and rename the current tab with Command-R. Control-1 through Control-9 select the first nine tabs in the current space, and Control-0 selects the tenth. Control-Tab selects the next tab, and Control-Shift-Tab selects the previous tab, wrapping at either end. Command-Shift-] and Command-Shift-[ also cycle tabs. Rename and close from the context menu. Drag a tab to the left or right edge of another tab to reorder it. The order is saved locally per device and workspace and is used by keyboard tab navigation.
 - Panes: Command-D splits side by side; Command-Shift-D stacks panes; Command-Return toggles zoom for the focused pane. Command-[ selects the previous pane and Command-] selects the next pane in the current tab, wrapping at either end. Control-backtick also selects the next pane. Drag the divider to resize. Drag a pane’s header to the top, bottom, left, or right edge of another pane in the same tab. A translucent rectangle previews its half of the new split. Dropping moves the pane there and collapses its old split. To move between tabs, drop the pane header onto another tab in the same space, or choose **Move to tab** in the pane’s actions menu. The destination opens with the moved pane in a side-by-side split. Moving a tab’s last pane removes the empty tab; running shells and agents are preserved. Restore the split layout in both tabs before moving a pane between them. Use the pane header to focus, zoom, rename, start an agent, or close.
 - Start an agent: creates a Git worktree from the pane’s repository, opens it in a new space, and launches the selected agent there. Herdr generates the branch name. The selected agent CLI must be installed. If launching fails, the new space stays available for retrying in its terminal.
@@ -69,7 +71,7 @@ The build script creates an ad-hoc-signed app for local use. Distribution to oth
 ## Verification
 
 ```sh
-swift run HerdrCoreTests  # Protocol, layout, selection, and error handling
+swift run HerdrCoreTests  # Protocol, layout, selection, error handling, and session discovery
 ./scripts/test-hotkeys.sh # Command/Control hint lifecycle and app hotkeys
 bash scripts/test-agent-worktree.sh # Worktree agent launch and failure handling
 bash scripts/test-terminal-keyboard.sh # Real Ghostty rendering, keyboard, paste, resize, and teardown
@@ -78,7 +80,7 @@ bash scripts/test-agent-file-drops.sh # Opt-in: real Codex/Claude text+image dro
 bash scripts/test-tab-drag.sh # Tab ordering, persistence, and drag validation
 bash scripts/test-performance.sh # Polling and terminal publication regressions
 ./scripts/test.sh         # Also starts and cleans up an isolated herdr server
-bash scripts/test-devices.sh # Two isolated servers, overlapping IDs, and forwarded terminal control
+bash scripts/test-devices.sh # Two isolated servers, overlapping IDs, forwarded terminal control, session discovery, and machine grouping
 ```
 
 The standalone Swift test runner works with Command Line Tools; XCTest is not required. Live tests cover workspace/tab/pane lifecycle, nested right/down splits, divider ratios, shell input/output, agent status fixtures, terminal ANSI streaming, resize, scrolling, and detach preservation. They accept only an explicitly disposable socket under `/tmp`.

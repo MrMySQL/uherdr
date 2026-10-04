@@ -13,6 +13,8 @@ import HerdrCore
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
         try await testFileTransferCancellation(defaults: defaults)
+        try await testSessionDiscovery(socketA: socketA, socketB: socketB, exe: exe)
+        try testMachineGroups(exe: exe)
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -133,5 +135,83 @@ import HerdrCore
             }
         }
         print("PASS: device disconnect and caller cancellation stop uploads and remove remote staging")
+    }
+
+    @MainActor static func testMachineGroups(exe: String) throws {
+        let suiteName = "dev.herdr.group-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let local = DeviceProfile(name: "This Mac", kind: .local, socketPath: "/tmp/uh-groups/sessions/side-projects/herdr.sock", executable: exe)
+        let mini = DeviceProfile(name: "Mac mini", host: "alex@mini.local", executable: exe)
+        let discovered = DeviceProfile(name: "menqal", kind: .local, socketPath: "/tmp/uh-groups/sessions/menqal/herdr.sock", executable: exe)
+        var miniWork = DeviceProfile(name: "Mini work", host: "ALEX@mini.local", executable: exe)
+        miniWork.socketPath = "~/.config/herdr/sessions/work/herdr.sock"
+        // Not started: grouping and shortcut order need no connection.
+        let devices = DeviceStore(defaults: defaults, profiles: [local, mini, discovered, miniWork]) { _ in [] }
+        let groups = devices.machineGroups
+        precondition(groups.map(\.name) == ["This Mac", "Mac mini"])
+        precondition(groups[0].sessions.map(\.profile.sessionName) == ["side-projects", "menqal"])
+        precondition(groups[1].sessions.map(\.profile.sessionName) == ["default", "work"])
+        precondition(devices.sessions[0].displayName == "side-projects" && devices.sessions[3].displayName == "Mini work · work")
+        // ⌘1–9 follow the grouped sidebar order, not the order devices were added.
+        func spaces(_ ids: [String]) throws -> [Workspace] {
+            try ids.map { try JSONDecoder().decode(Workspace.self, from: Data(#"{"workspace_id":"\#($0)","label":"\#($0)","active_tab_id":"t","pane_count":1,"tab_count":1,"agent_status":"idle"}"#.utf8)) }
+        }
+        devices.sessions[0].workspaces = try spaces(["a1"])
+        devices.sessions[1].workspaces = try spaces(["m1"])
+        devices.sessions[2].workspaces = try spaces(["q1", "q2"])
+        devices.sessions[3].workspaces = try spaces(["w1"])
+        precondition(devices.workspaceShortcuts.map(\.workspace.id) == ["a1", "q1", "q2", "m1", "w1"])
+        print("PASS: sessions group by machine, take their names from sockets, and keep shortcuts in sidebar order")
+    }
+
+    @MainActor static func testSessionDiscovery(socketA: String, socketB: String, exe: String) async throws {
+        let suiteName = "dev.herdr.discovery-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        func entry(_ name: String, _ socket: String, running: Bool = true) -> String {
+            #"{"default":false,"name":"\#(name)","running":\#(running),"session_dir":"/tmp","socket_path":"\#(socket)"}"#
+        }
+        var listing = #"{"sessions":[\#(entry("alpha", socketA)),\#(entry("beta", socketB)),\#(entry("stopped", "/tmp/uh-stopped/herdr.sock", running: false))]}"#
+        var listerFails = false
+        var askedExecutable: String?
+        let first = DeviceProfile(name: "This Mac", kind: .local, socketPath: socketA, executable: exe)
+        let devices = DeviceStore(defaults: defaults, profiles: [first]) { executable in
+            askedExecutable = executable
+            if listerFails { throw HerdrError.message("unknown command") }
+            return try SessionDiscovery.parse(listing)
+        }
+        defer { devices.stop() }
+        await devices.discoverSessions()
+        precondition(askedExecutable == exe, "Discovery uses the local device's herdr CLI")
+        // The saved device keeps its name; only the unseen running session is added.
+        precondition(devices.sessions.map(\.profile.name) == ["This Mac", "beta"])
+        let beta = devices.sessions[1]
+        precondition(!beta.isRemote && beta.profile.socketPath == socketB)
+        for _ in 0..<80 where !beta.connected { try await Task.sleep(for: .milliseconds(50)) }
+        precondition(beta.connected, "A discovered session connects like any device")
+        // Rescanning is idempotent and survives a relaunch from saved preferences.
+        await devices.discoverSessions()
+        precondition(devices.sessions.count == 2)
+        let reloaded = DeviceStore(defaults: defaults) { _ in try SessionDiscovery.parse(listing) }
+        precondition(reloaded.sessions.map(\.profile) == devices.sessions.map(\.profile))
+        reloaded.stop()
+        // Removing a discovered session keeps it out of automatic rescans.
+        devices.remove(beta.profile.id)
+        precondition(devices.sessions.count == 1 && !beta.connected)
+        await devices.discoverSessions()
+        precondition(devices.sessions.count == 1, "A removed session must not come back on its own")
+        // The last device can never be removed.
+        devices.remove(devices.sessions[0].profile.id)
+        precondition(devices.sessions.count == 1)
+        // An explicit discovery brings dismissed sessions back.
+        await devices.discoverSessions(includeDismissed: true)
+        precondition(devices.sessions.map(\.profile.name) == ["This Mac", "beta"])
+        // A failing or older CLI changes nothing and raises no error.
+        listerFails = true
+        listing = #"{"sessions":[]}"#
+        await devices.discoverSessions()
+        precondition(devices.sessions.count == 2 && devices.activeSession.operationError == nil)
+        print("PASS: session discovery adds running sessions once, keeps saved devices, honours removal, and ignores CLI failures")
     }
 }

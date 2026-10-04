@@ -11,9 +11,14 @@ final class DeviceStore: ObservableObject {
     @Published var sidebarMode = "spaces"
     private let defaults: UserDefaults
     private var subscriptions: [AnyCancellable] = []
+    private let sessionLister: @MainActor (String) async throws -> [HerdrSessionEntry]
+    private var discoveryTask: Task<Void, Never>?
+    private var discovering = false
 
-    init(defaults: UserDefaults = .standard, profiles: [DeviceProfile]? = nil) {
+    init(defaults: UserDefaults = .standard, profiles: [DeviceProfile]? = nil,
+         sessionLister: @escaping @MainActor (String) async throws -> [HerdrSessionEntry] = { try await SessionDiscovery.list(executable: $0) }) {
         self.defaults = defaults
+        self.sessionLister = sessionLister
         let profiles = profiles ?? DeviceProfile.load(from: defaults, environment: ProcessInfo.processInfo.environment, home: NSHomeDirectory(), executable: SessionStore.findExecutable())
         precondition(!profiles.isEmpty)
         sessions = profiles.map { SessionStore(profile: $0, defaults: defaults) }
@@ -25,12 +30,51 @@ final class DeviceStore: ObservableObject {
 
     var activeSession: SessionStore { sessions.first { $0.profile.id == selectedDeviceID } ?? sessions[0] }
     var attentionCount: Int { sessions.reduce(0) { $0 + $1.attentionCount } }
+    /// Sessions grouped by machine, in order of first appearance.
+    var machineGroups: [MachineGroup] {
+        var groups: [MachineGroup] = []
+        for session in sessions {
+            let key = session.profile.machineKey
+            if let index = groups.firstIndex(where: { $0.id == key }) { groups[index].sessions.append(session) }
+            else { groups.append(MachineGroup(id: key, name: session.isRemote ? session.profile.name : "This Mac", isRemote: session.isRemote, sessions: [session])) }
+        }
+        return groups
+    }
+    /// Follows the sidebar's grouped order.
     var workspaceShortcuts: [(session: SessionStore, workspace: Workspace)] {
-        Array(sessions.flatMap { session in session.workspaces.map { (session, $0) } }.prefix(9))
+        Array(machineGroups.flatMap(\.sessions).flatMap { session in session.workspaces.map { (session, $0) } }.prefix(9))
     }
 
-    func start() { sessions.forEach { $0.start() } }
-    func stop() { sessions.forEach { $0.disconnect() } }
+    func start() {
+        sessions.forEach { $0.start() }
+        guard discoveryTask == nil else { return }
+        discoveryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.discoverSessions()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
+    }
+
+    func stop() {
+        discoveryTask?.cancel(); discoveryTask = nil
+        sessions.forEach { $0.disconnect() }
+    }
+
+    /// Adds a local device for each running herdr session on this Mac that no
+    /// device uses yet. Failures are silent: older herdr CLIs lack `session list`.
+    func discoverSessions(includeDismissed: Bool = false) async {
+        guard !discovering else { return }
+        discovering = true
+        defer { discovering = false }
+        let executable = sessions.first { !$0.isRemote }?.executable ?? SessionStore.findExecutable()
+        guard let found = try? await sessionLister(executable) else { return }
+        if includeDismissed { defaults.removeObject(forKey: SessionDiscovery.dismissedKey) }
+        let dismissed = Set(defaults.stringArray(forKey: SessionDiscovery.dismissedKey) ?? [])
+        for profile in SessionDiscovery.newProfiles(for: found, existing: sessions.map(\.profile), dismissed: dismissed, executable: executable) {
+            save(profile)
+        }
+    }
 
     func select(_ session: SessionStore, workspace: Workspace? = nil) {
         guard sessions.contains(where: { $0 === session }) else { return }
@@ -56,7 +100,13 @@ final class DeviceStore: ObservableObject {
     }
 
     func remove(_ id: UUID) {
-        guard sessions.count > 1, let session = sessions.first(where: { $0.profile.id == id }), session.isRemote else { return }
+        guard sessions.count > 1, let session = sessions.first(where: { $0.profile.id == id }) else { return }
+        if !session.isRemote {
+            // Keep a removed local session from being discovered again.
+            var dismissed = defaults.stringArray(forKey: SessionDiscovery.dismissedKey) ?? []
+            dismissed.append(SessionDiscovery.normalized(session.profile.socketPath))
+            defaults.set(dismissed, forKey: SessionDiscovery.dismissedKey)
+        }
         session.disconnect()
         sessions.removeAll { $0.profile.id == id }
         if selectedDeviceID == id { selectedDeviceID = sessions[0].profile.id }
@@ -74,6 +124,15 @@ final class DeviceStore: ObservableObject {
         if let data = try? JSONEncoder().encode(sessions.map(\.profile)) { defaults.set(data, forKey: DeviceProfile.preferencesKey) }
         defaults.set(selectedDeviceID.uuidString, forKey: "selectedDeviceID")
     }
+}
+
+@MainActor
+struct MachineGroup: Identifiable {
+    let id: String
+    let name: String
+    let isRemote: Bool
+    var sessions: [SessionStore]
+    var powerStatus: DevicePowerStatus? { sessions.lazy.compactMap { $0.powerStatus }.first }
 }
 
 struct DeviceEditorTarget: Identifiable {
