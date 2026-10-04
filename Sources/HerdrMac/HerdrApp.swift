@@ -5,11 +5,13 @@ import AppKit
 struct HerdrApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var devices = DeviceStore()
+    @State private var attention = AttentionNotifier()
     private var store: SessionStore { devices.activeSession }
     var body: some Scene {
         Window("uHerdr", id: "main") {
             WorkspaceView(store: store, devices: devices)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in devices.stop() }
+                .task { attention.attach(devices) }
         }
         .defaultSize(width: 1280, height: 820)
         .windowToolbarStyle(.unifiedCompact)
@@ -62,7 +64,7 @@ struct HerdrApp: App {
             }
             CommandMenu("Navigate") {
                 ForEach(Array(devices.workspaceShortcuts.enumerated()), id: \.offset) { index, entry in
-                    Button("\(entry.session.profile.name): \(entry.workspace.label)") {
+                    Button("\(entry.session.displayName): \(entry.workspace.label)") {
                         devices.sidebarMode = "spaces"
                         devices.select(entry.session, workspace: entry.workspace)
                     }
