@@ -35,5 +35,81 @@ enum KeyboardShortcutTests {
         XCTAssertEqual(ShortcutGroup.filtered("  ", chord: defaults).count, ShortcutGroup.all.count)
         XCTAssertTrue(ShortcutGroup.filtered("no such shortcut", chord: defaults).isEmpty)
         print("PASS: shortcut table covers every action once, keeps today's defaults without clashes, and searches")
+        try! runBindings()
+    }
+
+    static func runBindings() throws {
+        var bindings = ShortcutBindings()
+        XCTAssertEqual(bindings.changedCount, 0)
+        XCTAssertEqual(bindings.chord(for: .splitSideBySide), KeyChord("d", .command))
+        // 07b: ⌘D for Find in pane clashes with Split side by side; Replace clears Split.
+        XCTAssertEqual(bindings.clash(for: KeyChord("d", .command), assigningTo: .findInPane), .splitSideBySide)
+        bindings.assign(KeyChord("d", .command), to: .findInPane)
+        XCTAssertEqual(bindings.chord(for: .findInPane), KeyChord("d", .command))
+        XCTAssertTrue(bindings.chord(for: .splitSideBySide) == nil && bindings.isChanged(.splitSideBySide) && bindings.isChanged(.findInPane))
+        XCTAssertEqual(bindings.changedCount, 2)
+        // Reset of Split is assigning its default, which now clashes with Find.
+        XCTAssertEqual(bindings.clash(for: ShortcutAction.splitSideBySide.defaultChord, assigningTo: .splitSideBySide), .findInPane)
+        // Moving Find elsewhere does not hand Split its keys back on its own.
+        bindings.assign(KeyChord("f", [.command, .shift]), to: .findInPane)
+        XCTAssertTrue(bindings.chord(for: .splitSideBySide) == nil)
+        XCTAssertEqual(bindings.clash(for: ShortcutAction.splitSideBySide.defaultChord, assigningTo: .splitSideBySide), nil)
+        bindings.assign(ShortcutAction.splitSideBySide.defaultChord, to: .splitSideBySide)
+        XCTAssertTrue(!bindings.isChanged(.splitSideBySide))
+        XCTAssertEqual(bindings.changedCount, 1)
+        // 07d: a range changes only its modifiers; any of its digits can clash.
+        bindings.assign(KeyChord("7", [.command, .control]), to: .selectSpace)
+        XCTAssertEqual(bindings.chord(for: .selectSpace), KeyChord("1", [.command, .control]))
+        XCTAssertEqual(ShortcutAction.selectSpace.keycaps(for: bindings.chord(for: .selectSpace)!), ["⌃⌘1–⌃⌘9"])
+        XCTAssertEqual(bindings.clash(for: KeyChord("5", [.command, .control]), assigningTo: .newTab), .selectSpace)
+        XCTAssertEqual(bindings.clash(for: KeyChord("x", .control), assigningTo: .selectSpace), .selectTab)
+        // Assigning the default again removes the change.
+        bindings.assign(KeyChord("9", .command), to: .selectSpace)
+        XCTAssertTrue(!bindings.isChanged(.selectSpace))
+        // 07c: ⌃ with a letter is the terminal's; ⌘, ⌃⌘ and ⌃ with a digit or Tab are not.
+        XCTAssertTrue(ShortcutBindings.isTerminalReserved(KeyChord("d", .control), for: .closePane))
+        XCTAssertTrue(ShortcutBindings.isTerminalReserved(KeyChord("c", [.control, .shift]), for: .copy))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("d", [.control, .command]), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("w", [.command, .shift]), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("x", .control), for: .selectTab))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("tab", .control), for: .nextTab))
+        // A shortcut needs ⌘, ⌃ or ⌥; ⇧ alone only with Return or Tab.
+        XCTAssertTrue(ShortcutBindings.isValid(KeyChord("return", .shift)) && ShortcutBindings.isValid(KeyChord("k", .option)))
+        XCTAssertTrue(!ShortcutBindings.isValid(KeyChord("k", .shift)) && !ShortcutBindings.isValid(KeyChord("k", [])))
+        // Saved and loaded unchanged, including an action left without a shortcut.
+        let suite = "dev.herdr.shortcut-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(ShortcutBindings.load(from: defaults), ShortcutBindings())
+        bindings.assign(KeyChord("d", .command), to: .closePane)
+        bindings.save(to: defaults)
+        let loaded = ShortcutBindings.load(from: defaults)
+        XCTAssertEqual(loaded, bindings)
+        XCTAssertTrue(loaded.chord(for: .splitSideBySide) == nil && loaded.isChanged(.splitSideBySide))
+        bindings.resetAll()
+        XCTAssertEqual(bindings, ShortcutBindings())
+        // The terminal's own keys become Ghostty bindings.
+        XCTAssertEqual(ShortcutBindings().ghosttyKeybinds, ["super+a=select_all", "super+c=copy_to_clipboard", "super+v=paste_from_clipboard",
+                                                            "shift+enter=text:\\x1b[13;2u", "shift+numpad_enter=text:\\x1b[13;2u"])
+        var terminal = ShortcutBindings()
+        terminal.assign(KeyChord("return", .option), to: .newLine)
+        terminal.assign(KeyChord("c", [.control, .shift]), to: .copy)
+        terminal.assign(KeyChord("v", .command), to: .closePane)
+        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=select_all", "ctrl+shift+c=copy_to_clipboard",
+                                                  "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
+        // The change flow: invalid keys first, then a clash, then the terminal warning, each once.
+        let plain = ShortcutBindings()
+        XCTAssertEqual(ShortcutChangeStep.next(for: KeyChord("k", .shift), action: .findInPane, in: plain), .invalid)
+        XCTAssertEqual(ShortcutChangeStep.next(for: KeyChord("k", [.command, .shift]), action: .findInPane, in: plain), .apply)
+        XCTAssertEqual(ShortcutChangeStep.next(for: KeyChord("d", .command), action: .findInPane, in: plain), .clash(.splitSideBySide))
+        var withCtrlD = ShortcutBindings()
+        withCtrlD.assign(KeyChord("d", .control), to: .splitSideBySide)
+        XCTAssertEqual(ShortcutChangeStep.next(for: KeyChord("d", .control), action: .closePane, in: withCtrlD), .clash(.splitSideBySide))
+        XCTAssertEqual(ShortcutChangeStep.next(for: KeyChord("d", .control), action: .closePane, in: withCtrlD, clashAccepted: true), .terminalReserved)
+        XCTAssertEqual(ShortcutChangeStep.next(for: KeyChord("d", .control), action: .closePane, in: withCtrlD, clashAccepted: true, terminalAccepted: true), .apply)
+        // A range takes any digit pressed as its key and is never a terminal key.
+        XCTAssertEqual(ShortcutChangeStep.next(for: KeyChord("4", [.command, .control]), action: .selectSpace, in: plain), .apply)
+        XCTAssertEqual(ShortcutChangeStep.next(for: KeyChord("4", .control), action: .selectSpace, in: plain), .clash(.selectTab))
+        print("PASS: shortcut changes: replace leaves the other unset, reset, ranges, terminal keys, validity, saving, Ghostty bindings")
     }
 }

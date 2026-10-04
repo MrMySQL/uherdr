@@ -421,8 +421,8 @@ struct TerminalSurface: NSViewRepresentable {
 
         func updateAppearance(fontSize: Double, dark: Bool) {
             if self.fontSize != fontSize {
-                engine.setTerminalConfiguration(TerminalConfiguration().fontSize(Float(fontSize)))
                 self.fontSize = fontSize
+                applyLiveConfiguration()
             }
             if self.dark != dark {
                 view?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -456,7 +456,15 @@ struct TerminalSurface: NSViewRepresentable {
                 && view.window?.isKeyWindow == true && view.window?.firstResponder === view)
         }
 
+        func applyLiveConfiguration() {
+            guard let fontSize else { return }
+            engine.setTerminalConfiguration(HerdrTerminalView.liveConfiguration(fontSize: fontSize, bindings: ShortcutSettings.shared.bindings))
+        }
+
         func installEvents() {
+            focusObservers.append(NotificationCenter.default.addObserver(forName: ShortcutSettings.didChange, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.applyLiveConfiguration() }
+            })
             for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
                 focusObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                     MainActor.assumeIsolated {
@@ -774,6 +782,14 @@ final class HerdrTerminalView: AppTerminalView {
         // reopen the quote around apostrophes. Leave room for the next word.
         return paths.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
             .joined(separator: " ") + " "
+    }
+
+    /// The layer applied over the base: text size plus the user's terminal
+    /// key bindings, which replace the base bindings ("keybind = clear").
+    static func liveConfiguration(fontSize: Double, bindings: ShortcutBindings) -> TerminalConfiguration {
+        var configuration = TerminalConfiguration().fontSize(Float(fontSize)).custom("keybind", "clear")
+        for bind in bindings.ghosttyKeybinds { configuration = configuration.custom("keybind", bind) }
+        return configuration
     }
 
     static var baseConfiguration: TerminalConfiguration {

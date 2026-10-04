@@ -4,6 +4,7 @@ import HerdrCore
 let herdrAccentColor = Color(red: 0.34, green: 0.73, blue: 0.58)
 
 struct WorkspaceView: View {
+    @ObservedObject private var shortcuts = ShortcutSettings.shared
     @ObservedObject var store: SessionStore
     @ObservedObject var devices: DeviceStore
     @StateObject private var shortcutHints = ShortcutHintMonitor()
@@ -128,8 +129,8 @@ struct WorkspaceView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "terminal").font(.system(size: 10))
                                 Text(tab.label).lineLimit(1)
-                                if let key = AppHotkeys.tabSelectionKey(at: index) {
-                                    Text("⌃\(String(key))").font(.system(size: 10, design: .monospaced))
+                                if let key = AppHotkeys.tabSelectionKey(at: index), let chord = shortcuts.bindings.chord(for: .selectTab) {
+                                    Text(KeyChord.modifierGlyphs(chord.modifiers) + String(key)).font(.system(size: 10, design: .monospaced))
                                         .foregroundStyle(Color.accentColor).opacity(shortcutHints.isHeld ? 1 : 0)
                                         .accessibilityHidden(!shortcutHints.isHeld)
                                 }

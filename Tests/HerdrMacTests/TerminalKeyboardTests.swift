@@ -453,6 +453,18 @@ struct TerminalKeyboardTests {
         linkClick("ordinary terminal text")
         precondition(capture.bytes.isEmpty, "Disabling mouse capture must restore local selection without sending mouse input")
         print("PASS: terminal URL clicks preserve destinations, selection, and mouse capture")
+        // A changed New line shortcut reaches a running terminal, and the old keys stop.
+        var movedNewLine = ShortcutBindings()
+        movedNewLine.assign(KeyChord("return", .option), to: .newLine)
+        precondition(engine.setTerminalConfiguration(HerdrTerminalView.liveConfiguration(fontSize: 13, bindings: movedNewLine)))
+        check("New line moved to Option-Return", modifiers: .option, expected: "\u{1b}[13;2u")
+        // Without the binding, Ghostty sends its own Shift-Return encoding (seen on 1.5.20260906).
+        check("Shift-Return no longer makes a new line", modifiers: .shift, expected: "\u{1b}[27;2;13~")
+        // Back to the base configuration exactly (its text size too), for the checks that follow.
+        precondition(engine.setTerminalConfiguration(TerminalConfiguration()))
+        check("default New line restored", modifiers: .shift, expected: "\u{1b}[13;2u")
+        check("Option-Return encoding restored", modifiers: .option, expected: "\u{1b}\r")
+        print("PASS: changed terminal shortcuts apply to a running terminal and can be restored")
         lifecycle.surface = nil
         view.controller = nil
         precondition(bridge.session.readViewportText() == nil)
