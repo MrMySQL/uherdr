@@ -102,6 +102,7 @@ import HerdrCore
         await second.refresh()
         precondition(second.connected)
         print("PASS: two-device ID isolation, action routing, selection, persistence, disconnect/reconnect, remote paths, forwarded terminal stream and detach preservation")
+        try await testServerActions(socketA: socketA, socketB: socketB, exe: exe)
         // Last: this stops and deletes server A's session.
         try await testSessionActions(socketA: socketA, socketB: socketB, exe: exe)
     }
@@ -294,5 +295,27 @@ import HerdrCore
         // The last device can't be removed, even through a herdr session.
         precondition(!devices.canRemoveHerdrSession(devices.sessions[0]))
         print("PASS: Stop ends a real herdr session and keeps its device; Remove deletes it in herdr and here")
+    }
+
+    /// Reconnect/Disconnect all act on every session of a machine.
+    @MainActor static func testServerActions(socketA: String, socketB: String, exe: String) async throws {
+        let suiteName = "dev.herdr.server-action-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let devices = DeviceStore(defaults: defaults, profiles: [
+            DeviceProfile(name: "A", kind: .local, socketPath: socketA, executable: exe),
+            DeviceProfile(name: "B", kind: .local, socketPath: socketB, executable: exe),
+        ]) { _ in [] }
+        defer { devices.stop() }
+        let a = devices.sessions[0], b = devices.sessions[1]
+        await a.refresh(); await b.refresh()
+        precondition(a.connected && b.connected)
+        let machine = devices.machineGroups[0].id
+        devices.disconnectAll(machine)
+        precondition(!a.connected && !b.connected && a.suspended && b.suspended)
+        devices.reconnectAll(machine)
+        for _ in 0..<80 where !(a.connected && b.connected) { try await Task.sleep(for: .milliseconds(50)) }
+        precondition(a.connected && b.connected, "Reconnect all must bring every session back")
+        print("PASS: Reconnect and Disconnect all act on every session of a machine")
     }
 }

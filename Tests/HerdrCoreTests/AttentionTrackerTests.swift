@@ -59,6 +59,11 @@ enum AttentionTrackerTests {
         XCTAssertTrue(!AgentNotificationPreference.isEnabled(in: defaults))
         defaults.set(true, forKey: AgentNotificationPreference.key)
         XCTAssertTrue(AgentNotificationPreference.isEnabled(in: defaults))
+        // A banner needs notifications on, and skips the pane already in front of the user.
+        XCTAssertTrue(AttentionDelivery.shouldNotify(enabled: true, appActive: false, showingPane: true))
+        XCTAssertTrue(AttentionDelivery.shouldNotify(enabled: true, appActive: true, showingPane: false))
+        XCTAssertTrue(!AttentionDelivery.shouldNotify(enabled: true, appActive: true, showingPane: true))
+        XCTAssertTrue(!AttentionDelivery.shouldNotify(enabled: false, appActive: false, showingPane: false))
         print("PASS: alerts on waiting and on every finish, once per agent per cooldown, per device, with baselines at first sight and after disconnect")
     }
 }

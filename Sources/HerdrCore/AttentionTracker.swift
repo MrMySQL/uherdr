@@ -11,6 +11,14 @@ public enum AgentNotificationPreference {
     public static func isEnabled(in defaults: UserDefaults) -> Bool { defaults.object(forKey: key) as? Bool ?? true }
 }
 
+/// Whether an alert becomes a banner: notifications are on, and the user
+/// isn't already looking at that pane in uHerdr.
+public enum AttentionDelivery {
+    public static func shouldNotify(enabled: Bool, appActive: Bool, showingPane: Bool) -> Bool {
+        enabled && !(appActive && showingPane)
+    }
+}
+
 /// Finds agents that just finished or started waiting. Only a change from a
 /// known status counts, so agents already waiting at launch, on reconnect,
 /// or when first seen raise nothing. Pane IDs repeat across servers, so

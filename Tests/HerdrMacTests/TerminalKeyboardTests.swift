@@ -518,6 +518,21 @@ struct TerminalKeyboardTests {
         check("default New line restored", modifiers: .shift, expected: "\u{1b}[13;2u")
         check("Option-Return encoding restored", modifiers: .option, expected: "\u{1b}\r")
         print("PASS: changed terminal shortcuts apply to a running terminal and can be restored")
+        // A key press becomes the chord the shortcut sheet records (ABC layout).
+        func pressed(_ keyCode: UInt16, _ characters: String, _ modifiers: NSEvent.ModifierFlags) -> KeyChord? {
+            KeyChord(event: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                                             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                             context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                             isARepeat: false, keyCode: keyCode)!)
+        }
+        precondition(pressed(36, "\r", [.shift]) == KeyChord("return", .shift))
+        precondition(pressed(76, "\u{3}", [.option, .numericPad]) == KeyChord("return", .option))
+        precondition(pressed(48, "\t", [.control, .shift]) == KeyChord("tab", [.control, .shift]))
+        precondition(pressed(2, "d", [.command]) == KeyChord("d", .command))
+        precondition(pressed(30, "}", [.command, .shift]) == KeyChord("]", [.command, .shift]), "Shifted punctuation must record its unshifted key, as menus store it")
+        precondition(pressed(18, "1", [.command, .control]) == KeyChord("1", [.command, .control]))
+        precondition(pressed(51, "\u{7f}", [.command]) == nil, "Delete has no printable key and is not recorded")
+        print("PASS: key presses become the shortcuts the sheet records")
         lifecycle.surface = nil
         view.controller = nil
         precondition(bridge.session.readViewportText() == nil)
