@@ -68,7 +68,9 @@ struct WorkspaceView: View {
         .accentColor(herdrAccentColor)
         .frame(minWidth: 840, minHeight: 520)
         .preferredColorScheme(store.colorScheme)
-        .sheet(item: $store.sheet) { sheet in EditorSheet(sheet: sheet, store: store) }
+        .sheet(item: $store.sheet) { sheet in
+            if case .shortcuts = sheet { KeyboardShortcutsSheet() } else { EditorSheet(sheet: sheet, store: store) }
+        }
         .sheet(item: $devices.editor) { target in DeviceEditorSheet(target: target, devices: devices) }
         .alert("Remove device?", isPresented: Binding(get: { devices.pendingRemoval != nil }, set: { if !$0 { devices.pendingRemoval = nil } })) {
             Button("Cancel", role: .cancel) { devices.pendingRemoval = nil }

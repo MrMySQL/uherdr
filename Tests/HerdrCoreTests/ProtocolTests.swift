@@ -25,6 +25,7 @@ import HerdrCore
         try AttentionTrackerTests.run()
         try await SessionControlTests.run()
         TerminalStartSizeTests.run()
+        KeyboardShortcutTests.run()
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--live" { try await LiveTests.run(socket: CommandLine.arguments[2]) }
     }
     func testNestedLayoutPreservesDirectionRatiosAndPaneOrder() throws {
