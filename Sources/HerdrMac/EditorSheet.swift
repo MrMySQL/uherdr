@@ -17,11 +17,12 @@ struct EditorSheet: View {
         case .rename(let target): return "Rename \(target.singular)"
         case .agent: return "Start an agent"
         case .settings: return "Settings"
+        case .shortcuts: return "Keyboard Shortcuts"
         }
     }
     private var valid: Bool {
         switch sheet {
-        case .settings: return true
+        case .settings, .shortcuts: return true
         case .space:
             let path = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
             let validPath = store.isRemote ? path.hasPrefix("/") : FileManager.default.fileExists(atPath: (path as NSString).expandingTildeInPath)
@@ -119,7 +120,7 @@ struct EditorSheet: View {
         case .tab: store.createTab(label: name)
         case .rename(let target): store.rename(target, label: name)
         case .agent(let paneID): store.startAgent(paneID: paneID, kind: kind, name: name)
-        case .settings: break
+        case .settings, .shortcuts: break
         }
         dismiss()
     }
