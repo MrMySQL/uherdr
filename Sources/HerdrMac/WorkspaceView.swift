@@ -84,11 +84,13 @@ struct WorkspaceView: View {
             Button("OK") { store.operationError = nil }
         } message: { Text(store.operationError ?? "") }
         .alert("Close \(store.pendingClose?.singular ?? "resource")?", isPresented: Binding(get: { store.pendingClose != nil }, set: { if !$0 { store.pendingClose = nil } })) {
-            Button("Cancel", role: .cancel) { store.pendingClose = nil }
+            // Return confirms (a destructive button is never the default on its own); Esc cancels.
+            // Declared first so an earlier Cancel can't take Return.
             Button("Close \(store.pendingClose?.singular ?? "resource")", role: .destructive) {
                 if let target = store.pendingClose { store.close(target) }
                 store.pendingClose = nil
-            }
+            }.keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { store.pendingClose = nil }
         } message: {
             Text("Closing “\(store.pendingClose?.label ?? "")” terminates its terminals and running agents. You can quit uHerdr instead to keep them running.")
         }
@@ -127,7 +129,12 @@ struct WorkspaceView: View {
                     ForEach(Array(store.visibleTabs.enumerated()), id: \.element.id) { index, tab in
                         Button { store.selectTab(tab) } label: {
                             HStack(spacing: 6) {
-                                Image(systemName: "terminal").font(.system(size: 10))
+                                let agents = store.panes.filter { $0.tabID == tab.id }.compactMap(\.agent)
+                                if agents.isEmpty {
+                                    Image(systemName: "terminal").font(.system(size: 10))
+                                } else {
+                                    AgentIconStack(agents: agents, background: Color(nsColor: .windowBackgroundColor))
+                                }
                                 Text(tab.label).lineLimit(1)
                                 if let key = AppHotkeys.tabSelectionKey(at: index), let chord = shortcuts.bindings.chord(for: .selectTab) {
                                     Text(KeyChord.modifierGlyphs(chord.modifiers) + String(key)).font(.system(size: 10, design: .monospaced))

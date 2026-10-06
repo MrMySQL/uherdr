@@ -391,7 +391,7 @@ struct TerminalSurface: NSViewRepresentable {
             },
             resize: { [weak self] viewport in
                 DispatchQueue.main.async { [weak self] in
-                    self?.resize(cols: Int(viewport.columns), rows: Int(viewport.rows))
+                    self?.viewportChanged(viewport)
                 }
             },
             pasteRejected: { [weak self] in
@@ -429,6 +429,20 @@ struct TerminalSurface: NSViewRepresentable {
                 engine.setColorScheme(dark ? .dark : .light)
                 self.dark = dark
             }
+        }
+
+        private lazy var startGate = TerminalStartGate(
+            isStarted: { [weak self] in self?.started ?? true },
+            viewSize: { [weak self] in
+                let bounds = self?.view?.bounds ?? .zero
+                return (Double(bounds.width), Double(bounds.height), Double(self?.view?.window?.backingScaleFactor ?? 0))
+            },
+            schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated(work) } },
+            deliver: { [weak self] cols, rows in self?.resize(cols: cols, rows: rows) })
+
+        private func viewportChanged(_ viewport: InMemoryTerminalViewport) {
+            startGate.report(.init(columns: Int(viewport.columns), rows: Int(viewport.rows),
+                                   widthPixels: viewport.widthPixels, heightPixels: viewport.heightPixels))
         }
 
         private func resize(cols: Int, rows: Int) {
@@ -539,8 +553,18 @@ final class HerdrTerminalView: AppTerminalView {
     private var plainLinkClick = false
     private var capturedLinkClick: (url: String, event: NSEvent)?
     private var capturedLinkDragged = false
+    /// Ghostty holds the left button from a press until its release. Some
+    /// gestures (three-finger trackpad drag) deliver the press and plain moves
+    /// but no mouse-up, leaving the application selecting on every move.
+    private var leftButtonHeld = false
+    private var mouseUpWatcher: Any?
+    private var pressID = UUID()
 
     override func mouseDown(with event: NSEvent) {
+        // Moves cannot tell a lost mouse-up from a three-finger drag in
+        // progress, but a new press can: finish the previous gesture first.
+        if leftButtonHeld { releaseLostButton(event) }
+        watchForMouseUp()
         capturedLinkClick = nil
         capturedLinkDragged = false
         if isMouseCaptured, event.clickCount == 1,
@@ -552,6 +576,7 @@ final class HerdrTerminalView: AppTerminalView {
             if let url = hoveredLink {
                 plainLinkClick = false
                 capturedLinkClick = (url, event)
+                leftButtonHeld = false
                 window?.makeFirstResponder(self)
                 return
             }
@@ -567,7 +592,22 @@ final class HerdrTerminalView: AppTerminalView {
             sendMousePos(x: -1, y: -1, modifiers: modifiers)
             sendMousePos(x: point.x, y: bounds.height - point.y, modifiers: modifiers)
         }
+        leftButtonHeld = true
         super.mouseDown(with: event)
+    }
+
+    /// Sends the release a lost mouse-up would have sent, at the last known
+    /// position; moving first would report one more drag. A captured link
+    /// press sent nothing yet, so it has nothing to release.
+    private func releaseLostButton(_ event: NSEvent) {
+        let held = leftButtonHeld
+        leftButtonHeld = false
+        capturedLinkClick = nil
+        capturedLinkDragged = false
+        plainLinkClick = false
+        guard held else { return }
+        sendMouseButton(state: GHOSTTY_MOUSE_RELEASE, button: GHOSTTY_MOUSE_LEFT,
+                        modifiers: TerminalInputModifiers(from: event.modifierFlags))
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -579,6 +619,7 @@ final class HerdrTerminalView: AppTerminalView {
                 updateLinkPointer(click.event, modifiers: .shift)
                 sendMouseButton(state: GHOSTTY_MOUSE_PRESS, button: GHOSTTY_MOUSE_LEFT,
                                 modifiers: .shift)
+                leftButtonHeld = true
             }
             capturedLinkDragged = true
             let point = convert(event.locationInWindow, from: nil)
@@ -589,7 +630,43 @@ final class HerdrTerminalView: AppTerminalView {
         super.mouseDragged(with: event)
     }
 
+    /// The press reaches this view, but the tab's SwiftUI host can take the
+    /// matching mouse-up. Watch the window's next mouse-up, and finish the
+    /// gesture if it was not delivered here.
+    private func watchForMouseUp() {
+        stopWatchingMouseUp()
+        let press = UUID()
+        pressID = press
+        mouseUpWatcher = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            // Monitors run before dispatch: check once this view had its turn,
+            // and only for the press this watcher belongs to.
+            DispatchQueue.main.async { self?.finishUndeliveredMouseUp(event, press: press) }
+            return event
+        }
+    }
+
+    private func stopWatchingMouseUp() {
+        if let mouseUpWatcher { NSEvent.removeMonitor(mouseUpWatcher) }
+        mouseUpWatcher = nil
+    }
+
+    private func finishUndeliveredMouseUp(_ event: NSEvent, press: UUID) {
+        guard press == pressID, mouseUpWatcher != nil else { return }
+        stopWatchingMouseUp()
+        guard leftButtonHeld || capturedLinkClick != nil else { return }
+        // Panes share the window and hidden tabs stay attached: finish here
+        // only over this visible surface, otherwise just let go of the button.
+        if event.window === window, surfaceVisible,
+           bounds.contains(convert(event.locationInWindow, from: nil)) {
+            mouseUp(with: event)
+        } else {
+            releaseLostButton(event)
+        }
+    }
+
     override func mouseUp(with event: NSEvent) {
+        stopWatchingMouseUp()
+        leftButtonHeld = false
         if let click = capturedLinkClick {
             capturedLinkClick = nil
             if capturedLinkDragged {
@@ -816,6 +893,7 @@ final class HerdrTerminalView: AppTerminalView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil { stopWatchingMouseUp() }
         if window != nil { DispatchQueue.main.async { [weak self] in self?.onAttach?() } }
     }
 }

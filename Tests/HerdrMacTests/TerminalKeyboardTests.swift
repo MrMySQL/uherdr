@@ -453,6 +453,103 @@ struct TerminalKeyboardTests {
         linkClick("ordinary terminal text")
         precondition(capture.bytes.isEmpty, "Disabling mouse capture must restore local selection without sending mouse input")
         print("PASS: terminal URL clicks preserve destinations, selection, and mouse capture")
+        // Three-finger trackpad drag (logged on macOS 27) delivers a press, then
+        // plain moves with no button reported, and no mouse-up. The moves must
+        // keep dragging the selection, and the next press must end that gesture
+        // instead of leaving the application selecting forever.
+        bridge.receive(Data("\u{1b}[2J\u{1b}[H\u{1b}[?1002h\u{1b}[?1006hstuck drag fixture".utf8))
+        bridge.session.waitForPendingOutput()
+        capture.clear()
+        let grid = capture.viewport!
+        let cell = CGFloat(grid.cellWidthPixels > 0 ? grid.cellWidthPixels : grid.widthPixels / UInt32(grid.columns)) / window.backingScaleFactor
+        let rowHeight = CGFloat(grid.cellHeightPixels > 0 ? grid.cellHeightPixels : grid.heightPixels / UInt32(grid.rows)) / window.backingScaleFactor
+        func plainEvent(_ type: NSEvent.EventType, column: CGFloat) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: view.convert(NSPoint(x: cell * column, y: view.bounds.height - rowHeight * 0.5), to: nil),
+                               modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
+        }
+        view.mouseMoved(with: plainEvent(.mouseMoved, column: 2.5))
+        view.mouseDown(with: plainEvent(.leftMouseDown, column: 2.5))
+        view.mouseMoved(with: plainEvent(.mouseMoved, column: 6.5))
+        view.mouseMoved(with: plainEvent(.mouseMoved, column: 9.5))
+        view.mouseDown(with: plainEvent(.leftMouseDown, column: 12.5))
+        view.mouseUp(with: plainEvent(.leftMouseUp, column: 12.5))
+        view.mouseMoved(with: plainEvent(.mouseMoved, column: 14.5))
+        precondition(view.sendKey(.enter))
+        waitUntil { capture.bytes.last == 13 }
+        let gesture = String(decoding: capture.bytes, as: UTF8.self)
+        let expected = "\u{1b}[<0;3;1M\u{1b}[<32;7;1M\u{1b}[<32;10;1M\u{1b}[<0;10;1m\u{1b}[<0;13;1M\u{1b}[<0;13;1m\r"
+        precondition(gesture == expected, "A drag without mouse-up must keep selecting, then end at the next press: \(gesture.debugDescription)")
+        // A view on top (the tab's SwiftUI host, seen live) can take the
+        // mouse-up for a press the terminal received. The terminal must still
+        // end the gesture instead of dragging on later moves.
+        capture.clear()
+        let overlay = MouseUpSwallowingView(frame: view.bounds)
+        overlay.pressTarget = view
+        view.addSubview(overlay)
+        // The headless test app is never active, so AppKit drops mouse events
+        // routed through it: the press goes to the window (overlay, then
+        // terminal), and the mouse-up through the app, where it is observed
+        // but never reaches the terminal, as in the live log.
+        window.sendEvent(plainEvent(.leftMouseDown, column: 2.5))
+        precondition(overlay.presses == 1, "The fixture overlay must pass the press to the terminal")
+        NSApp.sendEvent(plainEvent(.leftMouseUp, column: 2.5))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        view.mouseMoved(with: plainEvent(.mouseMoved, column: 9.5))
+        overlay.removeFromSuperview()
+        precondition(view.sendKey(.enter))
+        waitUntil { capture.bytes.last == 13 }
+        let swallowed = String(decoding: capture.bytes, as: UTF8.self)
+        precondition(swallowed == "\u{1b}[<0;3;1M\u{1b}[<0;3;1m\r",
+                     "A mouse-up taken by another view must still release the press: \(swallowed.debugDescription)")
+        // Panes share the window, so a watched mouse-up beyond this pane, or
+        // over its hidden surface, must only release: no drag to foreign
+        // coordinates and no link open.
+        capture.clear()
+        view.mouseDown(with: plainEvent(.leftMouseDown, column: 2.5))
+        view.mouseDragged(with: plainEvent(.leftMouseDragged, column: 6.5))
+        NSApp.sendEvent(plainEvent(.leftMouseUp, column: view.bounds.width / cell + 20))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        precondition(view.sendKey(.enter))
+        waitUntil { capture.bytes.last == 13 }
+        let outside = String(decoding: capture.bytes, as: UTF8.self)
+        precondition(outside == "\u{1b}[<0;3;1M\u{1b}[<32;7;1M\u{1b}[<0;7;1m\r",
+                     "A mouse-up beyond this pane must release where the drag was: \(outside.debugDescription)")
+        // AppKit sends a drag's mouse-up to the view that took the press, even
+        // beyond its bounds; the watcher sees it first and must stand aside.
+        capture.clear()
+        view.mouseDown(with: plainEvent(.leftMouseDown, column: 2.5))
+        view.mouseDragged(with: plainEvent(.leftMouseDragged, column: 6.5))
+        let ownedUp = plainEvent(.leftMouseUp, column: view.bounds.width / cell + 20)
+        NSApp.sendEvent(ownedUp)
+        view.mouseUp(with: ownedUp)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        precondition(view.sendKey(.enter))
+        waitUntil { capture.bytes.last == 13 }
+        let owned = String(decoding: capture.bytes, as: UTF8.self)
+        precondition(owned == "\u{1b}[<0;3;1M\u{1b}[<32;7;1M\u{1b}[<32;81;1M\u{1b}[<0;81;1m\r",
+                     "A drag released beyond the pane it owns must finish there, once: \(owned.debugDescription)")
+        let hiddenURL = "https://example.com/hidden"
+        bridge.receive(Data("\u{1b}[2J\u{1b}[H\(hiddenURL)".utf8))
+        bridge.session.waitForPendingOutput()
+        capture.clear()
+        lifecycle.urls = []
+        view.mouseDown(with: plainEvent(.leftMouseDown, column: 2.5))
+        view.setSurfaceVisible(false)
+        NSApp.sendEvent(plainEvent(.leftMouseUp, column: 2.5))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        view.setSurfaceVisible(true)
+        window.makeFirstResponder(view)
+        precondition(view.sendKey(.enter))
+        waitUntil { capture.bytes.last == 13 }
+        precondition(lifecycle.urls.isEmpty, "A mouse-up over a hidden surface must not open its link")
+        precondition(capture.bytes == [13],
+                     "A link press released while hidden must send no mouse input: \(capture.bytes)")
+        bridge.receive(Data("\u{1b}[?1002l\u{1b}[?1006l".utf8))
+        bridge.session.waitForPendingOutput()
+        print("PASS: a drag without mouse-up keeps selecting and ends at the next press")
+        print("PASS: a mouse-up delivered to another view still releases the terminal's press")
+        print("PASS: a watched mouse-up beyond the pane or over a hidden surface only releases")
         // A changed New line shortcut reaches a running terminal, and the old keys stop.
         var movedNewLine = ShortcutBindings()
         movedNewLine.assign(KeyChord("return", .option), to: .newLine)
@@ -710,4 +807,15 @@ final class FileDragInfo: NSObject, NSDraggingInfo {
                                 for view: NSView?, classes classArray: [AnyClass],
                                 searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
                                 using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+}
+
+/// Stands in for the tab's SwiftUI host above the terminal: it passes the
+/// press on to the terminal but keeps the mouse-up.
+final class MouseUpSwallowingView: NSView {
+    weak var pressTarget: NSView?
+    var presses = 0
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
+    override func mouseDown(with event: NSEvent) { presses += 1; pressTarget?.mouseDown(with: event) }
+    override func mouseUp(with event: NSEvent) {}
 }
