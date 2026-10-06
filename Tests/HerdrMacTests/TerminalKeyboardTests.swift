@@ -576,6 +576,8 @@ struct TerminalKeyboardTests {
         precondition(pressed(30, "}", [.command, .shift]) == KeyChord("]", [.command, .shift]), "Shifted punctuation must record its unshifted key, as menus store it")
         precondition(pressed(18, "1", [.command, .control]) == KeyChord("1", [.command, .control]))
         precondition(pressed(51, "\u{7f}", [.command]) == nil, "Delete has no printable key and is not recorded")
+        precondition(pressed(49, " ", [.control]) == nil, "Space has no keycap glyph and is not recorded")
+        precondition(pressed(123, "\u{f702}", [.command, .function, .numericPad]) == nil, "Arrow keys are not recorded")
         print("PASS: key presses become the shortcuts the sheet records")
         lifecycle.surface = nil
         view.controller = nil

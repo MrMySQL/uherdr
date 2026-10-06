@@ -11,13 +11,16 @@ struct KeyboardShortcutsSheet: View {
         let chord: KeyChord
         var step: ShortcutChangeStep
         var clashAccepted = false
+        /// Row actions a Reset still puts back once this one is replaced.
+        var resetAfter: [ShortcutAction] = []
     }
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var settings = ShortcutSettings.shared
     @State private var search = ""
     @State private var recording: ShortcutAction?
-    @State private var invalidKeys = false
+    /// Why the last key press was not taken, shown while recording.
+    @State private var rejection: String?
     @State private var pending: Pending?
     @State private var keyMonitor: Any?
 
@@ -65,7 +68,7 @@ struct KeyboardShortcutsSheet: View {
     }
 
     private var footer: String {
-        if recording != nil { return invalidKeys ? "Use ⌘, ⌃ or ⌥ with a key." : "Press the new shortcut, or Esc to cancel." }
+        if recording != nil { return rejection ?? "Press the new shortcut, or Esc to cancel." }
         if let pending {
             switch pending.step {
             case .clash: return "Choose Replace or Cancel to continue."
@@ -147,10 +150,12 @@ struct KeyboardShortcutsSheet: View {
         let keys = pending.action.keycaps(for: pending.chord).joined(separator: " · ")
         VStack(alignment: .leading, spacing: 6) {
             switch pending.step {
-            case .clash(let other):
-                Label("\(keys) is already used by “\(other.title)”.", systemImage: "exclamationmark.triangle")
+            case .clash(let others):
+                let quoted = ListFormatter.localizedString(byJoining: others.map { "“\($0.title)”" })
+                let names = ListFormatter.localizedString(byJoining: others.map(\.title))
+                Label("\(keys) is already used by \(quoted).", systemImage: "exclamationmark.triangle")
                     .font(.system(size: 12, weight: .semibold))
-                Text("Replace gives \(keys) to \(pending.action.title) and leaves \(other.title) without a shortcut. Cancel keeps both as they were.")
+                Text("Replace gives \(keys) to \(pending.action.title) and leaves \(names) without a shortcut. Cancel keeps \(others.count == 1 ? "both" : "all") as they were.")
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack { Spacer(); Button("Cancel") { self.pending = nil }; Button("Replace") { advance(clashAccepted: true) }.buttonStyle(.borderedProminent) }
             case .terminalReserved:
@@ -173,29 +178,35 @@ struct KeyboardShortcutsSheet: View {
 
     private func startRecording(_ action: ShortcutAction) {
         pending = nil
-        invalidKeys = false
+        rejection = nil
         recording = action
     }
 
     private func cancelEditing() {
         recording = nil
         pending = nil
-        invalidKeys = false
+        rejection = nil
     }
 
     private func reset(_ row: ShortcutRow) {
         cancelEditing()
-        for action in row.actions where bindings.isChanged(action) {
-            propose(action.defaultChord, for: action)
-            if pending != nil { return }
-        }
+        reset(row.actions)
+    }
+
+    /// Resets what it can and asks about the first clash; Replace resumes with the rest.
+    private func reset(_ actions: [ShortcutAction]) {
+        var stop: (action: ShortcutAction, rest: [ShortcutAction])?
+        settings.update { stop = $0.reset(actions) }
+        guard let stop else { return }
+        propose(stop.action.defaultChord, for: stop.action)
+        pending?.resetAfter = stop.rest
     }
 
     private func propose(_ chord: KeyChord, for action: ShortcutAction) {
         let step = ShortcutChangeStep.next(for: chord, action: action, in: bindings)
         switch step {
         case .invalid:
-            invalidKeys = true
+            rejection = "Use ⌘, ⌃ or ⌥ with a key."
             recording = action
         case .apply:
             settings.update { $0.assign(chord, to: action) }
@@ -212,6 +223,7 @@ struct KeyboardShortcutsSheet: View {
         if step == .apply {
             pending = nil
             settings.update { $0.assign(current.chord, to: current.action) }
+            reset(current.resetAfter)
         } else {
             current.step = step
             pending = current
@@ -226,9 +238,12 @@ struct KeyboardShortcutsSheet: View {
                 cancelEditing()
                 return nil
             }
-            guard let chord = KeyChord(event: event) else { return nil }
+            guard let chord = KeyChord(event: event) else {
+                rejection = "That key can’t be a shortcut. Use a letter, digit, symbol, Return or Tab."
+                return nil
+            }
             recording = nil
-            invalidKeys = false
+            rejection = nil
             propose(chord, for: action)
             return nil
         }

@@ -252,12 +252,16 @@ public struct ShortcutBindings: Codable, Equatable, Sendable {
         }
     }
 
-    /// The other action already answering to any key this chord would give `action`.
-    public func clash(for chord: KeyChord, assigningTo action: ShortcutAction) -> ShortcutAction? {
-        let wanted = Set(action.chords(for: chord))
-        return ShortcutAction.allCases.first { other in
-            guard other != action, let existing = self.chord(for: other) else { return false }
-            return !wanted.isDisjoint(with: other.chords(for: existing))
+    /// Every other action already answering to any key this chord would give
+    /// `action`; a range can take keys from several.
+    public func clashes(for chord: KeyChord, assigningTo action: ShortcutAction) -> [ShortcutAction] {
+        holders(of: Set(action.chords(for: chord))).filter { $0 != action }
+    }
+
+    private func holders(of keys: Set<KeyChord>) -> [ShortcutAction] {
+        ShortcutAction.allCases.filter { action in
+            guard let existing = chord(for: action) else { return false }
+            return !keys.isDisjoint(with: action.chords(for: existing))
         }
     }
 
@@ -267,17 +271,29 @@ public struct ShortcutBindings: Codable, Equatable, Sendable {
     public mutating func assign(_ chord: KeyChord, to action: ShortcutAction) {
         var chord = chord
         if let range = action.range { chord.key = range.keys[0] }
-        while let other = clash(for: chord, assigningTo: action) {
-            overrides[other.rawValue] = .some(nil)
-        }
+        for other in clashes(for: chord, assigningTo: action) { overrides[other.rawValue] = .some(nil) }
         overrides[action.rawValue] = chord == action.defaultChord ? nil : .some(chord)
+    }
+
+    /// Resets each changed action in turn, stopping at the first whose default
+    /// keys need a question; returns it and the actions still to reset after it.
+    public mutating func reset(_ actions: [ShortcutAction]) -> (action: ShortcutAction, rest: [ShortcutAction])? {
+        for (index, action) in actions.enumerated() where isChanged(action) {
+            guard ShortcutChangeStep.next(for: action.defaultChord, action: action, in: self) == .apply else {
+                return (action, Array(actions[(index + 1)...]))
+            }
+            assign(action.defaultChord, to: action)
+        }
+        return nil
     }
 
     public mutating func resetAll() { overrides = [:] }
 
-    /// Ghostty key bindings for the terminal's own shortcuts.
+    /// Ghostty key bindings for the terminal's own shortcuts. ⌘A selects all
+    /// unless an action has taken it; the terminal would otherwise keep it.
     public var ghosttyKeybinds: [String] {
-        var binds = ["super+a=select_all"]
+        var binds: [String] = []
+        if holders(of: [KeyChord("a", .command)]).isEmpty { binds.append("super+a=select_all") }
         if let copy = chord(for: .copy) { binds.append(Self.ghostty(copy) + "=copy_to_clipboard") }
         if let paste = chord(for: .paste) { binds.append(Self.ghostty(paste) + "=paste_from_clipboard") }
         if let newLine = chord(for: .newLine) {
@@ -312,7 +328,7 @@ public struct ShortcutBindings: Codable, Equatable, Sendable {
 /// What changing a shortcut needs next: each question is asked once, clash first.
 public enum ShortcutChangeStep: Equatable, Sendable {
     case invalid
-    case clash(ShortcutAction)
+    case clash([ShortcutAction])
     case terminalReserved
     case apply
 
@@ -322,7 +338,8 @@ public enum ShortcutChangeStep: Equatable, Sendable {
         var candidate = chord
         if let range = action.range { candidate.key = range.keys[0] }
         guard ShortcutBindings.isValid(candidate) else { return .invalid }
-        if !clashAccepted, let other = bindings.clash(for: candidate, assigningTo: action) { return .clash(other) }
+        let others = clashAccepted ? [] : bindings.clashes(for: candidate, assigningTo: action)
+        if !others.isEmpty { return .clash(others) }
         if !terminalAccepted, ShortcutBindings.isTerminalReserved(candidate, for: action) { return .terminalReserved }
         return .apply
     }
