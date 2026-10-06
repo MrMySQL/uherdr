@@ -24,6 +24,8 @@ public enum AttentionDelivery {
 public enum AttentionReveal {
     public static let timeout: TimeInterval = 15
     public static func isReady(connected: Bool, waited: TimeInterval) -> Bool { connected || waited >= timeout }
+    /// Time left until `timeout`, counted from the click.
+    public static func remaining(waited: TimeInterval) -> TimeInterval { max(timeout - waited, 0) }
 }
 
 /// Finds agents that just finished or started waiting. Only a change from a

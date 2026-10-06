@@ -69,6 +69,10 @@ enum AttentionTrackerTests {
         XCTAssertTrue(!AttentionReveal.isReady(connected: false, waited: AttentionReveal.timeout - 0.5))
         XCTAssertTrue(AttentionReveal.isReady(connected: true, waited: 0))
         XCTAssertTrue(AttentionReveal.isReady(connected: false, waited: AttentionReveal.timeout))
+        // The fallback waits only what is left since the click.
+        XCTAssertEqual(AttentionReveal.remaining(waited: 0), AttentionReveal.timeout)
+        XCTAssertEqual(AttentionReveal.remaining(waited: 4), AttentionReveal.timeout - 4)
+        XCTAssertEqual(AttentionReveal.remaining(waited: AttentionReveal.timeout + 5), 0)
         print("PASS: alerts on waiting and on every finish, once per agent per cooldown, per device, with baselines at first sight and after disconnect; launch clicks wait for their device")
     }
 }

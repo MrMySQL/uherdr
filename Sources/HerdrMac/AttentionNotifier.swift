@@ -30,8 +30,10 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         self.devices = devices
         // objectWillChange fires before the change lands; scan on the next turn.
         subscription = devices.objectWillChange.sink { [weak self] _ in self?.queueScan() }
-        if pendingReveal != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + AttentionReveal.timeout) { [weak self] in self?.scan() }
+        if let pending = pendingReveal {
+            // The timeout runs from the click, not from here.
+            let delay = AttentionReveal.remaining(waited: Date().timeIntervalSince(pending.at))
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.scan() }
         }
         scan()
     }
