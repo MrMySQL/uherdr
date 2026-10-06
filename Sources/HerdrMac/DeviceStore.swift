@@ -19,6 +19,8 @@ final class DeviceStore: ObservableObject {
     private let sessionRunner: @MainActor (String) -> SessionControl.Runner
     private var discoveryTask: Task<Void, Never>?
     private var discovering = false
+    /// Bumped after a session action, so an older in-flight listing is discarded.
+    private var listingGeneration = 0
 
     init(defaults: UserDefaults = .standard, profiles: [DeviceProfile]? = nil,
          sessionLister: @escaping @MainActor (String) async throws -> [HerdrSessionEntry] = { try await SessionDiscovery.list(executable: $0) },
@@ -74,8 +76,9 @@ final class DeviceStore: ObservableObject {
         guard !discovering else { return }
         discovering = true
         defer { discovering = false }
+        let generation = listingGeneration
         let executable = sessions.first { !$0.isRemote }?.executable ?? SessionStore.findExecutable()
-        guard let found = try? await sessionLister(executable) else { return }
+        guard let found = try? await sessionLister(executable), generation == listingGeneration else { return }
         herdrSessions = found
         if includeDismissed { defaults.removeObject(forKey: SessionDiscovery.dismissedKey) }
         let dismissed = Set(defaults.stringArray(forKey: SessionDiscovery.dismissedKey) ?? [])
@@ -143,6 +146,11 @@ final class DeviceStore: ObservableObject {
         sessions.count > 1 && herdrSession(for: session).map(SessionControl.canDelete) == true
     }
 
+    /// Whether a device sheet or confirmation is showing.
+    var isPresenting: Bool {
+        editor != nil || pendingRemoval != nil || pendingSessionAction != nil || pendingMachineRemoval != nil
+    }
+
     func machine(_ id: String) -> MachineGroup? { machineGroups.first { $0.id == id } }
 
     func reconnectAll(_ machineID: String) { machine(machineID)?.sessions.forEach { $0.reconnect() } }
@@ -172,14 +180,19 @@ final class DeviceStore: ObservableObject {
             target = sessions.last
         }
         target?.startServer()
+        target?.reconnect()
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
             await self?.discoverSessions()
         }
     }
 
+    /// A stopped session's device is disconnected instead of polling a dead socket.
     func stopHerdrSession(_ session: SessionStore) async {
-        await runSessionAction(on: session) { entry, run in try await SessionControl.stop(entry.name, run) }
+        await runSessionAction(on: session) { entry, run in
+            try await SessionControl.stop(entry.name, run)
+            session.disconnect()
+        }
     }
 
     /// Stops the session if needed, deletes it from herdr, then removes it here.
@@ -203,7 +216,8 @@ final class DeviceStore: ObservableObject {
                 throw HerdrError.message("herdr no longer lists this session.")
             }
             try await action(entry, run)
-            await discoverSessions()
+            listingGeneration += 1
+            if let after = try? await SessionControl.list(run) { herdrSessions = after }
             return true
         } catch {
             activeSession.operationError = error.localizedDescription

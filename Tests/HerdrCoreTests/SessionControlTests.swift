@@ -20,7 +20,7 @@ enum SessionControlTests {
         let run: SessionControl.Runner = { args in
             calls.append(args)
             if let failOn, args.contains(failOn) { throw HerdrError.message("session \(failOn) failed") }
-            return args.first == "session" && args.dropFirst().first == "list" ? SessionDiscoveryTests.listing : ""
+            return args == ["session", "list", "--json"] ? SessionDiscoveryTests.listing : ""
         }
         XCTAssertEqual(try await SessionControl.list(run).map(\.name), sessions.map(\.name))
         calls = []

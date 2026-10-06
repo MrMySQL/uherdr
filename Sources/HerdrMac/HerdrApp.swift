@@ -98,7 +98,7 @@ struct HerdrApp: App {
         }
     }
     private var canInteract: Bool {
-        store.sheet == nil && store.pendingClose == nil && store.operationError == nil && devices.editor == nil && devices.pendingRemoval == nil
+        store.sheet == nil && store.pendingClose == nil && store.operationError == nil && !devices.isPresenting
     }
     private var canUseCurrentPane: Bool {
         store.connected && store.selectedPane != nil && canInteract
