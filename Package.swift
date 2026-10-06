@@ -8,7 +8,8 @@ let package = Package(
     dependencies: [.package(path: "Vendor/GhosttyTerminal")],
     targets: [
         .target(name: "HerdrCore"),
-        .executableTarget(name: "HerdrMac", dependencies: ["HerdrCore", .product(name: "GhosttyTerminal", package: "GhosttyTerminal")]),
+        .executableTarget(name: "HerdrMac", dependencies: ["HerdrCore", .product(name: "GhosttyTerminal", package: "GhosttyTerminal")],
+                          resources: [.copy("Resources/AgentIcons")]),
         .executableTarget(name: "HerdrCoreTests", dependencies: ["HerdrCore"], path: "Tests/HerdrCoreTests")
     ]
 )
