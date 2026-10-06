@@ -210,7 +210,12 @@ final class DeviceStore: ObservableObject {
 
     /// Starts the server for a local device with its own session's data.
     func startServer(for session: SessionStore) async {
-        guard !session.isRemote else { return }
+        guard !session.isRemote, begin(session) else { return }
+        defer { end(session) }
+        await startOwnServer(for: session)
+    }
+
+    private func startOwnServer(for session: SessionStore) async {
         let run = sessionRunner(session.executable)
         do {
             // Fail closed: without herdr's list a named session would start bare.
@@ -236,9 +241,11 @@ final class DeviceStore: ObservableObject {
     /// Stops whatever server answers on the session's socket (even one
     /// started with the wrong data) and starts the session's own.
     func restartHerdrSession(_ session: SessionStore) async {
-        guard await runSessionAction(on: session, { entry, run in try await SessionControl.stop(entry.name, run) }) else { return }
+        guard !session.isRemote, begin(session) else { return }
+        defer { end(session) }
+        guard await performSessionAction(on: session, { entry, run in try await SessionControl.stop(entry.name, run) }) else { return }
         await waitForSocket(session.profile.socketPath, present: false)
-        await startServer(for: session)
+        await startOwnServer(for: session)
     }
 
     private func waitForSocket(_ path: String, present: Bool) async {
@@ -278,19 +285,24 @@ final class DeviceStore: ObservableObject {
         }
     }
 
-    /// Sessions with a Stop or Remove still running; their actions stay disabled.
+    /// Sessions with a Start, Stop, Restart or Remove still running; their actions stay disabled.
     @Published private(set) var actingSessions: Set<UUID> = []
     func isActing(_ session: SessionStore) -> Bool { actingSessions.contains(session.profile.id) }
-
-    /// Re-reads the session list first, so the action uses herdr's current state.
     /// One action per session at a time; another is refused until it finishes.
+    private func begin(_ session: SessionStore) -> Bool { actingSessions.insert(session.profile.id).inserted }
+    private func end(_ session: SessionStore) { actingSessions.remove(session.profile.id) }
+
     @discardableResult
     private func runSessionAction(on session: SessionStore,
                                   _ action: @MainActor (HerdrSessionEntry, SessionControl.Runner) async throws -> Void) async -> Bool {
-        let id = session.profile.id
-        guard !actingSessions.contains(id) else { return false }
-        actingSessions.insert(id)
-        defer { actingSessions.remove(id) }
+        guard begin(session) else { return false }
+        defer { end(session) }
+        return await performSessionAction(on: session, action)
+    }
+
+    /// Re-reads the session list first, so the action uses herdr's current state.
+    private func performSessionAction(on session: SessionStore,
+                                      _ action: @MainActor (HerdrSessionEntry, SessionControl.Runner) async throws -> Void) async -> Bool {
         let run = sessionRunner(session.executable)
         do {
             let current = try await SessionControl.list(run)

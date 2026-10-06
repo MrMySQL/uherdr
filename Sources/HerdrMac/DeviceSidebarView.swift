@@ -163,10 +163,12 @@ struct DeviceSidebarView: View {
             if let herdrSession {
                 if herdrSession.running {
                     Button("Restart session…") { devices.pendingSessionAction = .restart(session.profile.id) }
+                        .disabled(devices.isActing(session))
                     Button("Stop session…") { devices.pendingSessionAction = .stop(session.profile.id) }
                         .disabled(devices.isActing(session))
                 } else {
                     Button("Start session") { Task { await devices.startServer(for: session) } }
+                        .disabled(devices.isActing(session))
                 }
             }
             Button("Edit socket…") { devices.editor = DeviceEditorTarget(profile: session.profile, sessionOnly: true) }

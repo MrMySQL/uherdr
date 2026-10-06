@@ -339,7 +339,42 @@ import HerdrCore
         held?.resume(); held = nil
         await stopping.value
         precondition(!devices.isActing(session) && devices.sessions.count == 2)
-        print("PASS: one Stop or Remove at a time per session")
+        // Restart holds its session until its new server starts, including while it
+        // waits for the old server's socket to go away after the stop.
+        try FileManager.default.createDirectory(atPath: (workSocket as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: "/tmp/uh-session-serial") }
+        FileManager.default.createFile(atPath: workSocket, contents: Data())
+        var running = true
+        var lists = 0
+        var restartCommands: [[String]] = []
+        var launches: [SessionControl.ServerLaunch] = []
+        let restartRun: SessionControl.Runner = { args in
+            restartCommands.append(args)
+            if args.starts(with: ["session", "stop"]) { running = false }
+            if args == ["session", "list", "--json"] { lists += 1 }
+            return args == ["session", "list", "--json"]
+                ? #"{"sessions":[{"default":false,"name":"work","running":\#(running),"socket_path":"\#(workSocket)"}]}"# : ""
+        }
+        let restarting = DeviceStore(defaults: defaults, profiles: [keep, work], sessionLister: { _ in [] },
+                                     sessionRunner: { _ in restartRun }, launchServer: { _, launch in
+            launches.append(launch)
+            FileManager.default.createFile(atPath: workSocket, contents: Data())
+        })
+        defer { restarting.stop() }
+        let restartSession = restarting.sessions[1]
+        let restart = Task { await restarting.restartHerdrSession(restartSession) }
+        // After the stop and its listing, Restart polls for the old socket to disappear.
+        while lists < 2 { await Task.yield() }
+        try await Task.sleep(for: .milliseconds(120))
+        precondition(restarting.isActing(restartSession), "Restart keeps its session busy while the old server goes away")
+        await restarting.startServer(for: restartSession)
+        await restarting.stopHerdrSession(restartSession)
+        precondition(launches.isEmpty && restartCommands.filter { $0.starts(with: ["session", "stop"]) }.count == 1,
+                     "Start and Stop wait for a running Restart: \(restartCommands)")
+        try FileManager.default.removeItem(atPath: workSocket)
+        await restart.value
+        precondition(launches.map(\.arguments) == [["--session", "work", "server"]] && !restarting.isActing(restartSession))
+        print("PASS: one Start, Stop, Restart or Remove at a time per session")
     }
 
     /// Stop/Remove against a fake herdr CLI, racing an older discovery.
