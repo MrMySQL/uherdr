@@ -1,10 +1,12 @@
 import SwiftUI
 import AppKit
+import HerdrCore
 
 @main
 struct HerdrApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var devices = DeviceStore()
+    @ObservedObject private var shortcuts = ShortcutSettings.shared
     private var store: SessionStore { devices.activeSession }
     var body: some Scene {
         Window("uHerdr", id: "main") {
@@ -15,49 +17,59 @@ struct HerdrApp: App {
         .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Space…") { store.sheet = .space }.keyboardShortcut("n").disabled(!store.connected || !canInteract)
-                Button("New Tab…") { store.sheet = .tab }.keyboardShortcut("t").disabled(store.selectedSpace == nil || !store.connected || !canInteract)
+                Button("New Space…") { store.sheet = .space }.keyboardShortcut(shortcut(.newSpace)).disabled(!store.connected || !canInteract)
+                Button("New Tab…") { store.sheet = .tab }.keyboardShortcut(shortcut(.newTab)).disabled(store.selectedSpace == nil || !store.connected || !canInteract)
+            }
+            // ⌘W closes the current tab (after confirming), not the window.
+            CommandGroup(replacing: .saveItem) {
+                Button("Close Tab…") {
+                    if let tab = store.currentTab { store.pendingClose = ResourceTarget(kind: "tab", id: tab.id, label: tab.label) }
+                }.keyboardShortcut(shortcut(.closeTab)).disabled(!canUseCurrentTab)
             }
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { store.sheet = .settings }.keyboardShortcut(",").disabled(!canInteract)
+                Button("Settings…") { store.sheet = .settings }.keyboardShortcut(shortcut(.settings)).disabled(!canInteract)
+                Button("Keyboard Shortcuts…") { store.sheet = .shortcuts }.keyboardShortcut(shortcut(.keyboardShortcuts)).disabled(!canInteract)
+            }
+            CommandGroup(after: .help) {
+                Button("Keyboard Shortcuts") { store.sheet = .shortcuts }.disabled(!canInteract)
             }
             CommandGroup(after: .toolbar) {
                 Button("Increase Text Size") { store.fontSize = min(22, store.fontSize + 1) }
-                    .keyboardShortcut("+", modifiers: .command)
+                    .keyboardShortcut(shortcut(.largerText))
                     .disabled(!canInteract || store.fontSize >= 22)
                 Button("Increase Text Size") { store.fontSize = min(22, store.fontSize + 1) }
-                    .keyboardShortcut("=", modifiers: .command)
+                    .keyboardShortcut(shortcut(.largerTextAlternate))
                     .disabled(!canInteract || store.fontSize >= 22)
                 Button("Decrease Text Size") { store.fontSize = max(10, store.fontSize - 1) }
-                    .keyboardShortcut("-", modifiers: .command)
+                    .keyboardShortcut(shortcut(.smallerText))
                     .disabled(!canInteract || store.fontSize <= 10)
             }
             CommandMenu("Pane") {
                 Button("Find in Pane…") { store.searchPane() }
-                    .keyboardShortcut("f", modifiers: .command).disabled(!canUseCurrentPane)
+                    .keyboardShortcut(shortcut(.findInPane)).disabled(!canUseCurrentPane)
                 Divider()
-                Button("Split Side by Side") { store.split(.right) }.keyboardShortcut("d").disabled(!canUseCurrentPane)
-                Button("Split Top and Bottom") { store.split(.down) }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(!canUseCurrentPane)
+                Button("Split Side by Side") { store.split(.right) }.keyboardShortcut(shortcut(.splitSideBySide)).disabled(!canUseCurrentPane)
+                Button("Split Top and Bottom") { store.split(.down) }.keyboardShortcut(shortcut(.splitTopAndBottom)).disabled(!canUseCurrentPane)
                 Divider()
                 Button("Zoom Pane") { if let id = store.selectedPane { store.zoom(id) } }
-                    .keyboardShortcut(KeyEquivalent(AppHotkeys.togglePaneZoom.key), modifiers: AppHotkeys.togglePaneZoom.eventModifiers)
+                    .keyboardShortcut(shortcut(.zoomPane))
                     .disabled(!canUseCurrentPane)
                 Button("Start Agent…") { if let id = store.selectedPane { store.sheet = .agent(id) } }.disabled(!canUseCurrentPane)
                 Divider()
                 Button("Close Pane…") {
                     if let pane = store.currentPane { store.pendingClose = ResourceTarget(kind: "pane", id: pane.id, label: pane.displayTitle) }
-                }.keyboardShortcut("w", modifiers: [.command, .shift]).disabled(!canUseCurrentPane)
+                }.keyboardShortcut(shortcut(.closePane)).disabled(!canUseCurrentPane)
             }
             CommandMenu("Space") {
                 Button("Rename Current Space…") {
                     if let space = store.currentSpace { store.sheet = .rename(ResourceTarget(kind: "workspace", id: space.id, label: space.label)) }
-                }.keyboardShortcut(KeyEquivalent(AppHotkeys.renameCurrentWorkspace.key), modifiers: AppHotkeys.renameCurrentWorkspace.eventModifiers)
+                }.keyboardShortcut(shortcut(.renameSpace))
                     .disabled(!canUseCurrentSpace)
             }
             CommandMenu("Tab") {
                 Button("Rename Current Tab…") {
                     if let tab = store.currentTab { store.sheet = .rename(ResourceTarget(kind: "tab", id: tab.id, label: tab.label)) }
-                }.keyboardShortcut(KeyEquivalent(AppHotkeys.renameCurrentTab.key), modifiers: AppHotkeys.renameCurrentTab.eventModifiers)
+                }.keyboardShortcut(shortcut(.renameTab))
                     .disabled(!canUseCurrentTab)
             }
             CommandMenu("Navigate") {
@@ -66,36 +78,40 @@ struct HerdrApp: App {
                         devices.sidebarMode = "spaces"
                         devices.select(entry.session, workspace: entry.workspace)
                     }
-                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                    .keyboardShortcut(rangeShortcut(.selectSpace, digit: Character(String(index + 1))))
                     .disabled(!entry.session.connected || !canInteract)
                 }
                 Divider()
                 ForEach(Array(store.visibleTabs.prefix(10).enumerated()), id: \.element.id) { index, tab in
                     if let key = AppHotkeys.tabSelectionKey(at: index) {
                         Button("Switch to Tab \(index + 1): \(tab.label)") { store.selectTab(tab) }
-                            .keyboardShortcut(KeyEquivalent(key), modifiers: .control)
+                            .keyboardShortcut(rangeShortcut(.selectTab, digit: key))
                             .disabled(!canNavigateTabs)
                     }
                 }
                 Divider()
                 Button("Next Tab") { moveTab(1) }
-                    .keyboardShortcut(.tab, modifiers: .control)
+                    .keyboardShortcut(shortcut(.nextTab))
                     .disabled(!canNavigateTabs)
                 Button("Previous Tab") { moveTab(-1) }
-                    .keyboardShortcut(.tab, modifiers: [.control, .shift])
+                    .keyboardShortcut(shortcut(.previousTab))
                     .disabled(!canNavigateTabs)
-                Button("Next Tab") { moveTab(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
+                Button("Next Tab") { moveTab(1) }.keyboardShortcut(shortcut(.nextTabAlternate))
                     .disabled(!canNavigateTabs)
-                Button("Previous Tab") { moveTab(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
+                Button("Previous Tab") { moveTab(-1) }.keyboardShortcut(shortcut(.previousTabAlternate))
                     .disabled(!canNavigateTabs)
                 Divider()
-                Button("Next Pane") { movePane(1) }.keyboardShortcut("]", modifiers: .command).disabled(!canUseCurrentPane)
-                Button("Previous Pane") { movePane(-1) }.keyboardShortcut("[", modifiers: .command).disabled(!canUseCurrentPane)
-                Button("Next Pane") { movePane(1) }.keyboardShortcut("`", modifiers: [.control]).disabled(!canUseCurrentPane)
-                Button("Show Agents") { devices.sidebarMode = "agents" }.keyboardShortcut("a", modifiers: [.command, .shift])
-                Button("Show Spaces") { devices.sidebarMode = "spaces" }.keyboardShortcut("s", modifiers: [.command, .shift])
+                Button("Next Pane") { movePane(1) }.keyboardShortcut(shortcut(.nextPane)).disabled(!canUseCurrentPane)
+                Button("Previous Pane") { movePane(-1) }.keyboardShortcut(shortcut(.previousPane)).disabled(!canUseCurrentPane)
+                Button("Next Pane") { movePane(1) }.keyboardShortcut(shortcut(.nextPaneAlternate)).disabled(!canUseCurrentPane)
+                Button("Show Agents") { devices.sidebarMode = "agents" }.keyboardShortcut(shortcut(.showAgents))
+                Button("Show Spaces") { devices.sidebarMode = "spaces" }.keyboardShortcut(shortcut(.showSpaces))
             }
         }
+    }
+    private func shortcut(_ action: ShortcutAction) -> KeyboardShortcut? { shortcuts.bindings.chord(for: action)?.keyboardShortcut }
+    private func rangeShortcut(_ action: ShortcutAction, digit: Character) -> KeyboardShortcut? {
+        shortcuts.bindings.chord(for: action)?.keyboardShortcut(digit: digit)
     }
     private var canInteract: Bool {
         store.sheet == nil && store.pendingClose == nil && store.operationError == nil && devices.editor == nil && devices.pendingRemoval == nil
@@ -123,15 +139,6 @@ struct HerdrApp: App {
         guard !panes.isEmpty else { return }
         let index = panes.firstIndex { $0.id == store.selectedPane } ?? 0
         store.focusPane(panes[(index + offset + panes.count) % panes.count].id)
-    }
-}
-
-private extension AppHotkey {
-    var eventModifiers: EventModifiers {
-        var result: EventModifiers = []
-        if modifiers.contains(.command) { result.insert(.command) }
-        if modifiers.contains(.shift) { result.insert(.shift) }
-        return result
     }
 }
 
