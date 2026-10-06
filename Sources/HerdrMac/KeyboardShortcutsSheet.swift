@@ -5,6 +5,7 @@ import HerdrCore
 struct KeyboardShortcutsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
+    @FocusState private var searchFocused: Bool
 
     private var groups: [ShortcutGroup] { ShortcutGroup.filtered(search) { $0.defaultChord } }
 
@@ -15,7 +16,7 @@ struct KeyboardShortcutsSheet: View {
                 Spacer()
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.tertiary)
-                    TextField("Search shortcuts", text: $search).textFieldStyle(.plain)
+                    TextField("Search shortcuts", text: $search).textFieldStyle(.plain).focused($searchFocused)
                 }
                 .font(.system(size: 12)).padding(.horizontal, 9).padding(.vertical, 6).frame(width: 260)
                 .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
@@ -27,8 +28,7 @@ struct KeyboardShortcutsSheet: View {
                     Text("No shortcut matches “\(search)”.").foregroundStyle(.secondary).padding(40)
                 } else {
                     HStack(alignment: .top, spacing: 40) {
-                        column(Array(groups.filter { ["Spaces", "Tabs", "Panes"].contains($0.title) }))
-                        column(Array(groups.filter { !["Spaces", "Tabs", "Panes"].contains($0.title) }))
+                        ForEach(Array(ShortcutGroup.columns(groups).enumerated()), id: \.offset) { _, groups in column(groups) }
                     }
                     .padding(24)
                 }
@@ -36,11 +36,12 @@ struct KeyboardShortcutsSheet: View {
             Divider()
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(.borderedProminent)
             }
             .padding(.horizontal, 24).padding(.vertical, 14)
         }
         .frame(width: 820, height: 640)
+        .onAppear { searchFocused = true }
     }
 
     private func column(_ groups: [ShortcutGroup]) -> some View {
@@ -75,14 +76,12 @@ struct KeyboardShortcutsSheet: View {
 
 struct Keycap: View {
     let text: String
-    var highlighted = false
 
     var body: some View {
         Text(text)
             .font(.system(size: 11, weight: .medium, design: .rounded)).monospacedDigit()
-            .foregroundStyle(highlighted ? Color.accentColor : .primary)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4))
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(highlighted ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.15)))
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.15)))
     }
 }
