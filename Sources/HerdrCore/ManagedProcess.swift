@@ -6,7 +6,8 @@ private final class ProcessOutput: @unchecked Sendable {
     private var data = Data()
     private var ended = false
     private let limit: Int
-    init(limit: Int) { self.limit = limit }
+    /// A negative limit keeps nothing; `Data.suffix` would trap on it.
+    init(limit: Int) { self.limit = max(limit, 0) }
     func receive(_ chunk: Data) {
         lock.lock(); defer { lock.unlock() }
         if chunk.isEmpty { ended = true }
