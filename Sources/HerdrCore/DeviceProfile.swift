@@ -65,12 +65,15 @@ public struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
     /// The herdr session this device connects to, read from its socket path:
     /// `…/herdr/sessions/<name>/herdr.sock` is `<name>`, `…/herdr/herdr.sock`
     /// (or an empty remote socket) is `default`. Other paths use the device name.
-    public var sessionName: String {
+    public var sessionName: String { pathSessionName ?? name }
+
+    /// The session a herdr-shaped socket path names; nil for a custom socket.
+    public var pathSessionName: String? {
         if kind == .ssh && socketPath.isEmpty { return "default" }
         let parts = socketPath.split(separator: "/").map(String.init)
-        guard parts.last == "herdr.sock", parts.count >= 2 else { return name }
+        guard parts.last == "herdr.sock", parts.count >= 2 else { return nil }
         if parts.count >= 3, parts[parts.count - 3] == "sessions" { return parts[parts.count - 2] }
-        return parts[parts.count - 2] == "herdr" ? "default" : name
+        return parts[parts.count - 2] == "herdr" ? "default" : nil
     }
 
     /// Devices on the same machine share a sidebar group: every local device,

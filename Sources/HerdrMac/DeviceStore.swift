@@ -182,9 +182,12 @@ final class DeviceStore: ObservableObject {
         guard !session.isRemote else { return }
         let run = sessionRunner(session.executable)
         do {
-            let current = (try? await SessionControl.list(run)) ?? herdrSessions
+            // Fail closed: without herdr's list a named session would start bare.
+            let current = try await SessionControl.list(run)
             herdrSessions = current
-            guard let launch = SessionControl.serverLaunch(for: session.profile, in: current, environment: ProcessInfo.processInfo.environment) else { return }
+            guard let launch = SessionControl.serverLaunch(for: session.profile, in: current, environment: ProcessInfo.processInfo.environment) else {
+                throw HerdrError.message("herdr no longer lists this session.")
+            }
             try launchServer(session.executable, launch)
             await waitForSocket(session.profile.socketPath, present: true)
             session.reconnect()

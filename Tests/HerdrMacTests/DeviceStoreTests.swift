@@ -342,9 +342,11 @@ import HerdrCore
         FileManager.default.createFile(atPath: sideSocket, contents: Data())
         var commands: [[String]] = []
         var launches: [SessionControl.ServerLaunch] = []
+        var listFails = false
         let socketFor = ["side-projects": sideSocket, "simplied": stoppedSocket]
         let run: SessionControl.Runner = { args in
             commands.append(args)
+            if listFails, args.starts(with: ["session", "list"]) { throw HerdrError.message("session list failed") }
             if args.starts(with: ["session", "stop"]), let socket = socketFor[args[2]] { try? FileManager.default.removeItem(atPath: socket) }
             return args.starts(with: ["session", "list"]) ? listing() : ""
         }
@@ -379,6 +381,18 @@ import HerdrCore
         // The default session starts with a plain `herdr server` (its own data).
         await devices.startHerdrSession(devices.stoppedHerdrSessions[0])
         precondition(launches.last?.arguments == ["server"] && launches.count == 3)
+        // Without herdr's word for a session socket, nothing starts: a bare server there serves default's data.
+        devices.save(DeviceProfile(name: "Fresh", kind: .local, socketPath: root.appendingPathComponent("sessions/fresh/herdr.sock").path, executable: exe))
+        let fresh = devices.sessions.last!
+        listFails = true
+        await devices.startServer(for: fresh)
+        precondition(launches.count == 3, "A failed session list must not start a server")
+        precondition(devices.activeSession.operationError != nil, "A failed session list must show an error")
+        devices.activeSession.operationError = nil; listFails = false
+        await devices.startServer(for: fresh)
+        precondition(launches.count == 3, "A session herdr doesn't list must not start bare")
+        precondition(devices.activeSession.operationError != nil, "A session herdr doesn't list must show an error")
+        devices.activeSession.operationError = nil
         print("PASS: Start and Restart run herdr with the session's own name and no inherited herdr variables")
     }
 }

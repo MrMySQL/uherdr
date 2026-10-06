@@ -39,6 +39,8 @@ public enum SessionControl {
         }
     }
 
+    /// Nil for a remote device, or a herdr session socket missing from
+    /// `sessions`: a bare server there would serve the default session's data.
     public static func serverLaunch(for profile: DeviceProfile, in sessions: [HerdrSessionEntry],
                                     environment: [String: String]) -> ServerLaunch? {
         guard profile.kind == .local else { return nil }
@@ -46,6 +48,7 @@ public enum SessionControl {
         if let entry = session(for: profile, in: sessions) {
             return ServerLaunch(arguments: entry.isDefault ? ["server"] : ["--session", entry.name, "server"], environment: env)
         }
+        guard profile.pathSessionName == nil else { return nil }
         // A custom socket that herdr doesn't list as a session.
         env["HERDR_SOCKET_PATH"] = SessionDiscovery.normalized(profile.socketPath)
         return ServerLaunch(arguments: ["server"], environment: env)
