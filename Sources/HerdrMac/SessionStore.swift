@@ -674,7 +674,7 @@ struct ResourceTarget: Identifiable {
 }
 
 enum AppSheet: Identifiable {
-    case space, tab, rename(ResourceTarget), agent(String), settings
+    case space, tab, rename(ResourceTarget), agent(String), settings, shortcuts
     var id: String {
         switch self {
         case .space: return "space"
@@ -682,6 +682,7 @@ enum AppSheet: Identifiable {
         case .rename(let target): return "rename-\(target.id)"
         case .agent(let id): return "agent-\(id)"
         case .settings: return "settings"
+        case .shortcuts: return "shortcuts"
         }
     }
 }
