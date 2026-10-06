@@ -53,7 +53,7 @@ public enum ShortcutRange: Sendable {
 
 public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     case newSpace, selectSpace, renameSpace
-    case newTab, renameTab, selectTab, nextTab, previousTab, nextTabAlternate, previousTabAlternate
+    case newTab, renameTab, selectTab, nextTab, previousTab, nextTabAlternate, previousTabAlternate, closeTab
     case splitSideBySide, splitTopAndBottom, zoomPane, nextPane, previousPane, nextPaneAlternate, findInPane, closePane
     case nextMatch, previousMatch, nextMatchAlternate, previousMatchAlternate, closeSearch
     case showAgents, showSpaces
@@ -72,6 +72,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .previousTab: return KeyChord("tab", [.control, .shift])
         case .nextTabAlternate: return KeyChord("]", [.command, .shift])
         case .previousTabAlternate: return KeyChord("[", [.command, .shift])
+        case .closeTab: return KeyChord("w", .command)
         case .splitSideBySide: return KeyChord("d", .command)
         case .splitTopAndBottom: return KeyChord("d", [.command, .shift])
         case .zoomPane: return KeyChord("return", .command)
@@ -110,6 +111,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .selectTab: return "Select tab 1–9, tab 10"
         case .nextTab, .nextTabAlternate: return "Next tab"
         case .previousTab, .previousTabAlternate: return "Previous tab"
+        case .closeTab: return "Close tab"
         case .splitSideBySide: return "Split side by side"
         case .splitTopAndBottom: return "Split top and bottom"
         case .zoomPane: return "Zoom pane"
@@ -194,6 +196,7 @@ public struct ShortcutGroup: Identifiable, Sendable {
             ShortcutRow(title: "Select tab 1–9, tab 10", actions: [.selectTab]),
             ShortcutRow(title: "Next / previous tab", actions: [.nextTab, .previousTab]),
             ShortcutRow(title: "Next / previous tab", actions: [.nextTabAlternate, .previousTabAlternate]),
+            ShortcutRow(title: "Close tab", actions: [.closeTab]),
         ]),
         ShortcutGroup(title: "Panes", rows: [
             ShortcutRow(title: "Split side by side", actions: [.splitSideBySide]),

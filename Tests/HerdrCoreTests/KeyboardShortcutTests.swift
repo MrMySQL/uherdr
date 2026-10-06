@@ -18,7 +18,7 @@ enum KeyboardShortcutTests {
         // (HerdrApp.swift menus, the Ghostty key bindings and the pane search keys).
         let expected: [ShortcutAction: String] = [
             .newSpace: "⌘N", .renameSpace: "⇧⌘R", .newTab: "⌘T", .renameTab: "⌘R",
-            .nextTab: "⌃Tab", .previousTab: "⌃⇧Tab", .nextTabAlternate: "⇧⌘]", .previousTabAlternate: "⇧⌘[",
+            .nextTab: "⌃Tab", .previousTab: "⌃⇧Tab", .nextTabAlternate: "⇧⌘]", .previousTabAlternate: "⇧⌘[", .closeTab: "⌘W",
             .splitSideBySide: "⌘D", .splitTopAndBottom: "⇧⌘D", .zoomPane: "⌘↩", .nextPane: "⌘]", .previousPane: "⌘[",
             .nextPaneAlternate: "⌃`", .findInPane: "⌘F", .closePane: "⇧⌘W", .nextMatch: "↩", .previousMatch: "⇧↩",
             .nextMatchAlternate: "⌘G", .previousMatchAlternate: "⇧⌘G", .closeSearch: "⎋", .showAgents: "⇧⌘A", .showSpaces: "⇧⌘S",
