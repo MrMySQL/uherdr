@@ -167,7 +167,24 @@ import HerdrCore
         devices.sessions[2].workspaces = try spaces(["q1", "q2"])
         devices.sessions[3].workspaces = try spaces(["w1"])
         precondition(devices.workspaceShortcuts.map(\.workspace.id) == ["a1", "q1", "q2", "m1", "w1"])
-        print("PASS: sessions group by machine, take their names from sockets, and keep shortcuts in sidebar order")
+        // An SSH profile with the user in Username and an explicit port 22 joins the same machine.
+        let miniSplit = DeviceProfile(name: "Mini split", host: "mini.local", user: "alex", port: "22", executable: exe)
+        let joined = DeviceStore(defaults: defaults, profiles: [local, mini, miniSplit]) { _ in [] }
+        precondition(joined.machineGroups.map { $0.sessions.count } == [1, 2])
+        // Search: a host or any device's name shows its session even with nothing else matching.
+        func shown(_ text: String, _ mode: String = "agents") -> [String] {
+            let search = SidebarSearch(text: text, mode: mode)
+            return devices.machineGroups.flatMap { machine in
+                let machineMatches = search.machineMatches(machine)
+                return machine.sessions.filter { search.shows($0, machineMatches: machineMatches) }.map(\.profile.name)
+            }
+        }
+        precondition(shown("") == ["This Mac", "menqal", "Mac mini", "Mini work"])
+        precondition(shown("mini.local") == ["Mac mini", "Mini work"], "A host match shows sessions without agents")
+        precondition(shown("Mini work") == ["Mini work"], "A device that is not first in its group is found by name")
+        precondition(shown("q2", "spaces") == ["menqal"] && shown("q2") == [])
+        precondition(SidebarSearch(text: "mini.local", mode: "spaces").spaces(devices.sessions[1], machineMatches: false).map(\.id) == ["m1"])
+        print("PASS: sessions group by machine, take their names from sockets, and keep shortcuts in sidebar order; search finds hosts and every device name")
     }
 
     @MainActor static func testSessionDiscovery(socketA: String, socketB: String, exe: String) async throws {
@@ -212,12 +229,31 @@ import HerdrCore
         // An explicit discovery brings dismissed sessions back.
         await devices.discoverSessions(includeDismissed: true)
         precondition(devices.sessions.map(\.profile.name) == ["This Mac", "beta"])
+        // An explicit discovery during a periodic scan is queued, not dropped.
+        devices.remove(devices.sessions[1].profile.id)
+        precondition(devices.sessions.count == 1)
+        var gate: CheckedContinuation<Void, Never>?
+        let held = DeviceStore(defaults: defaults, profiles: [first]) { _ in
+            if gate == nil { await withCheckedContinuation { gate = $0 } }
+            return try SessionDiscovery.parse(listing)
+        }
+        defer { held.stop() }
+        let periodic = Task { await held.discoverSessions() }
+        for _ in 0..<80 where gate == nil { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(gate != nil, "The periodic scan must be in flight")
+        await held.discoverSessions(includeDismissed: true)
+        gate?.resume()
+        await periodic.value
+        precondition(held.sessions.map(\.profile.name) == ["This Mac", "beta"], "A queued explicit discovery restores dismissed sessions")
+        held.stop()
+        await devices.discoverSessions(includeDismissed: true)
+        precondition(devices.sessions.map(\.profile.name) == ["This Mac", "beta"])
         // A failing or older CLI changes nothing and raises no error.
         listerFails = true
         listing = #"{"sessions":[]}"#
         await devices.discoverSessions()
         precondition(devices.sessions.count == 2 && devices.activeSession.operationError == nil)
-        print("PASS: session discovery adds running sessions once, keeps saved devices, honours removal, and ignores CLI failures")
+        print("PASS: session discovery adds running sessions once, keeps saved devices, honours removal, queues explicit discovery, and ignores CLI failures")
     }
 
     @MainActor static func testMachineActions(exe: String) {

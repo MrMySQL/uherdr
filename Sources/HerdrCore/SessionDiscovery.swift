@@ -20,9 +20,10 @@ public enum SessionDiscovery {
     }
 
     /// Asks the local herdr CLI for its named sessions and their sockets.
+    /// The listing is read whole (up to 1 MB): a truncated one cannot be parsed.
     @MainActor public static func list(executable: String) async throws -> [HerdrSessionEntry] {
         let process = try ManagedProcess(executable: (executable as NSString).expandingTildeInPath,
-                                         arguments: ["session", "list", "--json"])
+                                         arguments: ["session", "list", "--json"], outputLimit: 1 << 20)
         return try parse(try await process.result(timeout: 8))
     }
 
@@ -42,8 +43,8 @@ public enum SessionDiscovery {
         for session in sessions where session.running {
             let socket = normalized(session.socketPath)
             guard socket.hasPrefix("/"), used.insert(socket).inserted else { continue }
-            var name = session.name
-            if names.contains(name) { name = "\(session.name) session" }
+            var name = session.name, clash = 1
+            while names.contains(name) { name = "\(session.name) session\(clash == 1 ? "" : " \(clash)")"; clash += 1 }
             names.insert(name)
             let profile = DeviceProfile(name: name, kind: .local, socketPath: socket, executable: executable)
             if profile.validationError == nil { result.append(profile) }
