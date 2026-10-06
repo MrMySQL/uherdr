@@ -64,6 +64,11 @@ enum AttentionTrackerTests {
         XCTAssertTrue(AttentionDelivery.shouldNotify(enabled: true, appActive: true, showingPane: false))
         XCTAssertTrue(!AttentionDelivery.shouldNotify(enabled: true, appActive: true, showingPane: true))
         XCTAssertTrue(!AttentionDelivery.shouldNotify(enabled: false, appActive: false, showingPane: false))
-        print("PASS: alerts on waiting and on every finish, once per agent per cooldown, per device, with baselines at first sight and after disconnect")
+        // A click that launched the app waits for its device to connect, but not forever.
+        XCTAssertTrue(!AttentionReveal.isReady(connected: false, waited: 0))
+        XCTAssertTrue(!AttentionReveal.isReady(connected: false, waited: AttentionReveal.timeout - 0.5))
+        XCTAssertTrue(AttentionReveal.isReady(connected: true, waited: 0))
+        XCTAssertTrue(AttentionReveal.isReady(connected: false, waited: AttentionReveal.timeout))
+        print("PASS: alerts on waiting and on every finish, once per agent per cooldown, per device, with baselines at first sight and after disconnect; launch clicks wait for their device")
     }
 }

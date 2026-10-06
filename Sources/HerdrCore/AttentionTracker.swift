@@ -19,6 +19,13 @@ public enum AttentionDelivery {
     }
 }
 
+/// A click can launch uHerdr before its devices connect, so its pane is
+/// revealed once that device connects, or after `timeout` regardless.
+public enum AttentionReveal {
+    public static let timeout: TimeInterval = 15
+    public static func isReady(connected: Bool, waited: TimeInterval) -> Bool { connected || waited >= timeout }
+}
+
 /// Finds agents that just finished or started waiting. Only a change from a
 /// known status counts, so agents already waiting at launch, on reconnect,
 /// or when first seen raise nothing. Pane IDs repeat across servers, so
