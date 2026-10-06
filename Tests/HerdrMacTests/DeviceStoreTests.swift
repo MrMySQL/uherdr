@@ -305,6 +305,13 @@ import HerdrCore
         print("PASS: machine edits apply to every session, and removing a machine keeps at least one device")
     }
 
+    /// Waits for `ready`, failing instead of hanging when it never comes.
+    @MainActor static func waitUntil(_ what: String, _ ready: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(5)
+        while !ready(), Date() < deadline { try? await Task.sleep(for: .milliseconds(1)) }
+        precondition(ready(), "Timed out waiting for \(what)")
+    }
+
     /// A second Stop or Remove for a session is refused while the first still runs.
     @MainActor static func testSessionActionsSerialize() async throws {
         let suiteName = "dev.herdr.session-serial-tests.\(UUID().uuidString)"
@@ -330,7 +337,7 @@ import HerdrCore
         let session = devices.sessions[1]
         precondition(!devices.isActing(session))
         let stopping = Task { await devices.stopHerdrSession(session) }
-        while held == nil { await Task.yield() }
+        await waitUntil("the fake herdr to hold a call") { held != nil }
         precondition(devices.isActing(session), "A running Stop marks its session busy")
         await devices.removeHerdrSession(session)
         await devices.stopHerdrSession(session)
@@ -416,7 +423,7 @@ import HerdrCore
         // A discovery that listed before Stop finishes after it and must not win.
         holdNext = true
         let staleStop = Task { await devices.discoverSessions() }
-        while held == nil { await Task.yield() }
+        await waitUntil("the fake herdr to hold a call") { held != nil }
         await devices.stopHerdrSession(work)
         precondition(devices.activeSession.operationError == nil, devices.activeSession.operationError ?? "")
         precondition(work.suspended && !work.connected, "A stopped session's device is disconnected")
@@ -428,7 +435,7 @@ import HerdrCore
         await devices.discoverSessions()
         holdNext = true
         let staleRemove = Task { await devices.discoverSessions() }
-        while held == nil { await Task.yield() }
+        await waitUntil("the fake herdr to hold a call") { held != nil }
         await devices.removeHerdrSession(work)
         held?.resume(); held = nil
         await staleRemove.value
