@@ -185,7 +185,7 @@ struct DeviceSidebarView: View {
         Button { devices.select(session); session.revealAgent(agent) } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Image(systemName: "sparkles").foregroundStyle(Color.accentColor)
+                    AgentIconView(agent: agent.agent, size: 14)
                     Text(agent.displayName).lineLimit(1)
                     Spacer(minLength: 0)
                 }.font(.system(size: 12, weight: .medium))
