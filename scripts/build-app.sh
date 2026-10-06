@@ -8,6 +8,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 BIN_DIR="$(swift build -c release --show-bin-path)"
 cp "$BIN_DIR/Herdr" "$APP/Contents/MacOS/Herdr"
 cp -R "$BIN_DIR/GhosttyKit_GhosttyTerminal.bundle" "$APP/Contents/Resources/"
+cp -R "$BIN_DIR/HerdrMac_HerdrMac.bundle" "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
