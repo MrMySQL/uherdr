@@ -35,9 +35,9 @@ enum AttentionTrackerTests {
         XCTAssertEqual(tracker.update(device: a, agents: [try agent("wC:p1", "blocked")], now: at(gap * 2 + 1 + AttentionTracker.cooldown - 0.5)).count, 0)
         _ = tracker.update(device: a, agents: [try agent("wC:p1", "working")], now: at(gap * 2 + 1 + AttentionTracker.cooldown))
         XCTAssertEqual(tracker.update(device: a, agents: [try agent("wC:p1", "blocked")], now: at(gap * 2 + 1 + AttentionTracker.cooldown)).map(\.paneID), ["wC:p1"])
-        // Another agent is not held back by the first one's cooldown.
-        _ = tracker.update(device: a, agents: [try agent("wC:p1", "blocked"), try agent("wC:p2", "working")], now: at(gap * 4))
-        XCTAssertEqual(tracker.update(device: a, agents: [try agent("wC:p1", "working"), try agent("wC:p2", "idle")], now: at(gap * 4 + 1)).map(\.paneID), ["wC:p2"])
+        // Another agent is not held back by the first one's cooldown, which is still running.
+        _ = tracker.update(device: a, agents: [try agent("wC:p1", "blocked"), try agent("wC:p2", "working")], now: at(gap * 2 + 1 + AttentionTracker.cooldown + 1))
+        XCTAssertEqual(tracker.update(device: a, agents: [try agent("wC:p1", "working"), try agent("wC:p2", "idle")], now: at(gap * 2 + 1 + AttentionTracker.cooldown + 2)).map(\.paneID), ["wC:p2"])
         // A new agent that appears already waiting is a baseline too.
         XCTAssertEqual(tracker.update(device: a, agents: [try agent("wC:p9", "blocked")], now: at(gap * 5)).count, 0)
         // The same pane ID on another device is tracked separately.
