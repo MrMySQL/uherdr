@@ -74,9 +74,14 @@ public struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
     }
 
     /// Devices on the same machine share a sidebar group: every local device,
-    /// or SSH devices with the same host, user and port.
+    /// or SSH devices with the same effective host, user and port, so
+    /// `alex@host` matches `host` with Username `alex`, and no port matches 22.
     public var machineKey: String {
-        kind == .local ? "local" : "ssh:\(host.lowercased())|\(user)|\(port)"
+        if kind == .local { return "local" }
+        let at = host.lastIndex(of: "@")
+        let machineHost = at.map { String(host[host.index(after: $0)...]) } ?? host
+        let machineUser = at.map { String(host[..<$0]) } ?? user
+        return "ssh:\(machineHost)|\(machineUser)|\(Int(port) ?? 22)".lowercased()
     }
 
     /// Herdr derives its binary terminal socket from the API filename's stem.
