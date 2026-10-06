@@ -391,7 +391,7 @@ struct TerminalSurface: NSViewRepresentable {
             },
             resize: { [weak self] viewport in
                 DispatchQueue.main.async { [weak self] in
-                    self?.resize(cols: Int(viewport.columns), rows: Int(viewport.rows))
+                    self?.viewportChanged(viewport)
                 }
             },
             pasteRejected: { [weak self] in
@@ -429,6 +429,20 @@ struct TerminalSurface: NSViewRepresentable {
                 engine.setColorScheme(dark ? .dark : .light)
                 self.dark = dark
             }
+        }
+
+        private lazy var startGate = TerminalStartGate(
+            isStarted: { [weak self] in self?.started ?? true },
+            viewSize: { [weak self] in
+                let bounds = self?.view?.bounds ?? .zero
+                return (Double(bounds.width), Double(bounds.height), Double(self?.view?.window?.backingScaleFactor ?? 0))
+            },
+            schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated(work) } },
+            deliver: { [weak self] cols, rows in self?.resize(cols: cols, rows: rows) })
+
+        private func viewportChanged(_ viewport: InMemoryTerminalViewport) {
+            startGate.report(.init(columns: Int(viewport.columns), rows: Int(viewport.rows),
+                                   widthPixels: viewport.widthPixels, heightPixels: viewport.heightPixels))
         }
 
         private func resize(cols: Int, rows: Int) {
