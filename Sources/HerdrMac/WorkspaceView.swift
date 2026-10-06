@@ -253,7 +253,7 @@ struct WorkspaceView: View {
                     .padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
             }
             HStack {
-                Button("Edit device…") { devices.editor = DeviceEditorTarget(profile: store.profile) }
+                Button("Edit device…") { devices.editor = DeviceEditorTarget(profile: store.profile, sessionOnly: true) }
                 Button(store.connecting ? "Connecting…" : "Connect") { store.reconnect() }.disabled(store.connecting)
                 if !store.isRemote {
                     Button("Start server") { store.startServer(); store.reconnect() }.buttonStyle(.borderedProminent)

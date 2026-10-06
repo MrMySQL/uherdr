@@ -153,12 +153,13 @@ struct DeviceSidebarView: View {
             Button("Disconnect") { session.disconnect() }.disabled(session.suspended)
             if herdrSession != nil {
                 Button("Stop session…") { devices.pendingSessionAction = .stop(session.profile.id) }
-                    .disabled(herdrSession?.running != true)
+                    .disabled(herdrSession?.running != true || devices.isActing(session))
             }
-            Button("Edit socket…") { devices.editor = DeviceEditorTarget(profile: session.profile) }
+            Button("Edit socket…") { devices.editor = DeviceEditorTarget(profile: session.profile, sessionOnly: true) }
             if devices.canRemoveHerdrSession(session) {
                 Divider()
                 Button("Remove session…", role: .destructive) { devices.pendingSessionAction = .remove(session.profile.id) }
+                    .disabled(devices.isActing(session))
             } else if devices.sessions.count > 1 {
                 Divider()
                 Button("Remove from list…", role: .destructive) { devices.pendingRemoval = session.profile.id }

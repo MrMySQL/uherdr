@@ -17,6 +17,7 @@ import HerdrCore
         try testMachineGroups(exe: exe)
         testMachineActions(exe: exe)
         try await testSessionActionOrdering()
+        try await testSessionActionsSerialize()
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -279,6 +280,15 @@ import HerdrCore
         devices.save(edited, machine: ssh)
         precondition(devices.sessions.filter(\.isRemote).allSatisfy { $0.profile.host == "alex@mini2.invalid" && $0.profile.port == "2222" })
         precondition(devices.sessions[2].profile.socketPath == miniWork.socketPath, "A machine edit keeps each session's own socket")
+        // A session edit changes its socket but never the machine's shared connection.
+        var sessionEdit = devices.sessions[2].profile
+        sessionEdit.host = "sam@elsewhere.invalid"; sessionEdit.port = "2200"
+        sessionEdit.socketPath = "~/.config/herdr/sessions/play/herdr.sock"
+        devices.save(sessionEdit, sessionOnly: true)
+        precondition(devices.sessions[2].profile.socketPath == sessionEdit.socketPath)
+        precondition(devices.sessions[2].profile.host == "alex@mini2.invalid" && devices.sessions[2].profile.port == "2222",
+                     "A session edit must not change the machine's SSH connection")
+        precondition(devices.machineGroups.count == 2, "A session edit must not split its machine")
         // Removing the machine removes all its sessions and hides nothing locally.
         let machine = devices.machineGroups[1].id
         precondition(devices.canRemoveMachine(machine))
@@ -292,6 +302,43 @@ import HerdrCore
         onlySSH.removeMachine(onlySSH.machineGroups[0].id)
         precondition(onlySSH.sessions.count == 2)
         print("PASS: machine edits apply to every session, and removing a machine keeps at least one device")
+    }
+
+    /// A second Stop or Remove for a session is refused while the first still runs.
+    @MainActor static func testSessionActionsSerialize() async throws {
+        let suiteName = "dev.herdr.session-serial-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let workSocket = "/tmp/uh-session-serial/herdr/sessions/work/herdr.sock"
+        let listing = #"{"sessions":[{"default":false,"name":"work","running":true,"socket_path":"\#(workSocket)"}]}"#
+        let keep = DeviceProfile(name: "keep", kind: .local, socketPath: "/tmp/uh-session-serial/custom.sock", executable: "/usr/bin/true")
+        let work = DeviceProfile(name: "work", kind: .local, socketPath: workSocket, executable: "/usr/bin/true")
+        var commands: [[String]] = []
+        var held: CheckedContinuation<Void, Never>?
+        var holdStop = true
+        let run: SessionControl.Runner = { args in
+            commands.append(args)
+            // Only the first stop waits, so a second action fails the checks instead of hanging.
+            if args.starts(with: ["session", "stop"]), holdStop { holdStop = false; await withCheckedContinuation { held = $0 } }
+            return args == ["session", "list", "--json"] ? listing : ""
+        }
+        let devices = DeviceStore(defaults: defaults, profiles: [keep, work], sessionLister: { _ in try SessionDiscovery.parse(listing) },
+                                  sessionRunner: { _ in run })
+        defer { devices.stop() }
+        await devices.discoverSessions()
+        let session = devices.sessions[1]
+        precondition(!devices.isActing(session))
+        let stopping = Task { await devices.stopHerdrSession(session) }
+        while held == nil { await Task.yield() }
+        precondition(devices.isActing(session), "A running Stop marks its session busy")
+        await devices.removeHerdrSession(session)
+        await devices.stopHerdrSession(session)
+        precondition(commands.filter { $0.starts(with: ["session", "stop"]) }.count == 1, "\(commands)")
+        precondition(!commands.contains { $0.starts(with: ["session", "delete"]) }, "A Remove during a Stop must not start")
+        held?.resume(); held = nil
+        await stopping.value
+        precondition(!devices.isActing(session) && devices.sessions.count == 2)
+        print("PASS: one Stop or Remove at a time per session")
     }
 
     /// Stop/Remove against a fake herdr CLI, racing an older discovery.
