@@ -388,8 +388,12 @@ struct PaneCard: View {
         HStack(spacing: 8) {
             Image(systemName: "line.3.horizontal")
                 .font(.system(size: 9)).foregroundStyle(.tertiary)
-            Image(systemName: pane.agent == nil ? "terminal" : "sparkles")
-                .font(.system(size: 10)).foregroundStyle(selected ? Color.accentColor : .secondary)
+            if pane.agent != nil, AgentIcon.image(for: pane.agent) != nil {
+                AgentIconView(agent: pane.agent, size: 12)
+            } else {
+                Image(systemName: pane.agent == nil ? "terminal" : "sparkles")
+                    .font(.system(size: 10)).foregroundStyle(selected ? Color.accentColor : .secondary)
+            }
             Text(pane.displayTitle).font(.system(size: 11, weight: .medium)).lineLimit(1)
             if pane.agent != nil { StatusBadge(status: pane.agentStatus) }
             Spacer(minLength: 4)
