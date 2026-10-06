@@ -8,24 +8,31 @@ enum KeyboardShortcutTests {
         XCTAssertEqual(listed.count, ShortcutAction.allCases.count)
         XCTAssertEqual(Set(listed), Set(ShortcutAction.allCases))
         XCTAssertEqual(ShortcutGroup.all.map(\.title), ["Spaces", "Tabs", "Panes", "Sidebar", "Terminal", "App"])
-        // No two defaults share a chord, counting every digit of a range.
-        let chords = ShortcutAction.allCases.flatMap { $0.chords(for: $0.defaultChord) }
-        XCTAssertEqual(chords.count, Set(chords).count)
+        // No two defaults that can fire together share a chord, counting every digit of a range.
+        // An open pane search takes keys from the terminal, so only those two may overlap.
+        for live in [ShortcutAction.allCases.filter { !$0.isPaneSearchBinding }, ShortcutAction.allCases.filter { !$0.isTerminalBinding }] {
+            let chords = live.flatMap { $0.chords(for: $0.defaultChord) }
+            XCTAssertEqual(chords.count, Set(chords).count)
+        }
         // The defaults are the shortcuts the app had before this table
-        // (HerdrApp.swift menus and the Ghostty key bindings).
+        // (HerdrApp.swift menus, the Ghostty key bindings and the pane search keys).
         let expected: [ShortcutAction: String] = [
             .newSpace: "⌘N", .renameSpace: "⇧⌘R", .newTab: "⌘T", .renameTab: "⌘R",
             .nextTab: "⌃Tab", .previousTab: "⌃⇧Tab", .nextTabAlternate: "⇧⌘]", .previousTabAlternate: "⇧⌘[",
             .splitSideBySide: "⌘D", .splitTopAndBottom: "⇧⌘D", .zoomPane: "⌘↩", .nextPane: "⌘]", .previousPane: "⌘[",
-            .nextPaneAlternate: "⌃`", .findInPane: "⌘F", .closePane: "⇧⌘W", .showAgents: "⇧⌘A", .showSpaces: "⇧⌘S",
-            .copy: "⌘C", .paste: "⌘V", .largerText: "⌘+", .largerTextAlternate: "⌘=", .smallerText: "⌘-",
+            .nextPaneAlternate: "⌃`", .findInPane: "⌘F", .closePane: "⇧⌘W", .nextMatch: "↩", .previousMatch: "⇧↩",
+            .nextMatchAlternate: "⌘G", .previousMatchAlternate: "⇧⌘G", .closeSearch: "⎋", .showAgents: "⇧⌘A", .showSpaces: "⇧⌘S",
+            .copy: "⌘C", .paste: "⌘V", .selectAll: "⌘A", .largerText: "⌘+", .largerTextAlternate: "⌘=", .smallerText: "⌘-",
             .newLine: "⇧↩", .settings: "⌘,", .keyboardShortcuts: "⌘/",
         ]
+        XCTAssertEqual(Set(expected.keys), Set(ShortcutAction.allCases.filter { $0.range == nil }))
         for (action, display) in expected { XCTAssertEqual(action.defaultChord.display, display) }
         XCTAssertEqual(ShortcutAction.selectSpace.keycaps(for: ShortcutAction.selectSpace.defaultChord), ["⌘1–⌘9"])
         XCTAssertEqual(ShortcutAction.selectTab.keycaps(for: ShortcutAction.selectTab.defaultChord), ["⌃1–⌃9", "⌃0"])
         XCTAssertEqual(ShortcutAction.selectTab.chords(for: KeyChord("x", .control)).map(\.key), ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"])
-        XCTAssertEqual(Set(ShortcutAction.allCases.filter(\.isTerminalBinding)), [.copy, .paste, .newLine])
+        XCTAssertEqual(Set(ShortcutAction.allCases.filter(\.isTerminalBinding)), [.copy, .paste, .selectAll, .newLine])
+        XCTAssertEqual(Set(ShortcutAction.allCases.filter(\.isPaneSearchBinding)),
+                       [.nextMatch, .previousMatch, .nextMatchAlternate, .previousMatchAlternate, .closeSearch])
         // Search matches titles, group names and keys.
         let defaults: (ShortcutAction) -> KeyChord? = { $0.defaultChord }
         XCTAssertEqual(ShortcutGroup.filtered("zoom", chord: defaults).flatMap(\.rows).map(\.title), ["Zoom pane"])
@@ -34,7 +41,13 @@ enum KeyboardShortcutTests {
                        ["Select space 1–9 (sidebar order)", "Show agents", "Show spaces"])
         XCTAssertEqual(ShortcutGroup.filtered("  ", chord: defaults).count, ShortcutGroup.all.count)
         XCTAssertTrue(ShortcutGroup.filtered("no such shortcut", chord: defaults).isEmpty)
-        print("PASS: shortcut table covers every action once, keeps today's defaults without clashes, and searches")
+        // The sheet splits into two columns, or one when a search leaves a side empty.
+        let columns = { (query: String) in ShortcutGroup.columns(ShortcutGroup.filtered(query, chord: defaults)).map { $0.map(\.title) } }
+        XCTAssertEqual(columns(""), [["Spaces", "Tabs", "Panes"], ["Sidebar", "Terminal", "App"]])
+        XCTAssertEqual(columns("zoom"), [["Panes"]])
+        XCTAssertEqual(columns("settings"), [["App"]])
+        XCTAssertEqual(columns("no such shortcut"), [])
+        print("PASS: shortcut table covers every action once, keeps today's defaults without clashes, searches, and fills one or two columns")
         try! runBindings()
     }
 
@@ -97,13 +110,22 @@ enum KeyboardShortcutTests {
         terminal.assign(KeyChord("v", .command), to: .closePane)
         XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=select_all", "ctrl+shift+c=copy_to_clipboard",
                                                   "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
-        // ⌘A selects all only while no action has it, or the terminal would take it first.
+        // Giving ⌘A to an action is a clash with Select All, which Replace clears from the terminal.
+        XCTAssertEqual(terminal.clashes(for: KeyChord("a", .command), assigningTo: .showAgents), [.selectAll])
         terminal.assign(KeyChord("a", .command), to: .showAgents)
         XCTAssertEqual(terminal.ghosttyKeybinds, ["ctrl+shift+c=copy_to_clipboard", "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
         terminal.assign(KeyChord("a", .command), to: .copy)
         XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=copy_to_clipboard", "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
+        // Select All follows its own shortcut, and Reset gives ⌘A back.
         terminal.assign(KeyChord("c", .command), to: .copy)
+        terminal.assign(KeyChord("a", [.command, .control]), to: .selectAll)
+        XCTAssertEqual(terminal.ghosttyKeybinds.first, "ctrl+super+a=select_all")
+        XCTAssertTrue(terminal.reset([.selectAll]) == nil)
         XCTAssertEqual(terminal.ghosttyKeybinds.first, "super+a=select_all")
+        // Pane search keys are fixed and hold no keys outside its field: ⇧↩ stays New line's.
+        XCTAssertTrue(ShortcutAction.allCases.filter { !$0.isEditable } == ShortcutAction.allCases.filter(\.isPaneSearchBinding))
+        XCTAssertEqual(ShortcutBindings().clashes(for: KeyChord("return", .shift), assigningTo: .newLine), [])
+        XCTAssertEqual(ShortcutBindings().clashes(for: KeyChord("g", .command), assigningTo: .showAgents), [])
         // The change flow: invalid keys first, then a clash, then the terminal warning, each once.
         let plain = ShortcutBindings()
         XCTAssertEqual(ShortcutChangeStep.next(for: KeyChord("k", .shift), action: .findInPane, in: plain), .invalid)

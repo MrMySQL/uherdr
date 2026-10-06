@@ -14,6 +14,7 @@ struct KeyboardShortcutsSheet: View {
         /// Row actions a Reset still puts back once this one is replaced.
         var resetAfter: [ShortcutAction] = []
     }
+    @FocusState private var searchFocused: Bool
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var settings = ShortcutSettings.shared
@@ -34,7 +35,7 @@ struct KeyboardShortcutsSheet: View {
                 Spacer()
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.tertiary)
-                    TextField("Search shortcuts", text: $search).textFieldStyle(.plain)
+                    TextField("Search shortcuts", text: $search).textFieldStyle(.plain).focused($searchFocused)
                 }
                 .font(.system(size: 12)).padding(.horizontal, 9).padding(.vertical, 6).frame(width: 260)
                 .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
@@ -46,8 +47,7 @@ struct KeyboardShortcutsSheet: View {
                     Text("No shortcut matches “\(search)”.").foregroundStyle(.secondary).padding(40)
                 } else {
                     HStack(alignment: .top, spacing: 40) {
-                        column(groups.filter { ["Spaces", "Tabs", "Panes"].contains($0.title) })
-                        column(groups.filter { !["Spaces", "Tabs", "Panes"].contains($0.title) })
+                        ForEach(Array(ShortcutGroup.columns(groups).enumerated()), id: \.offset) { _, groups in column(groups) }
                     }
                     .padding(24)
                 }
@@ -58,12 +58,12 @@ struct KeyboardShortcutsSheet: View {
                 Spacer()
                 Button("Reset all") { cancelEditing(); settings.update { $0.resetAll() } }
                     .disabled(bindings.changedCount == 0)
-                Button("Done") { cancelEditing(); dismiss() }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                Button("Done") { cancelEditing(); dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(.borderedProminent)
             }
             .padding(.horizontal, 24).padding(.vertical, 14)
         }
         .frame(width: 860, height: 680)
-        .onAppear(perform: installKeyMonitor)
+        .onAppear { installKeyMonitor(); searchFocused = true }
         .onDisappear(perform: removeKeyMonitor)
     }
 
@@ -126,6 +126,13 @@ struct KeyboardShortcutsSheet: View {
             Keycap(text: "Press new shortcut…", highlighted: true)
         } else if let pending, pending.action == action {
             ForEach(Array(action.keycaps(for: pending.chord).enumerated()), id: \.offset) { _, cap in Keycap(text: cap, highlighted: true) }
+        } else if !action.isEditable {
+            HStack(spacing: 4) {
+                ForEach(Array((bindings.chord(for: action).map { action.keycaps(for: $0) } ?? []).enumerated()), id: \.offset) { _, cap in
+                    Keycap(text: cap)
+                }
+            }
+            .help("\(action.title) works only while Find in pane is open and can't be changed")
         } else {
             Button { startRecording(action) } label: {
                 HStack(spacing: 4) {

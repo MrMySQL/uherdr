@@ -7,6 +7,7 @@ extension KeyChord {
         switch key {
         case "return": return .return
         case "tab": return .tab
+        case "escape": return .escape
         default: return KeyEquivalent(Character(key))
         }
     }
