@@ -341,9 +341,12 @@ import HerdrCore
         precondition(!devices.isActing(session) && devices.sessions.count == 2)
         // Restart holds its session until its new server starts, including while it
         // waits for the old server's socket to go away after the stop.
-        try FileManager.default.createDirectory(atPath: (workSocket as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(atPath: "/tmp/uh-session-serial") }
-        FileManager.default.createFile(atPath: workSocket, contents: Data())
+        let restartRoot = "/tmp/uh-session-restart-\(UUID().uuidString)"
+        let restartSocket = "\(restartRoot)/herdr/sessions/work/herdr.sock"
+        try FileManager.default.createDirectory(atPath: (restartSocket as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: restartRoot) }
+        FileManager.default.createFile(atPath: restartSocket, contents: Data())
+        let restartWork = DeviceProfile(name: "work", kind: .local, socketPath: restartSocket, executable: "/usr/bin/true")
         var running = true
         var lists = 0
         var restartCommands: [[String]] = []
@@ -353,12 +356,12 @@ import HerdrCore
             if args.starts(with: ["session", "stop"]) { running = false }
             if args == ["session", "list", "--json"] { lists += 1 }
             return args == ["session", "list", "--json"]
-                ? #"{"sessions":[{"default":false,"name":"work","running":\#(running),"socket_path":"\#(workSocket)"}]}"# : ""
+                ? #"{"sessions":[{"default":false,"name":"work","running":\#(running),"socket_path":"\#(restartSocket)"}]}"# : ""
         }
-        let restarting = DeviceStore(defaults: defaults, profiles: [keep, work], sessionLister: { _ in [] },
+        let restarting = DeviceStore(defaults: defaults, profiles: [keep, restartWork], sessionLister: { _ in [] },
                                      sessionRunner: { _ in restartRun }, launchServer: { _, launch in
             launches.append(launch)
-            FileManager.default.createFile(atPath: workSocket, contents: Data())
+            FileManager.default.createFile(atPath: restartSocket, contents: Data())
         })
         defer { restarting.stop() }
         let restartSession = restarting.sessions[1]
@@ -371,7 +374,7 @@ import HerdrCore
         await restarting.stopHerdrSession(restartSession)
         precondition(launches.isEmpty && restartCommands.filter { $0.starts(with: ["session", "stop"]) }.count == 1,
                      "Start and Stop wait for a running Restart: \(restartCommands)")
-        try FileManager.default.removeItem(atPath: workSocket)
+        try FileManager.default.removeItem(atPath: restartSocket)
         await restart.value
         precondition(launches.map(\.arguments) == [["--session", "work", "server"]] && !restarting.isActing(restartSession))
         print("PASS: one Start, Stop, Restart or Remove at a time per session")
