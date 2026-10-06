@@ -14,10 +14,12 @@ struct DeviceEditorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(target.isNew ? "Add a device" : target.machineID != nil ? "Edit SSH connection" : "Edit device").font(.system(size: 22, weight: .semibold))
+            Text(target.isNew ? "Add a device" : target.machineID != nil ? "Edit SSH connection" : target.sessionOnly ? "Edit session" : "Edit device").font(.system(size: 22, weight: .semibold))
             Form {
                 TextField("Name", text: $profile.name)
-                if profile.kind == .ssh {
+                if profile.kind == .ssh && target.sessionOnly {
+                    TextField("Remote socket", text: $profile.socketPath, prompt: Text("Automatic"))
+                } else if profile.kind == .ssh {
                     TextField("SSH host", text: $profile.host, prompt: Text("alex@mac-mini.local or SSH alias"))
                     TextField("Username", text: $profile.user, prompt: Text("From host or SSH config"))
                     TextField("Port", text: $profile.port, prompt: Text("From SSH config, otherwise 22"))
@@ -28,7 +30,10 @@ struct DeviceEditorSheet: View {
                 }
                 TextField("Local herdr executable", text: $profile.executable)
             }.textFieldStyle(.roundedBorder)
-            if profile.kind == .ssh {
+            if profile.kind == .ssh && target.sessionOnly {
+                Text("This machine's sessions share one SSH connection. Change it with Edit SSH connection in the machine's menu.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if profile.kind == .ssh {
                 Text("Uses your SSH keys, agent, and ~/.ssh/config. Enable Remote Login on the other Mac and connect with SSH once in Terminal to verify its host key. Password-only login is not supported here.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Start herdr on the other device first. Leave Remote socket empty for its default session, or enter ~/.config/herdr/sessions/<name>/herdr.sock for a named session. A compatible herdr CLI is also needed on this Mac.")
@@ -40,7 +45,7 @@ struct DeviceEditorSheet: View {
             HStack {
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Save and connect") { devices.save(normalized, machine: target.machineID); dismiss() }
+                Button("Save and connect") { devices.save(normalized, machine: target.machineID, sessionOnly: target.sessionOnly); dismiss() }
                     .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
                     .disabled(normalized.validationError != nil)
             }

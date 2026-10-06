@@ -118,7 +118,13 @@ final class DeviceStore: ObservableObject {
     }
 
     /// A machine edit also applies its SSH connection to the machine's other sessions.
-    func save(_ profile: DeviceProfile, machine machineID: String? = nil) {
+    /// A session edit keeps the machine's SSH connection, so its sessions stay together.
+    func save(_ profile: DeviceProfile, machine machineID: String? = nil, sessionOnly: Bool = false) {
+        var profile = profile
+        if sessionOnly, let existing = sessions.first(where: { $0.profile.id == profile.id })?.profile, existing.kind == .ssh {
+            profile.host = existing.host; profile.user = existing.user
+            profile.port = existing.port; profile.identityFile = existing.identityFile
+        }
         guard profile.validationError == nil else { return }
         if let machineID, let machine = machine(machineID), machine.isRemote {
             for other in machine.sessions where other.profile.id != profile.id {
@@ -272,10 +278,19 @@ final class DeviceStore: ObservableObject {
         }
     }
 
+    /// Sessions with a Stop or Remove still running; their actions stay disabled.
+    @Published private(set) var actingSessions: Set<UUID> = []
+    func isActing(_ session: SessionStore) -> Bool { actingSessions.contains(session.profile.id) }
+
     /// Re-reads the session list first, so the action uses herdr's current state.
+    /// One action per session at a time; another is refused until it finishes.
     @discardableResult
     private func runSessionAction(on session: SessionStore,
                                   _ action: @MainActor (HerdrSessionEntry, SessionControl.Runner) async throws -> Void) async -> Bool {
+        let id = session.profile.id
+        guard !actingSessions.contains(id) else { return false }
+        actingSessions.insert(id)
+        defer { actingSessions.remove(id) }
         let run = sessionRunner(session.executable)
         do {
             let current = try await SessionControl.list(run)
@@ -352,6 +367,8 @@ struct DeviceEditorTarget: Identifiable {
     var isNew = false
     /// Set when editing a whole SSH machine's connection.
     var machineID: String?
+    /// Editing one session: its socket and executable, not the machine's SSH connection.
+    var sessionOnly = false
 }
 
 enum SessionAction: Identifiable {

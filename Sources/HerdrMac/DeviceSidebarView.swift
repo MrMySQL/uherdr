@@ -164,14 +164,16 @@ struct DeviceSidebarView: View {
                 if herdrSession.running {
                     Button("Restart session…") { devices.pendingSessionAction = .restart(session.profile.id) }
                     Button("Stop session…") { devices.pendingSessionAction = .stop(session.profile.id) }
+                        .disabled(devices.isActing(session))
                 } else {
                     Button("Start session") { Task { await devices.startServer(for: session) } }
                 }
             }
-            Button("Edit socket…") { devices.editor = DeviceEditorTarget(profile: session.profile) }
+            Button("Edit socket…") { devices.editor = DeviceEditorTarget(profile: session.profile, sessionOnly: true) }
             if devices.canRemoveHerdrSession(session) {
                 Divider()
                 Button("Remove session…", role: .destructive) { devices.pendingSessionAction = .remove(session.profile.id) }
+                    .disabled(devices.isActing(session))
             } else if devices.sessions.count > 1 {
                 Divider()
                 Button("Remove from list…", role: .destructive) { devices.pendingRemoval = session.profile.id }
