@@ -13,8 +13,9 @@ public enum SessionControl {
             // A session name is explicit; an inherited session must not redirect it.
             env.removeValue(forKey: "HERDR_SESSION")
             env.removeValue(forKey: "HERDR_SOCKET_PATH")
+            // `session list` can pass ManagedProcess's default 16 KB bound.
             let process = try ManagedProcess(executable: (executable as NSString).expandingTildeInPath,
-                                             arguments: arguments, environment: env)
+                                             arguments: arguments, environment: env, outputLimit: 1 << 20)
             return try await process.result(timeout: 20)
         }
     }

@@ -20,6 +20,10 @@ final class DeviceStore: ObservableObject {
     private let launchServer: @MainActor (String, SessionControl.ServerLaunch) throws -> Void
     private var discoveryTask: Task<Void, Never>?
     private var discovering = false
+    /// Bumped after a session action, so an older in-flight listing is discarded.
+    private var listingGeneration = 0
+    /// An explicit discovery that arrived mid-scan; it runs once the scan ends.
+    private var explicitDiscoveryQueued = false
 
     init(defaults: UserDefaults = .standard, profiles: [DeviceProfile]? = nil,
          sessionLister: @escaping @MainActor (String) async throws -> [HerdrSessionEntry] = { try await SessionDiscovery.list(executable: $0) },
@@ -73,12 +77,28 @@ final class DeviceStore: ObservableObject {
 
     /// Adds a local device for each running herdr session on this Mac that no
     /// device uses yet. Failures are silent: older herdr CLIs lack `session list`.
+    /// `includeDismissed` also restores removed sessions; it is queued, not
+    /// dropped, while another scan runs.
     func discoverSessions(includeDismissed: Bool = false) async {
-        guard !discovering else { return }
+        guard !discovering else {
+            if includeDismissed { explicitDiscoveryQueued = true }
+            return
+        }
         discovering = true
         defer { discovering = false }
+        var includeDismissed = includeDismissed
+        while true {
+            await scanSessions(includeDismissed: includeDismissed)
+            guard explicitDiscoveryQueued else { return }
+            explicitDiscoveryQueued = false
+            includeDismissed = true
+        }
+    }
+
+    private func scanSessions(includeDismissed: Bool) async {
+        let generation = listingGeneration
         let executable = sessions.first { !$0.isRemote }?.executable ?? SessionStore.findExecutable()
-        guard let found = try? await sessionLister(executable) else { return }
+        guard let found = try? await sessionLister(executable), generation == listingGeneration else { return }
         herdrSessions = found
         if includeDismissed { defaults.removeObject(forKey: SessionDiscovery.dismissedKey) }
         let dismissed = Set(defaults.stringArray(forKey: SessionDiscovery.dismissedKey) ?? [])
@@ -144,6 +164,11 @@ final class DeviceStore: ObservableObject {
 
     func canRemoveHerdrSession(_ session: SessionStore) -> Bool {
         sessions.count > 1 && herdrSession(for: session).map(SessionControl.canDelete) == true
+    }
+
+    /// Whether a device sheet or confirmation is showing.
+    var isPresenting: Bool {
+        editor != nil || pendingRemoval != nil || pendingSessionAction != nil || pendingMachineRemoval != nil
     }
 
     func machine(_ id: String) -> MachineGroup? { machineGroups.first { $0.id == id } }
@@ -225,8 +250,12 @@ final class DeviceStore: ObservableObject {
         try process.run()
     }
 
+    /// A stopped session's device is disconnected instead of polling a dead socket.
     func stopHerdrSession(_ session: SessionStore) async {
-        await runSessionAction(on: session) { entry, run in try await SessionControl.stop(entry.name, run) }
+        await runSessionAction(on: session) { entry, run in
+            try await SessionControl.stop(entry.name, run)
+            session.disconnect()
+        }
     }
 
     /// Stops the session if needed, deletes it from herdr, then removes it here.
@@ -250,7 +279,8 @@ final class DeviceStore: ObservableObject {
                 throw HerdrError.message("herdr no longer lists this session.")
             }
             try await action(entry, run)
-            await discoverSessions()
+            listingGeneration += 1
+            if let after = try? await SessionControl.list(run) { herdrSessions = after }
             return true
         } catch {
             activeSession.operationError = error.localizedDescription
@@ -281,6 +311,34 @@ struct MachineGroup: Identifiable {
     let isRemote: Bool
     var sessions: [SessionStore]
     var powerStatus: DevicePowerStatus? { sessions.lazy.compactMap { $0.powerStatus }.first }
+}
+
+/// Sidebar search. A machine, session, device or host match shows the whole
+/// session; otherwise only its matching spaces or agents show.
+@MainActor
+struct SidebarSearch {
+    let text: String
+    let mode: String
+
+    func matches(_ value: String) -> Bool { text.isEmpty || value.localizedCaseInsensitiveContains(text) }
+    func machineMatches(_ machine: MachineGroup) -> Bool { !text.isEmpty && matches(machine.name) }
+    func sessionMatches(_ session: SessionStore, machineMatches: Bool) -> Bool {
+        machineMatches || [session.profile.sessionName, session.profile.name, session.profile.host].contains(where: matches)
+    }
+    func spaces(_ session: SessionStore, machineMatches: Bool) -> [Workspace] {
+        let whole = sessionMatches(session, machineMatches: machineMatches)
+        return session.workspaces.filter { whole || matches($0.label) }
+    }
+    func agents(_ session: SessionStore, machineMatches: Bool) -> [Agent] {
+        let whole = sessionMatches(session, machineMatches: machineMatches)
+        return session.agents.filter { agent in
+            whole || matches(agent.displayName) || matches(session.workspaces.first(where: { $0.id == agent.workspaceID })?.label ?? "")
+        }
+    }
+    func shows(_ session: SessionStore, machineMatches: Bool) -> Bool {
+        sessionMatches(session, machineMatches: machineMatches)
+            || (mode == "spaces" ? !spaces(session, machineMatches: false).isEmpty : !agents(session, machineMatches: false).isEmpty)
+    }
 }
 
 struct DeviceEditorTarget: Identifiable {

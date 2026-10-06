@@ -17,6 +17,7 @@ import HerdrCore
         try testMachineGroups(exe: exe)
         testMachineActions(exe: exe)
         try await testServerStart(exe: exe)
+        try await testSessionActionOrdering()
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -167,7 +168,24 @@ import HerdrCore
         devices.sessions[2].workspaces = try spaces(["q1", "q2"])
         devices.sessions[3].workspaces = try spaces(["w1"])
         precondition(devices.workspaceShortcuts.map(\.workspace.id) == ["a1", "q1", "q2", "m1", "w1"])
-        print("PASS: sessions group by machine, take their names from sockets, and keep shortcuts in sidebar order")
+        // An SSH profile with the user in Username and an explicit port 22 joins the same machine.
+        let miniSplit = DeviceProfile(name: "Mini split", host: "mini.local", user: "alex", port: "22", executable: exe)
+        let joined = DeviceStore(defaults: defaults, profiles: [local, mini, miniSplit]) { _ in [] }
+        precondition(joined.machineGroups.map { $0.sessions.count } == [1, 2])
+        // Search: a host or any device's name shows its session even with nothing else matching.
+        func shown(_ text: String, _ mode: String = "agents") -> [String] {
+            let search = SidebarSearch(text: text, mode: mode)
+            return devices.machineGroups.flatMap { machine in
+                let machineMatches = search.machineMatches(machine)
+                return machine.sessions.filter { search.shows($0, machineMatches: machineMatches) }.map(\.profile.name)
+            }
+        }
+        precondition(shown("") == ["This Mac", "menqal", "Mac mini", "Mini work"])
+        precondition(shown("mini.local") == ["Mac mini", "Mini work"], "A host match shows sessions without agents")
+        precondition(shown("Mini work") == ["Mini work"], "A device that is not first in its group is found by name")
+        precondition(shown("q2", "spaces") == ["menqal"] && shown("q2") == [])
+        precondition(SidebarSearch(text: "mini.local", mode: "spaces").spaces(devices.sessions[1], machineMatches: false).map(\.id) == ["m1"])
+        print("PASS: sessions group by machine, take their names from sockets, and keep shortcuts in sidebar order; search finds hosts and every device name")
     }
 
     @MainActor static func testSessionDiscovery(socketA: String, socketB: String, exe: String) async throws {
@@ -212,12 +230,31 @@ import HerdrCore
         // An explicit discovery brings dismissed sessions back.
         await devices.discoverSessions(includeDismissed: true)
         precondition(devices.sessions.map(\.profile.name) == ["This Mac", "beta"])
+        // An explicit discovery during a periodic scan is queued, not dropped.
+        devices.remove(devices.sessions[1].profile.id)
+        precondition(devices.sessions.count == 1)
+        var gate: CheckedContinuation<Void, Never>?
+        let held = DeviceStore(defaults: defaults, profiles: [first]) { _ in
+            if gate == nil { await withCheckedContinuation { gate = $0 } }
+            return try SessionDiscovery.parse(listing)
+        }
+        defer { held.stop() }
+        let periodic = Task { await held.discoverSessions() }
+        for _ in 0..<80 where gate == nil { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(gate != nil, "The periodic scan must be in flight")
+        await held.discoverSessions(includeDismissed: true)
+        gate?.resume()
+        await periodic.value
+        precondition(held.sessions.map(\.profile.name) == ["This Mac", "beta"], "A queued explicit discovery restores dismissed sessions")
+        held.stop()
+        await devices.discoverSessions(includeDismissed: true)
+        precondition(devices.sessions.map(\.profile.name) == ["This Mac", "beta"])
         // A failing or older CLI changes nothing and raises no error.
         listerFails = true
         listing = #"{"sessions":[]}"#
         await devices.discoverSessions()
         precondition(devices.sessions.count == 2 && devices.activeSession.operationError == nil)
-        print("PASS: session discovery adds running sessions once, keeps saved devices, honours removal, and ignores CLI failures")
+        print("PASS: session discovery adds running sessions once, keeps saved devices, honours removal, queues explicit discovery, and ignores CLI failures")
     }
 
     @MainActor static func testMachineActions(exe: String) {
@@ -232,6 +269,12 @@ import HerdrCore
         defer { devices.stop() }
         let ssh = devices.machineGroups[1].id
         precondition(!devices.canRemoveMachine(devices.machineGroups[0].id), "This Mac is never removed as a machine")
+        // Any device confirmation blocks app commands.
+        precondition(!devices.isPresenting)
+        devices.pendingSessionAction = .stop(local.id); precondition(devices.isPresenting); devices.pendingSessionAction = nil
+        devices.pendingMachineRemoval = ssh; precondition(devices.isPresenting); devices.pendingMachineRemoval = nil
+        devices.pendingRemoval = local.id; precondition(devices.isPresenting); devices.pendingRemoval = nil
+        devices.editor = DeviceEditorTarget(profile: local); precondition(devices.isPresenting); devices.editor = nil
         // Editing the machine's connection applies it to every session on it.
         var edited = mini; edited.host = "alex@mini2.invalid"; edited.port = "2222"
         devices.save(edited, machine: ssh)
@@ -250,6 +293,70 @@ import HerdrCore
         onlySSH.removeMachine(onlySSH.machineGroups[0].id)
         precondition(onlySSH.sessions.count == 2)
         print("PASS: machine edits apply to every session, and removing a machine keeps at least one device")
+    }
+
+    /// Stop/Remove against a fake herdr CLI, racing an older discovery.
+    @MainActor static func testSessionActionOrdering() async throws {
+        let suiteName = "dev.herdr.session-order-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = "/tmp/uh-session-order-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let defaultSocket = "\(root)/herdr/herdr.sock", workSocket = "\(root)/herdr/sessions/work/herdr.sock"
+        func listing(work: Bool?) -> String {
+            let entry = work.map { #",{"default":false,"name":"work","running":\#($0),"socket_path":"\#(workSocket)"}"# } ?? ""
+            return #"{"sessions":[{"default":true,"name":"default","running":false,"socket_path":"\#(defaultSocket)"}\#(entry)]}"#
+        }
+        // A fake launcher records Start, so no server is launched.
+        var launches: [SessionControl.ServerLaunch] = []
+        let first = DeviceProfile(name: "default", kind: .local, socketPath: defaultSocket, executable: "/usr/bin/true")
+        let second = DeviceProfile(name: "work", kind: .local, socketPath: workSocket, executable: "/usr/bin/true")
+        var state = listing(work: true)
+        var holdNext = false
+        var held: CheckedContinuation<Void, Never>?
+        let run: SessionControl.Runner = { args in
+            if args == ["session", "stop", "work"] { state = listing(work: false) }
+            if args == ["session", "delete", "work"] { state = listing(work: nil) }
+            return args == ["session", "list", "--json"] ? state : ""
+        }
+        let devices = DeviceStore(defaults: defaults, profiles: [first, second], sessionLister: { _ in
+            let snapshot = state
+            if holdNext { holdNext = false; await withCheckedContinuation { held = $0 } }
+            return try SessionDiscovery.parse(snapshot)
+        }, sessionRunner: { _ in run }, launchServer: { _, launch in launches.append(launch) })
+        defer { devices.stop() }
+        await devices.discoverSessions()
+        let work = devices.sessions[1]
+        precondition(devices.herdrSession(for: work)?.running == true)
+        // A discovery that listed before Stop finishes after it and must not win.
+        holdNext = true
+        let staleStop = Task { await devices.discoverSessions() }
+        while held == nil { await Task.yield() }
+        await devices.stopHerdrSession(work)
+        precondition(devices.activeSession.operationError == nil, devices.activeSession.operationError ?? "")
+        precondition(work.suspended && !work.connected, "A stopped session's device is disconnected")
+        held?.resume(); held = nil
+        await staleStop.value
+        precondition(devices.herdrSession(for: work)?.running == false, "An older listing overwrote the stop")
+        // Nor may an older listing bring back a removed session.
+        state = listing(work: true)
+        await devices.discoverSessions()
+        holdNext = true
+        let staleRemove = Task { await devices.discoverSessions() }
+        while held == nil { await Task.yield() }
+        await devices.removeHerdrSession(work)
+        held?.resume(); held = nil
+        await staleRemove.value
+        precondition(devices.sessions.map(\.profile.id) == [first.id], "An older listing re-added the removed session")
+        // Starting the default server reconnects its device.
+        let defaultDevice = devices.sessions[0]
+        defaultDevice.disconnect()
+        let stoppedDefault = devices.stoppedHerdrSessions.first(where: \.isDefault)
+        precondition(stoppedDefault != nil)
+        await devices.startHerdrSession(stoppedDefault!)
+        precondition(launches.map(\.arguments) == [["server"]], "\(launches)")
+        precondition(!defaultDevice.suspended, "Start herdr server must reconnect the default session")
+        print("PASS: Stop disconnects its device, older discoveries never overwrite an action, and Start reconnects")
     }
 
     /// Stops and deletes server A's real session through herdr's CLI.
@@ -284,6 +391,7 @@ import HerdrCore
         precondition(devices.activeSession.operationError == nil, devices.activeSession.operationError ?? "")
         precondition(!FileManager.default.fileExists(atPath: socketA), "Stopping must end server A")
         precondition(devices.herdrSession(for: a)?.running == false && devices.sessions.count == 2)
+        precondition(a.suspended, "A stopped session's device is disconnected")
         // Remove: herdr deletes the session directory and the device goes away.
         let sessionDir = URL(fileURLWithPath: socketA).deletingLastPathComponent().path
         precondition(FileManager.default.fileExists(atPath: sessionDir))

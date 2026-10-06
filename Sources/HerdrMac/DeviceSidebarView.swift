@@ -47,7 +47,7 @@ struct DeviceSidebarView: View {
         devices.editor = DeviceEditorTarget(profile: DeviceProfile(name: "", executable: devices.activeSession.executable), isNew: true)
     }
 
-    private func matches(_ text: String) -> Bool { search.isEmpty || text.localizedCaseInsensitiveContains(search) }
+    private var filter: SidebarSearch { SidebarSearch(text: search, mode: devices.sidebarMode) }
 
     private func isCollapsed(_ key: String) -> Bool { search.isEmpty && collapsed.contains(key) }
     private func toggle(_ key: String) {
@@ -59,24 +59,9 @@ struct DeviceSidebarView: View {
         }.buttonStyle(.plain).help("Expand or collapse")
     }
 
-    private func visibleSpaces(_ session: SessionStore, machineMatches: Bool) -> [Workspace] {
-        let sessionMatches = machineMatches || matches(session.profile.sessionName) || (!search.isEmpty && matches(session.profile.host))
-        return session.workspaces.filter { sessionMatches || matches($0.label) }
-    }
-    private func visibleAgents(_ session: SessionStore, machineMatches: Bool) -> [Agent] {
-        let sessionMatches = machineMatches || matches(session.profile.sessionName) || (!search.isEmpty && matches(session.profile.host))
-        return session.agents.filter { agent in
-            sessionMatches || matches(agent.displayName) || matches(session.workspaces.first(where: { $0.id == agent.workspaceID })?.label ?? "")
-        }
-    }
-    private func showsSession(_ session: SessionStore, machineMatches: Bool) -> Bool {
-        if machineMatches || matches(session.profile.sessionName) { return true }
-        return devices.sidebarMode == "spaces" ? !visibleSpaces(session, machineMatches: false).isEmpty : !visibleAgents(session, machineMatches: false).isEmpty
-    }
-
     @ViewBuilder private func machineGroup(_ machine: MachineGroup) -> some View {
-        let machineMatches = !search.isEmpty && matches(machine.name)
-        let sessions = machine.sessions.filter { showsSession($0, machineMatches: machineMatches) }
+        let machineMatches = filter.machineMatches(machine)
+        let sessions = machine.sessions.filter { filter.shows($0, machineMatches: machineMatches) }
         if !sessions.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -98,8 +83,8 @@ struct DeviceSidebarView: View {
 
     @ViewBuilder private func sessionSection(_ session: SessionStore, machineMatches: Bool) -> some View {
         let key = session.profile.id.uuidString
-        let spaces = visibleSpaces(session, machineMatches: machineMatches)
-        let agents = visibleAgents(session, machineMatches: machineMatches)
+        let spaces = filter.spaces(session, machineMatches: machineMatches)
+        let agents = filter.agents(session, machineMatches: machineMatches)
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 chevron(key)
