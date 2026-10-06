@@ -68,9 +68,10 @@ public struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
     public var sessionName: String { pathSessionName ?? name }
 
     /// The session a herdr-shaped socket path names; nil for a custom socket.
+    /// Read after standardizing, so `..` can't hide a session socket.
     public var pathSessionName: String? {
         if kind == .ssh && socketPath.isEmpty { return "default" }
-        let parts = socketPath.split(separator: "/").map(String.init)
+        let parts = (socketPath as NSString).standardizingPath.split(separator: "/").map(String.init)
         guard parts.last == "herdr.sock", parts.count >= 2 else { return nil }
         if parts.count >= 3, parts[parts.count - 3] == "sessions" { return parts[parts.count - 2] }
         return parts[parts.count - 2] == "herdr" ? "default" : nil

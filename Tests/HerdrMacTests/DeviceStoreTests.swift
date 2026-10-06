@@ -489,6 +489,11 @@ import HerdrCore
         // The default session starts with a plain `herdr server` (its own data).
         await devices.startHerdrSession(devices.stoppedHerdrSessions[0])
         precondition(launches.last?.arguments == ["server"] && launches.count == 3)
+        // Starting a session herdr lists as running reconnects instead of launching a second server.
+        side.disconnect()
+        await devices.startServer(for: side)
+        precondition(launches.count == 3, "A running session must not get a second server")
+        precondition(devices.activeSession.operationError == nil && !side.suspended, "Start on a running session reconnects")
         // Without herdr's word for a session socket, nothing starts: a bare server there serves default's data.
         devices.save(DeviceProfile(name: "Fresh", kind: .local, socketPath: root.appendingPathComponent("sessions/fresh/herdr.sock").path, executable: exe))
         let fresh = devices.sessions.last!

@@ -210,6 +210,11 @@ final class DeviceStore: ObservableObject {
             // Fail closed: without herdr's list a named session would start bare.
             let current = try await SessionControl.list(run)
             herdrSessions = current
+            // Already running: a second server would fight the first for the socket.
+            if SessionControl.session(for: session.profile, in: current)?.running == true {
+                session.reconnect()
+                return
+            }
             guard let launch = SessionControl.serverLaunch(for: session.profile, in: current, environment: ProcessInfo.processInfo.environment) else {
                 throw HerdrError.message("herdr no longer lists this session.")
             }

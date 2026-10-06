@@ -140,11 +140,16 @@ struct DeviceSidebarView: View {
                 }
             } else {
                 Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
-                Menu("Start session") {
-                    ForEach(devices.stoppedHerdrSessions, id: \.socketPath) { entry in
-                        Button(entry.name) { Task { await devices.startHerdrSession(entry) } }
+                // A disabled submenu still opens (empty) inside a menu, so show a plain item instead.
+                if devices.stoppedHerdrSessions.isEmpty {
+                    Button("Start session") {}.disabled(true)
+                } else {
+                    Menu("Start session") {
+                        ForEach(devices.stoppedHerdrSessions, id: \.socketPath) { entry in
+                            Button(entry.name) { Task { await devices.startHerdrSession(entry) } }
+                        }
                     }
-                }.disabled(devices.stoppedHerdrSessions.isEmpty)
+                }
             }
         } label: { Image(systemName: "ellipsis") }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Machine actions")

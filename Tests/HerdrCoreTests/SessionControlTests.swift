@@ -58,6 +58,10 @@ enum SessionControlTests {
         XCTAssertTrue(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/gone/herdr.sock"), in: sessions, environment: inherited) == nil)
         XCTAssertTrue(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/menqal/herdr.sock"), in: [], environment: inherited) == nil)
         XCTAssertTrue(SessionControl.serverLaunch(for: local("/tmp/xdg/herdr/herdr.sock"), in: sessions, environment: inherited) == nil)
+        // `..` can't make a session socket look custom.
+        XCTAssertTrue(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/old/../gone/herdr.sock"), in: sessions, environment: inherited) == nil)
+        XCTAssertTrue(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/gone/../../herdr.sock"), in: [], environment: inherited) == nil)
+        XCTAssertEqual(local("/Users/alex/.config/herdr/sessions/old/../gone/herdr.sock").pathSessionName, "gone")
         XCTAssertEqual(SessionControl.serverLaunch(for: local("/tmp/uh/herdr.sock"), in: [], environment: inherited),
                        SessionControl.ServerLaunch(arguments: ["server"], environment: clean.merging(["HERDR_SOCKET_PATH": "/tmp/uh/herdr.sock"]) { $1 }))
         print("PASS: session stop and delete use herdr's CLI, stop before delete, and never delete default")
