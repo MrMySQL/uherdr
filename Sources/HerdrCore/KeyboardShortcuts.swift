@@ -56,6 +56,8 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     case splitSideBySide, splitTopAndBottom, zoomPane, nextPane, previousPane, nextPaneAlternate, findInPane, closePane
     case showAgents, showSpaces
     case copy, paste, largerText, largerTextAlternate, smallerText, newLine
+    case saveFile, quickOpen, searchInSpace, markdownPreview, findAndReplace, goToLine
+    case toggleRightSidebar, showFiles, showChanges
     case settings, keyboardShortcuts
 
     public var defaultChord: KeyChord {
@@ -87,6 +89,16 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .largerTextAlternate: return KeyChord("=", .command)
         case .smallerText: return KeyChord("-", .command)
         case .newLine: return KeyChord("return", .shift)
+        case .saveFile: return KeyChord("s", .command)
+        case .quickOpen: return KeyChord("p", .command)
+        case .searchInSpace: return KeyChord("f", [.command, .shift])
+        // Not ⇧⌘V: clipboard managers (Flycut, among others) take it system-wide.
+        case .markdownPreview: return KeyChord("v", [.command, .option])
+        case .findAndReplace: return KeyChord("f", [.command, .option])
+        case .goToLine: return KeyChord("l", .command)
+        case .toggleRightSidebar: return KeyChord("b", [.command, .option])
+        case .showFiles: return KeyChord("e", [.command, .shift])
+        case .showChanges: return KeyChord("g", [.command, .shift])
         case .settings: return KeyChord(",", .command)
         case .keyboardShortcuts: return KeyChord("/", .command)
         }
@@ -118,6 +130,15 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .largerText, .largerTextAlternate: return "Larger text"
         case .smallerText: return "Smaller text"
         case .newLine: return "New line"
+        case .saveFile: return "Save file"
+        case .quickOpen: return "Quick Open"
+        case .searchInSpace: return "Search in space"
+        case .markdownPreview: return "Markdown edit or preview"
+        case .findAndReplace: return "Find and replace in file"
+        case .goToLine: return "Go to line"
+        case .toggleRightSidebar: return "Show or hide the right sidebar"
+        case .showFiles: return "Files"
+        case .showChanges: return "Changes"
         case .settings: return "Settings"
         case .keyboardShortcuts: return "Keyboard shortcuts"
         }
@@ -197,6 +218,19 @@ public struct ShortcutGroup: Identifiable, Sendable {
             ShortcutRow(title: "Larger text", actions: [.largerText, .largerTextAlternate]),
             ShortcutRow(title: "Smaller text", actions: [.smallerText]),
             ShortcutRow(title: "New line in Claude Code and Codex", actions: [.newLine]),
+        ]),
+        ShortcutGroup(title: "Editor", rows: [
+            ShortcutRow(title: "Save file", actions: [.saveFile]),
+            ShortcutRow(title: "Quick Open", actions: [.quickOpen]),
+            ShortcutRow(title: "Search in space", actions: [.searchInSpace]),
+            ShortcutRow(title: "Markdown edit or preview", actions: [.markdownPreview]),
+            ShortcutRow(title: "Find and replace in file", actions: [.findAndReplace]),
+            ShortcutRow(title: "Go to line", actions: [.goToLine]),
+        ]),
+        ShortcutGroup(title: "Right sidebar", rows: [
+            ShortcutRow(title: "Show or hide the right sidebar", actions: [.toggleRightSidebar]),
+            ShortcutRow(title: "Files", actions: [.showFiles]),
+            ShortcutRow(title: "Changes", actions: [.showChanges]),
         ]),
         ShortcutGroup(title: "App", rows: [
             ShortcutRow(title: "Settings", actions: [.settings]),

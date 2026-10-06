@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 swift build -c release --product Herdr
+bash scripts/fetch-ripgrep.sh
 APP="$PWD/dist/Herdr.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -38,6 +39,10 @@ PLIST
 cp Vendor/GhosttyTerminal/LICENSE "$APP/Contents/Resources/GhosttyTerminal-LICENSE"
 cp .build/checkouts/MSDisplayLink/LICENSE "$APP/Contents/Resources/MSDisplayLink-LICENSE"
 cp docs/licenses/Ghostty-LICENSE "$APP/Contents/Resources/Ghostty-LICENSE"
+cp docs/licenses/MaterialIconTheme-LICENSE "$APP/Contents/Resources/MaterialIconTheme-LICENSE"
+# ripgrep for Search on this Mac, and Linux builds for "Install for uHerdr" on SSH devices.
+cp -R .build/ripgrep "$APP/Contents/Resources/ripgrep"
+for f in COPYING LICENSE-MIT UNLICENSE; do cp "docs/licenses/ripgrep-$f" "$APP/Contents/Resources/ripgrep-$f"; done
 swift scripts/make-icon.swift .build/Herdr.iconset
 iconutil -c icns .build/Herdr.iconset -o "$APP/Contents/Resources/Herdr.icns"
 codesign --force --deep --sign - "$APP"

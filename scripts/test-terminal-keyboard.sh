@@ -13,6 +13,7 @@ while IFS= read -r object; do
 done < "$KEYBOARD_BUILD_DIR/Herdr.product/Objects.LinkFileList"
 swiftc -parse-as-library -I "$KEYBOARD_BUILD_DIR/Modules" \
     -I .build/artifacts/ghosttyterminal/libghostty/GhosttyKit.xcframework/macos-arm64_x86_64/Headers \
+    -I .build/checkouts/swift-cmark/src/include -I .build/checkouts/swift-cmark/extensions/include \
     -L "$KEYBOARD_BUILD_DIR" -lghostty -lc++ -framework Carbon \
     Tests/HerdrMacTests/TerminalKeyboardTests.swift Tests/HerdrMacTests/GhosttyLiveTests.swift Tests/HerdrMacTests/AgentFileDropTests.swift "${KEYBOARD_OBJECTS[@]}" \
     -o "$KEYBOARD_BUILD_DIR/TerminalKeyboardTests"

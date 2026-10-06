@@ -23,10 +23,13 @@ for _ in {1..50}; do
 done
 if [ ! -S "$TEST_SOCKET" ]; then cat "$TEST_ROOT/server.log" >&2; exit 1; fi
 swift run HerdrCoreTests --live "$TEST_SOCKET"
+swift run HerdrMarkdownTests
 bash scripts/test-device-power.sh
 ./scripts/test-hotkeys.sh
 bash scripts/test-pane-search.sh
 bash scripts/test-agent-worktree.sh
+bash scripts/test-workspace-roots.sh
+bash scripts/test-editor-store.sh
 bash scripts/test-tab-drag.sh
 bash scripts/test-pane-drag.sh --live "$TEST_SOCKET"
 bash scripts/test-terminal-keyboard.sh --live "$TEST_SOCKET" "$HERDR_TEST_BIN"

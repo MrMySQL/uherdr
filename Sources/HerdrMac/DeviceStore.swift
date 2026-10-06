@@ -121,6 +121,8 @@ final class DeviceStore: ObservableObject {
     }
 
     func remove(_ id: UUID) { remove(id, dismiss: true) }
+    /// Lets the editors drop a removed device's drafts and remembered tabs.
+    var onRemove: ((UUID) -> Void)?
 
     private func remove(_ id: UUID, dismiss: Bool) {
         guard sessions.count > 1, let session = sessions.first(where: { $0.profile.id == id }) else { return }
@@ -131,6 +133,8 @@ final class DeviceStore: ObservableObject {
             defaults.set(dismissed, forKey: SessionDiscovery.dismissedKey)
         }
         session.disconnect()
+        defaults.removeObject(forKey: WorkspaceRoots.preferencesKey(profile: id))
+        onRemove?(id)
         sessions.removeAll { $0.profile.id == id }
         if selectedDeviceID == id { selectedDeviceID = sessions[0].profile.id }
         observeSessions()

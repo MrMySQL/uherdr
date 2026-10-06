@@ -60,6 +60,11 @@ final class SessionStore: ObservableObject {
     @Published private(set) var protocolVersion: Int?
     @Published var sheet: AppSheet?
     @Published var pendingClose: ResourceTarget?
+    enum FocusOwner: Equatable { case terminal, sidebar, editor }
+    /// Which part of the window has the keyboard. A terminal takes focus back
+    /// by itself only while terminals own it, so a refresh can't pull focus
+    /// out of the Files tree or an editor.
+    @Published var focusOwner: FocusOwner = .terminal
     @Published var connectionGeneration = UUID()
     @Published private(set) var profile: DeviceProfile
     @Published private(set) var effectiveSocketPath: String
@@ -74,6 +79,11 @@ final class SessionStore: ObservableObject {
     var displayName: String { isRemote ? "\(profile.name) · \(profile.sessionName)" : profile.sessionName }
     var defaultDirectory: String { isRemote ? remoteHome ?? "/tmp" : NSHomeDirectory() }
     @Published private var tabOrder: [String: [String]]
+    /// Each space's folder for the right sidebar; herdr keeps none.
+    @Published private(set) var workspaceRoots: WorkspaceRoots
+    /// Bumped when a folder is remembered, so a snapshot read before a new
+    /// space existed can't prune that space's folder.
+    private var rootsRevision = 0
     private let defaults: UserDefaults
     private let tunnel: SSHTunnel
     private let fileTransfer: RemoteFileTransfer
@@ -98,6 +108,7 @@ final class SessionStore: ObservableObject {
         self.defaults = defaults
         self.powerReader = powerReader
         tabOrder = defaults.dictionary(forKey: "tabOrder:\(profile.id.uuidString)") as? [String: [String]] ?? [:]
+        workspaceRoots = WorkspaceRoots.load(profile: profile.id, from: defaults)
         self.tunnel = tunnel ?? SSHTunnel()
         self.fileTransfer = fileTransfer ?? RemoteFileTransfer()
         let socket = profile.kind == .local ? (profile.socketPath as NSString).expandingTildeInPath : ""
@@ -115,6 +126,13 @@ final class SessionStore: ObservableObject {
     }
 
     var currentSpace: Workspace? { workspaces.first { $0.id == selectedSpace } }
+    var currentRoot: String? { selectedSpace.flatMap { workspaceRoots.root(for: $0) } }
+
+    func setRoot(_ path: String, for workspaceID: String) {
+        workspaceRoots.remember(path, for: workspaceID)
+        rootsRevision += 1
+        workspaceRoots.save(profile: profile.id, to: defaults)
+    }
     var currentTab: HerdrCore.Tab? { tabs.first { $0.id == selectedTab } }
     var currentPane: Pane? { panes.first { $0.id == selectedPane } }
     var visibleTabs: [HerdrCore.Tab] {
@@ -219,6 +237,10 @@ final class SessionStore: ObservableObject {
         start()
     }
 
+    /// Called when an SSH device disconnects (the app closes its shared
+    /// connection). A hook, so this file still compiles on its own in tests.
+    static var remoteDisconnected: ((UUID) -> Void)?
+
     func disconnect() {
         pollTask?.cancel(); pollTask = nil
         clearPowerStatus()
@@ -230,7 +252,10 @@ final class SessionStore: ObservableObject {
         pendingSplitResizes = 0
         tunnel.stop()
         suspended = true; connected = false; connecting = false; busy = false
-        if isRemote { effectiveSocketPath = "" }
+        if isRemote {
+            effectiveSocketPath = ""
+            Self.remoteDisconnected?(profile.id)
+        }
     }
 
     func updateProfile(_ value: DeviceProfile) {
@@ -254,6 +279,7 @@ final class SessionStore: ObservableObject {
         }
         let revision = selectionRevision
         let expectedLayoutRevision = layoutRevision
+        let expectedRootsRevision = rootsRevision
         do {
             let path: String
             if isRemote {
@@ -273,6 +299,13 @@ final class SessionStore: ObservableObject {
             if version != snapshot.version { version = snapshot.version }
             if protocolVersion != snapshot.protocolVersion { protocolVersion = snapshot.protocolVersion }
             if workspaces != snapshot.workspaces { workspaces = snapshot.workspaces }
+            // Prune a copy: mutating the published value would notify on every
+            // poll, even when nothing was dropped.
+            var roots = workspaceRoots
+            if expectedRootsRevision == rootsRevision, roots.prune(keeping: Set(snapshot.workspaces.map(\.id))) {
+                workspaceRoots = roots
+                roots.save(profile: profile.id, to: defaults)
+            }
             if tabs != snapshot.tabs { tabs = snapshot.tabs }
             if panes != snapshot.panes { panes = snapshot.panes }
             if agents != snapshot.agents { agents = snapshot.agents }
@@ -354,6 +387,7 @@ final class SessionStore: ObservableObject {
 
     func selectTab(_ tab: HerdrCore.Tab) {
         selectionRevision += 1
+        if focusOwner != .terminal { focusOwner = .terminal }
         selectedSpace = tab.workspaceID
         selectedTab = tab.id
         selectedPane = layouts[tab.id]?.resolveSelectedPane(nil) ?? panes.first { $0.tabID == tab.id }?.id
@@ -362,6 +396,7 @@ final class SessionStore: ObservableObject {
     }
 
     func focusPane(_ id: String) {
+        if focusOwner != .terminal { focusOwner = .terminal }
         guard selectedPane != id else { return }
         selectedPane = id
         perform("pane.focus", params: ["pane_id": .string(id)], showBusy: false)
@@ -404,6 +439,7 @@ final class SessionStore: ObservableObject {
         perform("workspace.create", params: ["label": .string(label), "cwd": .string(cwd), "focus": .bool(true)]) { [weak self] result in
             self?.selectionRevision += 1
             self?.selectedSpace = result["workspace"]["workspace_id"].string
+            if let space = result["workspace"]["workspace_id"].string { self?.setRoot(cwd, for: space) }
             self?.selectedTab = result["tab"]["tab_id"].string
             self?.selectedPane = result["root_pane"]["pane_id"].string
         }
@@ -624,6 +660,8 @@ final class SessionStore: ObservableObject {
                 guard generation == connectionGeneration else { return }
                 createdWorktree = true
                 let rootPane = try created["root_pane"].decode(Pane.self)
+                // A new pane has not run `cd` yet, so its cwd is the worktree.
+                if let worktree = rootPane.cwd, worktree.hasPrefix("/") { setRoot(worktree, for: rootPane.workspaceID) }
                 selectionRevision += 1
                 selectedSpace = rootPane.workspaceID
                 selectedTab = rootPane.tabID

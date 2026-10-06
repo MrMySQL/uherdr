@@ -457,7 +457,7 @@ struct TerminalSurface: NSViewRepresentable {
 
         func focusIfSelected() {
             guard !stopped, visible, !searching, let view, !view.isHiddenOrHasHiddenAncestor, let store, store.selectedPane == paneID,
-                  store.sheet == nil, store.pendingClose == nil else { return }
+                  store.sheet == nil, store.pendingClose == nil, store.focusOwner == .terminal else { return }
             view.acquireProgrammaticFocus()
         }
 
@@ -494,6 +494,9 @@ struct TerminalSurface: NSViewRepresentable {
                       event.window === view.window,
                       view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return event }
                 if event.type == .leftMouseDown {
+                    // A click in a terminal gives terminals the keyboard again,
+                    // even when this pane was already the selected one.
+                    if self.store?.focusOwner != .terminal { self.store?.focusOwner = .terminal }
                     self.store?.focusPane(self.paneID)
                     return event
                 }

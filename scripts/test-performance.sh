@@ -16,6 +16,7 @@ while IFS= read -r object; do
 done < "$PERFORMANCE_BUILD/Herdr.product/Objects.LinkFileList"
 swiftc -parse-as-library -I "$PERFORMANCE_BUILD/Modules" \
     -I .build/artifacts/ghosttyterminal/libghostty/GhosttyKit.xcframework/macos-arm64_x86_64/Headers \
+    -I .build/checkouts/swift-cmark/src/include -I .build/checkouts/swift-cmark/extensions/include \
     -L "$PERFORMANCE_BUILD" -lghostty -lc++ -framework Carbon \
     Tests/HerdrMacTests/TerminalPerformanceTests.swift Tests/HerdrMacTests/TerminalRepaintTests.swift Tests/HerdrMacTests/PaneResizeTests.swift "${PERFORMANCE_OBJECTS[@]}" \
     -o "$PERFORMANCE_BUILD/TerminalPerformanceTests"
