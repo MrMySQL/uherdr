@@ -4,6 +4,7 @@ import HerdrCore
 let herdrAccentColor = Color(red: 0.34, green: 0.73, blue: 0.58)
 
 struct WorkspaceView: View {
+    @ObservedObject private var shortcuts = ShortcutSettings.shared
     @ObservedObject var store: SessionStore
     @ObservedObject var devices: DeviceStore
     @StateObject private var shortcutHints = ShortcutHintMonitor()
@@ -68,7 +69,9 @@ struct WorkspaceView: View {
         .accentColor(herdrAccentColor)
         .frame(minWidth: 840, minHeight: 520)
         .preferredColorScheme(store.colorScheme)
-        .sheet(item: $store.sheet) { sheet in EditorSheet(sheet: sheet, store: store) }
+        .sheet(item: $store.sheet) { sheet in
+            if case .shortcuts = sheet { KeyboardShortcutsSheet() } else { EditorSheet(sheet: sheet, store: store) }
+        }
         .sheet(item: $devices.editor) { target in DeviceEditorSheet(target: target, devices: devices) }
         .alert("Remove device?", isPresented: Binding(get: { devices.pendingRemoval != nil }, set: { if !$0 { devices.pendingRemoval = nil } })) {
             Button("Cancel", role: .cancel) { devices.pendingRemoval = nil }
@@ -184,8 +187,8 @@ struct WorkspaceView: View {
                                     AgentIconStack(agents: agents, background: Color(nsColor: .windowBackgroundColor))
                                 }
                                 Text(tab.label).lineLimit(1)
-                                if let key = AppHotkeys.tabSelectionKey(at: index) {
-                                    Text("⌃\(String(key))").font(.system(size: 10, design: .monospaced))
+                                if let key = AppHotkeys.tabSelectionKey(at: index), let chord = shortcuts.bindings.chord(for: .selectTab) {
+                                    Text(KeyChord.modifierGlyphs(chord.modifiers) + String(key)).font(.system(size: 10, design: .monospaced))
                                         .foregroundStyle(Color.accentColor).opacity(shortcutHints.isHeld ? 1 : 0)
                                         .accessibilityHidden(!shortcutHints.isHeld)
                                 }

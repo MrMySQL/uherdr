@@ -5,6 +5,7 @@ struct DeviceSidebarView: View {
     @ObservedObject var devices: DeviceStore
     @State private var search = ""
     @State private var collapsed: Set<String> = []
+    @ObservedObject private var shortcuts = ShortcutSettings.shared
     let showShortcutHints: Bool
 
     var body: some View {
@@ -184,8 +185,8 @@ struct DeviceSidebarView: View {
                     Text(space.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
                     Spacer(minLength: 0)
                     if space.agentStatus == .working || space.agentStatus == .blocked || space.agentStatus == .done { StatusDot(status: space.agentStatus) }
-                    if let shortcut {
-                        Text("⌘\(shortcut + 1)").font(.system(size: 10, design: .monospaced))
+                    if let shortcut, let chord = shortcuts.bindings.chord(for: .selectSpace) {
+                        Text(KeyChord.modifierGlyphs(chord.modifiers) + "\(shortcut + 1)").font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(Color.accentColor).opacity(showShortcutHints ? 1 : 0)
                             .accessibilityHidden(!showShortcutHints)
                     }
