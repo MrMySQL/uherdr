@@ -374,7 +374,7 @@ import HerdrCore
         let restartSession = restarting.sessions[1]
         let restart = Task { await restarting.restartHerdrSession(restartSession) }
         // After the stop and its listing, Restart polls for the old socket to disappear.
-        while lists < 2 { await Task.yield() }
+        await waitUntil("Restart to stop the session and refresh its listing") { lists >= 2 }
         try await Task.sleep(for: .milliseconds(120))
         precondition(restarting.isActing(restartSession), "Restart keeps its session busy while the old server goes away")
         await restarting.startServer(for: restartSession)
