@@ -433,15 +433,16 @@ struct TerminalSurface: NSViewRepresentable {
 
         private lazy var startGate = TerminalStartGate(
             isStarted: { [weak self] in self?.started ?? true },
+            viewSize: { [weak self] in
+                let bounds = self?.view?.bounds ?? .zero
+                return (Double(bounds.width), Double(bounds.height), Double(self?.view?.window?.backingScaleFactor ?? 0))
+            },
             schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated(work) } },
             deliver: { [weak self] cols, rows in self?.resize(cols: cols, rows: rows) })
 
         private func viewportChanged(_ viewport: InMemoryTerminalViewport) {
-            let bounds = view?.bounds ?? .zero
             startGate.report(.init(columns: Int(viewport.columns), rows: Int(viewport.rows),
-                                   widthPixels: viewport.widthPixels, heightPixels: viewport.heightPixels),
-                             viewWidth: bounds.width, viewHeight: bounds.height,
-                             scale: Double(view?.window?.backingScaleFactor ?? 0))
+                                   widthPixels: viewport.widthPixels, heightPixels: viewport.heightPixels))
         }
 
         private func resize(cols: Int, rows: Int) {
