@@ -99,6 +99,40 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         }
     }
 
+    /// The action on its own, for messages ("already used by …").
+    public var title: String {
+        switch self {
+        case .newSpace: return "New space"
+        case .selectSpace: return "Select space 1–9"
+        case .renameSpace: return "Rename current space"
+        case .newTab: return "New tab"
+        case .renameTab: return "Rename current tab"
+        case .selectTab: return "Select tab 1–9, tab 10"
+        case .nextTab, .nextTabAlternate: return "Next tab"
+        case .previousTab, .previousTabAlternate: return "Previous tab"
+        case .splitSideBySide: return "Split side by side"
+        case .splitTopAndBottom: return "Split top and bottom"
+        case .zoomPane: return "Zoom pane"
+        case .nextPane, .nextPaneAlternate: return "Next pane"
+        case .previousPane: return "Previous pane"
+        case .findInPane: return "Find in pane"
+        case .closePane: return "Close pane"
+        case .nextMatch, .nextMatchAlternate: return "Next match"
+        case .previousMatch, .previousMatchAlternate: return "Previous match"
+        case .closeSearch: return "Close search"
+        case .showAgents: return "Show agents"
+        case .showSpaces: return "Show spaces"
+        case .copy: return "Copy"
+        case .paste: return "Paste"
+        case .selectAll: return "Select all"
+        case .largerText, .largerTextAlternate: return "Larger text"
+        case .smallerText: return "Smaller text"
+        case .newLine: return "New line"
+        case .settings: return "Settings"
+        case .keyboardShortcuts: return "Keyboard shortcuts"
+        }
+    }
+
     /// Range actions keep their digits; their chord's key is ignored.
     public var range: ShortcutRange? {
         switch self {
@@ -115,6 +149,9 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     public var isPaneSearchBinding: Bool {
         [.nextMatch, .previousMatch, .nextMatchAlternate, .previousMatchAlternate, .closeSearch].contains(self)
     }
+
+    /// Pane search reads its own keys, so the sheet lists them but can't change them.
+    public var isEditable: Bool { !isPaneSearchBinding }
 
     /// Every concrete chord this action answers to with these modifiers and key.
     public func chords(for chord: KeyChord) -> [KeyChord] {
@@ -208,5 +245,133 @@ public struct ShortcutGroup: Identifiable, Sendable {
     public static func columns(_ groups: [ShortcutGroup]) -> [[ShortcutGroup]] {
         let leading = Set(all.prefix(3).map(\.title))
         return [groups.filter { leading.contains($0.title) }, groups.filter { !leading.contains($0.title) }].filter { !$0.isEmpty }
+    }
+}
+
+/// The user's shortcuts: defaults plus their changes. A change may also
+/// leave an action with no shortcut (after another action took its keys).
+public struct ShortcutBindings: Codable, Equatable, Sendable {
+    public static let preferencesKey = "keyboardShortcuts.v1"
+
+    /// Present keys are changes; a nil value means "no shortcut".
+    private var overrides: [String: KeyChord?] = [:]
+
+    public init() {}
+
+    public func chord(for action: ShortcutAction) -> KeyChord? {
+        if let change = overrides[action.rawValue] { return change }
+        return action.defaultChord
+    }
+
+    public func isChanged(_ action: ShortcutAction) -> Bool { overrides[action.rawValue] != nil }
+    public var changedCount: Int { overrides.count }
+
+    /// A chord needs ⌘, ⌃ or ⌥ to stay out of typed text; ⇧ alone is
+    /// accepted only with Return or Tab (like ⇧↩ for a new line).
+    public static func isValid(_ chord: KeyChord) -> Bool {
+        if !chord.modifiers.isDisjoint(with: [.command, .control, .option]) { return true }
+        return chord.modifiers == .shift && (chord.key == "return" || chord.key == "tab")
+    }
+
+    /// ⌃ with a letter (⌃C, ⌃D, ⌃R…) means something to terminal programs;
+    /// ⌘ shortcuts never reach the terminal.
+    public static func isTerminalReserved(_ chord: KeyChord, for action: ShortcutAction) -> Bool {
+        action.chords(for: chord).contains { candidate in
+            candidate.modifiers.contains(.control) && !candidate.modifiers.contains(.command)
+                && candidate.key.count == 1 && candidate.key.first!.isASCII && candidate.key.first!.isLetter
+        }
+    }
+
+    /// Every other action already answering to any key this chord would give
+    /// `action`; a range can take keys from several.
+    public func clashes(for chord: KeyChord, assigningTo action: ShortcutAction) -> [ShortcutAction] {
+        holders(of: Set(action.chords(for: chord))).filter { $0 != action }
+    }
+
+    /// Pane search keys act only while its field has focus, so they hold no keys here.
+    private func holders(of keys: Set<KeyChord>) -> [ShortcutAction] {
+        ShortcutAction.allCases.filter { action in
+            guard !action.isPaneSearchBinding, let existing = chord(for: action) else { return false }
+            return !keys.isDisjoint(with: action.chords(for: existing))
+        }
+    }
+
+    /// Gives `action` this chord; any action holding the same keys is left
+    /// without a shortcut (shown as changed, so Reset brings it back).
+    /// Assigning the default chord removes the change; Reset is exactly that.
+    public mutating func assign(_ chord: KeyChord, to action: ShortcutAction) {
+        var chord = chord
+        if let range = action.range { chord.key = range.keys[0] }
+        for other in clashes(for: chord, assigningTo: action) { overrides[other.rawValue] = .some(nil) }
+        overrides[action.rawValue] = chord == action.defaultChord ? nil : .some(chord)
+    }
+
+    /// Resets each changed action in turn, stopping at the first whose default
+    /// keys need a question; returns it and the actions still to reset after it.
+    public mutating func reset(_ actions: [ShortcutAction]) -> (action: ShortcutAction, rest: [ShortcutAction])? {
+        for (index, action) in actions.enumerated() where isChanged(action) {
+            guard ShortcutChangeStep.next(for: action.defaultChord, action: action, in: self) == .apply else {
+                return (action, Array(actions[(index + 1)...]))
+            }
+            assign(action.defaultChord, to: action)
+        }
+        return nil
+    }
+
+    public mutating func resetAll() { overrides = [:] }
+
+    /// Ghostty key bindings for the terminal's own shortcuts. An action given
+    /// Select All's keys clears it, so the terminal no longer keeps them.
+    public var ghosttyKeybinds: [String] {
+        var binds: [String] = []
+        if let selectAll = chord(for: .selectAll) { binds.append(Self.ghostty(selectAll) + "=select_all") }
+        if let copy = chord(for: .copy) { binds.append(Self.ghostty(copy) + "=copy_to_clipboard") }
+        if let paste = chord(for: .paste) { binds.append(Self.ghostty(paste) + "=paste_from_clipboard") }
+        if let newLine = chord(for: .newLine) {
+            // Claude Code and Codex read CSI 13;2u as a new line, whatever key sends it.
+            binds.append(Self.ghostty(newLine) + "=text:\\x1b[13;2u")
+            if newLine.key == "return" { binds.append(Self.ghostty(newLine, key: "numpad_enter") + "=text:\\x1b[13;2u") }
+        }
+        return binds
+    }
+
+    static func ghostty(_ chord: KeyChord, key: String? = nil) -> String {
+        var parts: [String] = []
+        if chord.modifiers.contains(.control) { parts.append("ctrl") }
+        if chord.modifiers.contains(.option) { parts.append("alt") }
+        if chord.modifiers.contains(.shift) { parts.append("shift") }
+        if chord.modifiers.contains(.command) { parts.append("super") }
+        parts.append(key ?? (chord.key == "return" ? "enter" : chord.key))
+        return parts.joined(separator: "+")
+    }
+
+    public static func load(from defaults: UserDefaults) -> ShortcutBindings {
+        guard let data = defaults.data(forKey: preferencesKey),
+              let bindings = try? JSONDecoder().decode(ShortcutBindings.self, from: data) else { return ShortcutBindings() }
+        return bindings
+    }
+
+    public func save(to defaults: UserDefaults) {
+        if let data = try? JSONEncoder().encode(self) { defaults.set(data, forKey: Self.preferencesKey) }
+    }
+}
+
+/// What changing a shortcut needs next: each question is asked once, clash first.
+public enum ShortcutChangeStep: Equatable, Sendable {
+    case invalid
+    case clash([ShortcutAction])
+    case terminalReserved
+    case apply
+
+    public static func next(for chord: KeyChord, action: ShortcutAction, in bindings: ShortcutBindings,
+                            clashAccepted: Bool = false, terminalAccepted: Bool = false) -> ShortcutChangeStep {
+        // Range actions only take modifiers; any digit stands in for the key.
+        var candidate = chord
+        if let range = action.range { candidate.key = range.keys[0] }
+        guard ShortcutBindings.isValid(candidate) else { return .invalid }
+        let others = clashAccepted ? [] : bindings.clashes(for: candidate, assigningTo: action)
+        if !others.isEmpty { return .clash(others) }
+        if !terminalAccepted, ShortcutBindings.isTerminalReserved(candidate, for: action) { return .terminalReserved }
+        return .apply
     }
 }

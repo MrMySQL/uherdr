@@ -550,6 +550,35 @@ struct TerminalKeyboardTests {
         print("PASS: a drag without mouse-up keeps selecting and ends at the next press")
         print("PASS: a mouse-up delivered to another view still releases the terminal's press")
         print("PASS: a watched mouse-up beyond the pane or over a hidden surface only releases")
+        // A changed New line shortcut reaches a running terminal, and the old keys stop.
+        var movedNewLine = ShortcutBindings()
+        movedNewLine.assign(KeyChord("return", .option), to: .newLine)
+        precondition(engine.setTerminalConfiguration(HerdrTerminalView.liveConfiguration(fontSize: 13, bindings: movedNewLine)))
+        check("New line moved to Option-Return", modifiers: .option, expected: "\u{1b}[13;2u")
+        // Without the binding, Ghostty sends its own Shift-Return encoding (seen on 1.5.20260906).
+        check("Shift-Return no longer makes a new line", modifiers: .shift, expected: "\u{1b}[27;2;13~")
+        // Back to the base configuration exactly (its text size too), for the checks that follow.
+        precondition(engine.setTerminalConfiguration(TerminalConfiguration()))
+        check("default New line restored", modifiers: .shift, expected: "\u{1b}[13;2u")
+        check("Option-Return encoding restored", modifiers: .option, expected: "\u{1b}\r")
+        print("PASS: changed terminal shortcuts apply to a running terminal and can be restored")
+        // A key press becomes the chord the shortcut sheet records (ABC layout).
+        func pressed(_ keyCode: UInt16, _ characters: String, _ modifiers: NSEvent.ModifierFlags) -> KeyChord? {
+            KeyChord(event: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                                             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                             context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                             isARepeat: false, keyCode: keyCode)!)
+        }
+        precondition(pressed(36, "\r", [.shift]) == KeyChord("return", .shift))
+        precondition(pressed(76, "\u{3}", [.option, .numericPad]) == KeyChord("return", .option))
+        precondition(pressed(48, "\t", [.control, .shift]) == KeyChord("tab", [.control, .shift]))
+        precondition(pressed(2, "d", [.command]) == KeyChord("d", .command))
+        precondition(pressed(30, "}", [.command, .shift]) == KeyChord("]", [.command, .shift]), "Shifted punctuation must record its unshifted key, as menus store it")
+        precondition(pressed(18, "1", [.command, .control]) == KeyChord("1", [.command, .control]))
+        precondition(pressed(51, "\u{7f}", [.command]) == nil, "Delete has no printable key and is not recorded")
+        precondition(pressed(49, " ", [.control]) == nil, "Space has no keycap glyph and is not recorded")
+        precondition(pressed(123, "\u{f702}", [.command, .function, .numericPad]) == nil, "Arrow keys are not recorded")
+        print("PASS: key presses become the shortcuts the sheet records")
         lifecycle.surface = nil
         view.controller = nil
         precondition(bridge.session.readViewportText() == nil)
