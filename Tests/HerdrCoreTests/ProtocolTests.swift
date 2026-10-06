@@ -23,6 +23,8 @@ import HerdrCore
         try await FileTransferTests.run()
         try await SessionDiscoveryTests.run()
         try await SessionControlTests.run()
+        TerminalStartSizeTests.run()
+        await TerminalStartSizeTests.runGate()
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--live" { try await LiveTests.run(socket: CommandLine.arguments[2]) }
     }
     func testNestedLayoutPreservesDirectionRatiosAndPaneOrder() throws {
