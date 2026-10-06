@@ -97,7 +97,7 @@ struct EditorSheet: View {
                 Text("\(Int(store.fontSize)) pt").font(.system(size: 11, design: .monospaced)).frame(width: 38)
             }
             HStack {
-                Text("Notify me when an agent finishes or needs me").font(.callout)
+                Text("Notify me when an agent finishes or needs me").font(.callout).accessibilityHidden(true)
                 Spacer()
                 Toggle("Notify me when an agent finishes or needs me", isOn: $agentNotifications)
                     .toggleStyle(.switch).controlSize(.small).labelsHidden()
