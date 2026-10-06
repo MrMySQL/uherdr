@@ -81,11 +81,13 @@ struct WorkspaceView: View {
             Button("OK") { store.operationError = nil }
         } message: { Text(store.operationError ?? "") }
         .alert("Close \(store.pendingClose?.singular ?? "resource")?", isPresented: Binding(get: { store.pendingClose != nil }, set: { if !$0 { store.pendingClose = nil } })) {
-            Button("Cancel", role: .cancel) { store.pendingClose = nil }
+            // Return confirms (a destructive button is never the default on its own); Esc cancels.
+            // Declared first so an earlier Cancel can't take Return.
             Button("Close \(store.pendingClose?.singular ?? "resource")", role: .destructive) {
                 if let target = store.pendingClose { store.close(target) }
                 store.pendingClose = nil
-            }
+            }.keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { store.pendingClose = nil }
         } message: {
             Text("Closing “\(store.pendingClose?.label ?? "")” terminates its terminals and running agents. You can quit uHerdr instead to keep them running.")
         }
