@@ -153,8 +153,11 @@ final class DeviceStore: ObservableObject {
         if dismiss, !session.isRemote {
             // Keep a removed local session from being discovered again.
             var dismissed = defaults.stringArray(forKey: SessionDiscovery.dismissedKey) ?? []
-            dismissed.append(SessionDiscovery.normalized(session.profile.socketPath))
-            defaults.set(dismissed, forKey: SessionDiscovery.dismissedKey)
+            let socket = SessionDiscovery.normalized(session.profile.socketPath)
+            if !dismissed.contains(socket) {
+                dismissed.append(socket)
+                defaults.set(dismissed, forKey: SessionDiscovery.dismissedKey)
+            }
         }
         session.disconnect()
         sessions.removeAll { $0.profile.id == id }
