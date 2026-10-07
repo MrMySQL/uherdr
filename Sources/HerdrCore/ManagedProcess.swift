@@ -30,10 +30,12 @@ public final class ManagedProcess {
     public var isRunning: Bool { process.isRunning }
     public var errorText: String { err.snapshot.0.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    public init(executable: String, arguments: [String], standardInput: FileHandle = .nullDevice, outputLimit: Int = 16384) throws {
+    public init(executable: String, arguments: [String], standardInput: FileHandle = .nullDevice,
+                environment: [String: String]? = nil, outputLimit: Int = 16384) throws {
         out = ProcessOutput(limit: outputLimit); err = ProcessOutput(limit: outputLimit)
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        if let environment { process.environment = environment }
         process.standardInput = standardInput
         process.standardOutput = stdout; process.standardError = stderr
         let outBuffer = out, errBuffer = err

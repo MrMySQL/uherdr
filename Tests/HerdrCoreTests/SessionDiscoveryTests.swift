@@ -58,6 +58,7 @@ enum SessionDiscoveryTests {
         try "#!/bin/sh\ncat \"$(dirname \"$0\")/large.json\"\n".write(toFile: big, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: big)
         XCTAssertEqual(try await SessionDiscovery.list(executable: big).count, 300)
+        XCTAssertEqual(try await SessionControl.list(SessionControl.runner(executable: big)).count, 300)
         let failing = dir.appendingPathComponent("broken").path
         try "#!/bin/sh\necho 'unknown command' >&2\nexit 2\n".write(toFile: failing, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: failing)

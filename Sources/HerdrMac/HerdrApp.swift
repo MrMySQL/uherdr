@@ -115,7 +115,7 @@ struct HerdrApp: App {
         shortcuts.bindings.chord(for: action)?.keyboardShortcut(digit: digit)
     }
     private var canInteract: Bool {
-        store.sheet == nil && store.pendingClose == nil && store.operationError == nil && devices.editor == nil && devices.pendingRemoval == nil
+        store.sheet == nil && store.pendingClose == nil && store.operationError == nil && !devices.isPresenting
     }
     private var canUseCurrentPane: Bool {
         store.connected && store.selectedPane != nil && canInteract

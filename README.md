@@ -23,7 +23,11 @@ Open `Package.swift` in Xcode to develop the app, or use `swift build` and `swif
 
 The sidebar groups spaces and agents by machine, then by herdr session. **This Mac** holds every local session; SSH devices with the same host, user, and port share a group. Each session is named from its socket: `~/.config/herdr/sessions/<name>/herdr.sock` is `<name>`, and the main socket is `default`. Beside each machine's computer icon, a battery outline shows that Mac’s charge percentage, with a bolt when connected to power; Macs without an internal battery show a plug. Power status refreshes on connection or reconnection and every minute while connected. Disconnected devices and unavailable readings hide the indicator. On first launch the app connects to your default local herdr socket and preserves existing connection preferences.
 
-Every running herdr session on this Mac is added automatically, using `herdr session list` (checked at launch and every 15 seconds). Stopped sessions are skipped, and a saved device is never renamed. Remove a session from its menu to hide it; it then stays hidden until you choose **Add device → Discover sessions on this Mac**, which also brings back removed sessions. Older herdr CLIs without `session list` simply add nothing. Use the menu beside a session to edit its socket and local herdr executable. Start herdr first, or use the local device's Start Server button. Quit detaches the client; shells and agents remain owned by herdr.
+Every running herdr session on this Mac is added automatically, using `herdr session list` (checked at launch and every 15 seconds). Stopped sessions are skipped, and a saved device is never renamed. Older herdr CLIs without `session list` simply add nothing.
+
+The **…** menu on a machine row holds actions for the whole machine. On **This Mac**: *Discover sessions on this Mac* (also brings back sessions removed from the list) and, while the default session is stopped, *Start herdr server*, which starts it. On an SSH machine: *Edit SSH connection…* (applies to every session on it), *Reconnect all sessions*, *Disconnect all sessions*, and *Remove machine…*, which removes the saved connection and leaves its herdr sessions running.
+
+The **…** menu on a session row holds *Reconnect*, *Disconnect* and *Edit socket…*. For a herdr session on this Mac it also offers *Stop session…*, which runs `herdr session stop` (its shells and agents end) and disconnects the device, and *Remove session…*, which stops the session if needed and deletes it with `herdr session delete`, including its saved snapshots. Both ask first. herdr never deletes its default session, so that one offers Stop but not *Remove session…*. The default session, sessions on SSH machines, and local devices with a custom socket offer *Remove from list…* instead; it hides the device here and leaves herdr untouched. Quit detaches the client; shells and agents remain owned by herdr.
 
 ## Connect another device over SSH
 
@@ -35,7 +39,7 @@ Every running herdr session on this Mac is added automatically, using `herdr ses
 
 Each remote device has its own SSH connection forwarding two private Unix sockets: the workspace API socket and herdr's companion `-client.sock` terminal socket, using [OpenSSH local socket forwarding](https://man.openbsd.org/ssh.1#L). Host verification stays enabled. The remote SSH server must allow Unix-socket forwarding (`AllowStreamLocalForwarding`). No herdr TCP listener is required.
 
-Connection errors appear under the affected device and in its detail view. Failed remote connections retry every ten seconds. Use the device menu to reconnect immediately, disconnect, edit, or remove a saved connection. Disconnecting or removing a device leaves its remote workspaces and processes running. Start/stop of remote herdr servers is managed on the remote device.
+Connection errors appear under the affected device and in its detail view. Failed remote connections retry every ten seconds. Use the session or machine menu to reconnect immediately, disconnect, edit, or remove a saved connection. Disconnecting or removing an SSH device leaves its remote workspaces and processes running. Start/stop of remote herdr servers is managed on the remote device.
 
 ## Interaction
 

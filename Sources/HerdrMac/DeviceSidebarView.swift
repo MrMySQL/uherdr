@@ -71,6 +71,7 @@ struct DeviceSidebarView: View {
                     if let power = machine.powerStatus { DevicePowerIndicator(status: power) }
                     Text(machine.name).fontWeight(.semibold).lineLimit(1)
                     Spacer(minLength: 0)
+                    machineMenu(machine)
                 }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 4)
                 if !isCollapsed(machine.id) {
                     ForEach(sessions, id: \.profile.id) { session in
@@ -99,16 +100,7 @@ struct DeviceSidebarView: View {
                         }
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain)
-                Menu {
-                    Button("Edit device…") { devices.editor = DeviceEditorTarget(profile: session.profile) }
-                    Button("Reconnect") { session.reconnect() }
-                    Button("Disconnect") { session.disconnect() }.disabled(session.suspended)
-                    if devices.sessions.count > 1 {
-                        Divider()
-                        Button("Remove device…", role: .destructive) { devices.pendingRemoval = session.profile.id }
-                    }
-                } label: { Image(systemName: "ellipsis") }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                sessionMenu(session)
             }.font(.system(size: 11)).padding(8).padding(.leading, 12)
                 .background(devices.selectedDeviceID == session.profile.id ? Color.primary.opacity(0.045) : .clear, in: RoundedRectangle(cornerRadius: 6))
             if !isCollapsed(key) {
@@ -132,6 +124,51 @@ struct DeviceSidebarView: View {
                 }
             }
         }
+    }
+
+    private func machineMenu(_ machine: MachineGroup) -> some View {
+        Menu {
+            if machine.isRemote, let first = machine.sessions.first {
+                Button("Edit SSH connection…") { devices.editor = DeviceEditorTarget(profile: first.profile, machineID: machine.id) }
+                Divider()
+                Button("Reconnect all sessions") { devices.reconnectAll(machine.id) }
+                Button("Disconnect all sessions") { devices.disconnectAll(machine.id) }
+                    .disabled(machine.sessions.allSatisfy(\.suspended))
+                if devices.canRemoveMachine(machine.id) {
+                    Divider()
+                    Button("Remove machine…", role: .destructive) { devices.pendingMachineRemoval = machine.id }
+                }
+            } else {
+                Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
+                // Only while the default session is stopped; a disabled item reads as broken.
+                if devices.canStartDefaultServer {
+                    Button("Start herdr server") { devices.startDefaultServer() }
+                }
+            }
+        } label: { Image(systemName: "ellipsis") }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Machine actions")
+    }
+
+    private func sessionMenu(_ session: SessionStore) -> some View {
+        let herdrSession = devices.herdrSession(for: session)
+        return Menu {
+            Button("Reconnect") { session.reconnect() }
+            Button("Disconnect") { session.disconnect() }.disabled(session.suspended)
+            if herdrSession != nil {
+                Button("Stop session…") { devices.pendingSessionAction = .stop(session.profile.id) }
+                    .disabled(herdrSession?.running != true || devices.isActing(session))
+            }
+            Button("Edit socket…") { devices.editor = DeviceEditorTarget(profile: session.profile, sessionOnly: true) }
+            if devices.canRemoveHerdrSession(session) {
+                Divider()
+                Button("Remove session…", role: .destructive) { devices.pendingSessionAction = .remove(session.profile.id) }
+                    .disabled(devices.isActing(session))
+            } else if devices.sessions.count > 1 {
+                Divider()
+                Button("Remove from list…", role: .destructive) { devices.pendingRemoval = session.profile.id }
+            }
+        } label: { Image(systemName: "ellipsis") }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Session actions")
     }
 
     private func spaceRow(_ space: Workspace, session: SessionStore) -> some View {
