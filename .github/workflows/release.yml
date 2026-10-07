@@ -34,9 +34,10 @@ jobs:
           KEY: ${{ secrets.NOTARY_KEY_P8 }}
           KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+          SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           missing=()
-          for name in CERT CERT_PASSWORD IDENTITY KEY KEY_ID ISSUER; do
+          for name in CERT CERT_PASSWORD IDENTITY KEY KEY_ID ISSUER SPARKLE_KEY; do
             [[ -n "${!name}" ]] || missing+=("$name")
           done
           if (( ${#missing[@]} )); then
@@ -101,6 +102,19 @@ jobs:
             [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
             gh release create "$GITHUB_REF_NAME" "${flags[@]}" "${assets[@]}"
           fi
+
+      # Installed apps poll releases/latest/download/appcast.xml, so pre-releases
+      # (never "latest") get no feed. It goes up last so it never points at a
+      # missing asset.
+      - name: Publish update feed
+        if: env.SIGNED == 'true' && !contains(env.VERSION, '-')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --json body --jq .body > "$RUNNER_TEMP/notes.md"
+          TAG="$GITHUB_REF_NAME" RELEASE_NOTES="$RUNNER_TEMP/notes.md" ./scripts/make-appcast.sh
+          gh release upload "$GITHUB_REF_NAME" dist/appcast.xml --clobber
 
       - name: Upload test build
         if: env.SIGNED != 'true'

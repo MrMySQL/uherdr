@@ -6,7 +6,7 @@ A native SwiftUI + AppKit client for the herdr runtime. Spaces map to herdr work
 
 ## Install
 
-Download the latest `uHerdr-<version>.dmg` from [Releases](https://github.com/MrMySQL/uherdr/releases/latest), open it, and drag **uHerdr** to Applications. Builds are universal (Apple silicon and Intel), signed with Developer ID, and notarized.
+Download the latest `uHerdr-<version>.dmg` from [Releases](https://github.com/MrMySQL/uherdr/releases/latest), open it, and drag **uHerdr** to Applications. Builds are universal (Apple silicon and Intel), signed with Developer ID, and notarized. The app checks for updates with [Sparkle](https://sparkle-project.org); use **uHerdr → Check for Updates…** or turn automatic checks on or off in Settings.
 
 Requirements:
 
@@ -76,7 +76,7 @@ Connection state is refreshed from authoritative snapshots. UI actions use expli
 
 ## Dependencies
 
-[GhosttyTerminal / libghostty-spm](https://github.com/Lakr233/libghostty-spm) supplies the Swift/AppKit integration around [Ghostty](https://github.com/ghostty-org/ghostty), with [MSDisplayLink](https://github.com/Lakr233/MSDisplayLink) for display scheduling. These dependencies are MIT licensed; their notices are included in the built app. [Herdr](https://github.com/herdrdev/herdr) supplies the runtime and terminal/control protocols.
+[GhosttyTerminal / libghostty-spm](https://github.com/Lakr233/libghostty-spm) supplies the Swift/AppKit integration around [Ghostty](https://github.com/ghostty-org/ghostty), with [MSDisplayLink](https://github.com/Lakr233/MSDisplayLink) for display scheduling, and [Sparkle](https://github.com/sparkle-project/Sparkle) delivers app updates. These dependencies are MIT licensed; their notices are included in the built app. [Herdr](https://github.com/herdrdev/herdr) supplies the runtime and terminal/control protocols.
 
 ## Verification
 

@@ -6,8 +6,15 @@
 #   UNIVERSAL=1    Build arm64 + x86_64 instead of the host architecture.
 #   SIGN_IDENTITY  codesign identity (default: ad-hoc "-"). A Developer ID
 #                  identity also gets a secure timestamp for notarization.
+#   SPARKLE_PUBLIC_KEY  EdDSA public key for Sparkle updates (default: the
+#                  release key below). Set it empty to build without updates.
+#   SPARKLE_FEED_URL    Appcast URL (default: the latest GitHub release's).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# Public half of the key that signs release updates; see docs/releasing.md.
+SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY-}"
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://github.com/MrMySQL/uherdr/releases/latest/download/appcast.xml}"
 
 VERSION="${VERSION:-$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo 0.0.0)}"
 VERSION="${VERSION#v}"
@@ -24,7 +31,7 @@ fi
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 APP="$PWD/dist/uHerdr.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 if [[ "${UNIVERSAL:-0}" == 1 ]]; then
     # Build each slice separately; multi-arch flags are not honored by every
     # SwiftPM build system, and single-arch builds may share one output path.
@@ -45,8 +52,23 @@ else
     BIN_DIR="$(swift build -c release --show-bin-path)"
     cp "$BIN_DIR/Herdr" "$APP/Contents/MacOS/uHerdr"
 fi
+install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/uHerdr"
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+ditto "$BIN_DIR/Sparkle.framework" "$SPARKLE"
+# The XPC services are only used by sandboxed apps.
+rm -rf "$SPARKLE/XPCServices" "$SPARKLE/Versions/B/XPCServices"
 cp -R "$BIN_DIR/GhosttyKit_GhosttyTerminal.bundle" "$APP/Contents/Resources/"
 cp -R "$BIN_DIR/HerdrMac_HerdrMac.bundle" "$APP/Contents/Resources/"
+SPARKLE_KEYS=""
+if [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
+    SPARKLE_KEYS="<key>SUFeedURL</key><string>$SPARKLE_FEED_URL</string>
+<key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>
+<key>SURequireSignedFeed</key><true/>
+<key>SUVerifyUpdateBeforeExtraction</key><true/>
+"
+else
+    echo "warning: SPARKLE_PUBLIC_KEY is empty; building without automatic updates" >&2
+fi
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -63,7 +85,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 <key>CFBundleIconFile</key><string>uHerdr</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
-<key>NSHumanReadableCopyright</key><string>Copyright © 2026 MrMySQL. MIT License.</string>
+$SPARKLE_KEYS<key>NSHumanReadableCopyright</key><string>Copyright © 2026 MrMySQL. MIT License.</string>
 <key>UTExportedTypeDeclarations</key><array><dict>
 <key>UTTypeIdentifier</key><string>dev.herdr.native.pane</string>
 <key>UTTypeDescription</key><string>uHerdr pane</string>
@@ -77,6 +99,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 cp Vendor/GhosttyTerminal/LICENSE "$APP/Contents/Resources/GhosttyTerminal-LICENSE"
 cp .build/checkouts/MSDisplayLink/LICENSE "$APP/Contents/Resources/MSDisplayLink-LICENSE"
+cp .build/artifacts/sparkle/Sparkle/LICENSE "$APP/Contents/Resources/Sparkle-LICENSE"
 cp docs/licenses/Ghostty-LICENSE "$APP/Contents/Resources/Ghostty-LICENSE"
 cp LICENSE "$APP/Contents/Resources/LICENSE"
 swift scripts/make-icon.swift .build/uHerdr.iconset
@@ -84,5 +107,9 @@ iconutil -c icns .build/uHerdr.iconset -o "$APP/Contents/Resources/uHerdr.icns"
 
 SIGN_FLAGS=(--force --options runtime --sign "$SIGN_IDENTITY")
 [[ "$SIGN_IDENTITY" != - ]] && SIGN_FLAGS+=(--timestamp)
+# Sign inside out: Sparkle's helpers, the framework, then the app.
+codesign "${SIGN_FLAGS[@]}" "$SPARKLE/Versions/B/Autoupdate"
+codesign "${SIGN_FLAGS[@]}" "$SPARKLE/Versions/B/Updater.app"
+codesign "${SIGN_FLAGS[@]}" "$SPARKLE"
 codesign "${SIGN_FLAGS[@]}" "$APP"
 printf 'Built %s %s (%s)\n' "$APP" "$VERSION" "$BUILD_NUMBER"

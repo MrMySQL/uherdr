@@ -7,6 +7,7 @@ struct HerdrApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var devices = DeviceStore()
     @ObservedObject private var shortcuts = ShortcutSettings.shared
+    @ObservedObject private var updater = AppUpdater.shared
     private var store: SessionStore { devices.activeSession }
     var body: some Scene {
         Window("uHerdr", id: "main") {
@@ -17,6 +18,11 @@ struct HerdrApp: App {
         .defaultSize(width: 1280, height: 820)
         .windowToolbarStyle(.unifiedCompact)
         .commands {
+            if updater.isAvailable {
+                CommandGroup(after: .appInfo) {
+                    Button("Check for Updates…") { updater.checkForUpdates() }.disabled(!updater.canCheckForUpdates)
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Space…") { store.sheet = .space }.keyboardShortcut(shortcut(.newSpace)).disabled(!store.connected || !canInteract)
                 Button("New Tab…") { store.sheet = .tab }.keyboardShortcut(shortcut(.newTab)).disabled(store.selectedSpace == nil || !store.connected || !canInteract)
