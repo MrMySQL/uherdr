@@ -5,6 +5,7 @@ struct EditorSheet: View {
     @AppStorage(AgentNotificationPreference.key) private var agentNotifications = true
     let sheet: AppSheet
     @ObservedObject var store: SessionStore
+    @ObservedObject private var updater = AppUpdater.shared
     @Environment(\.dismiss) private var dismiss
     @State private var label = ""
     @State private var cwd = NSHomeDirectory()
@@ -102,6 +103,14 @@ struct EditorSheet: View {
                 Spacer()
                 Toggle("Notify me when an agent finishes or needs me", isOn: $agentNotifications)
                     .toggleStyle(.switch).controlSize(.small).labelsHidden()
+            }
+            if updater.isAvailable {
+                HStack {
+                    Text("Automatically check for updates").font(.callout).accessibilityHidden(true)
+                    Spacer()
+                    Toggle("Automatically check for updates", isOn: $updater.automaticallyChecksForUpdates)
+                        .toggleStyle(.switch).controlSize(.small).labelsHidden()
+                }
             }
             Text("Quitting detaches the client. Your herdr sessions continue running.").font(.caption).foregroundStyle(.secondary)
         }
