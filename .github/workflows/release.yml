@@ -1,0 +1,112 @@
+name: Release
+
+# Push a tag like v0.2.0 (or v0.3.0-beta.1 for a pre-release) to publish a
+# signed, notarized universal build. Run manually for an unsigned test build.
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      SIGNED: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check signing secrets
+        if: env.SIGNED == 'true'
+        env:
+          CERT: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          KEY: ${{ secrets.NOTARY_KEY_P8 }}
+          KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          missing=()
+          for name in CERT CERT_PASSWORD IDENTITY KEY KEY_ID ISSUER; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing release secrets (${missing[*]}); see docs/releasing.md"
+            exit 1
+          fi
+
+      - name: Import signing certificate
+        if: env.SIGNED == 'true'
+        env:
+          CERT: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEY: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          echo "$KEY" > "$RUNNER_TEMP/notary.p8"
+          echo "NOTARY_KEY_PATH=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+
+      - name: Resolve version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.0.0)" >> "$GITHUB_ENV"
+          fi
+          echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build universal app
+        env:
+          UNIVERSAL: 1
+          SIGN_IDENTITY: ${{ env.SIGNED == 'true' && secrets.MACOS_SIGN_IDENTITY || '-' }}
+        run: ./scripts/build-app.sh
+
+      - name: Notarize and package
+        env:
+          SIGN_IDENTITY: ${{ env.SIGNED == 'true' && secrets.MACOS_SIGN_IDENTITY || '-' }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: ./scripts/package-release.sh
+
+      - name: Publish GitHub release
+        if: env.SIGNED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--verify-tag --generate-notes --title "uHerdr $VERSION")
+          [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" \
+            "dist/uHerdr-$VERSION.dmg" "dist/uHerdr-$VERSION.zip" dist/SHA256SUMS
+
+      - name: Upload test build
+        if: env.SIGNED != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: uHerdr-${{ env.VERSION }}-unsigned
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS
+
+      - name: Clean up keychain
+        if: always() && env.SIGNED == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/release.keychain-db" || true
+          rm -f "$RUNNER_TEMP/notary.p8"
