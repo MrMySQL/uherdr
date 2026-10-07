@@ -5,11 +5,14 @@ private final class ProcessOutput: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
     private var ended = false
+    private let limit: Int
+    /// A negative limit keeps nothing; `Data.suffix` would trap on it.
+    init(limit: Int) { self.limit = max(limit, 0) }
     func receive(_ chunk: Data) {
         lock.lock(); defer { lock.unlock() }
         if chunk.isEmpty { ended = true }
         data.append(chunk)
-        if data.count > 16384 { data = data.suffix(16384) }
+        if data.count > limit { data = data.suffix(limit) }
     }
     var snapshot: (String, Bool) {
         lock.lock(); defer { lock.unlock() }
@@ -18,15 +21,17 @@ private final class ProcessOutput: @unchecked Sendable {
 }
 
 /// Owns only this child, drains both pipes continuously, and bounds captured output.
+/// Each pipe keeps its last `outputLimit` bytes.
 @MainActor
 public final class ManagedProcess {
     private let process = Process()
     private let stdout = Pipe(), stderr = Pipe()
-    private let out = ProcessOutput(), err = ProcessOutput()
+    private let out: ProcessOutput, err: ProcessOutput
     public var isRunning: Bool { process.isRunning }
     public var errorText: String { err.snapshot.0.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    public init(executable: String, arguments: [String], standardInput: FileHandle = .nullDevice) throws {
+    public init(executable: String, arguments: [String], standardInput: FileHandle = .nullDevice, outputLimit: Int = 16384) throws {
+        out = ProcessOutput(limit: outputLimit); err = ProcessOutput(limit: outputLimit)
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.standardInput = standardInput

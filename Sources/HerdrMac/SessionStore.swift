@@ -70,6 +70,8 @@ final class SessionStore: ObservableObject {
     var socketPath: String { profile.socketPath }
     var executable: String { profile.executable }
     var isRemote: Bool { profile.kind == .ssh }
+    /// The session name, prefixed with the machine for SSH devices.
+    var displayName: String { isRemote ? "\(profile.name) · \(profile.sessionName)" : profile.sessionName }
     var defaultDirectory: String { isRemote ? remoteHome ?? "/tmp" : NSHomeDirectory() }
     @Published private var tabOrder: [String: [String]]
     private let defaults: UserDefaults

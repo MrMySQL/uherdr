@@ -45,6 +45,9 @@ enum DeviceProfileTests {
 
         let output = try await ManagedProcess(executable: "/bin/sh", arguments: ["-c", "printf hello; printf diagnostic >&2"]).result()
         XCTAssertEqual(output, "hello")
+        // Output keeps its last `outputLimit` bytes; a negative limit keeps none instead of trapping.
+        XCTAssertEqual(try await ManagedProcess(executable: "/bin/sh", arguments: ["-c", "printf hello"], outputLimit: 3).result(), "llo")
+        XCTAssertEqual(try await ManagedProcess(executable: "/bin/sh", arguments: ["-c", "printf hello"], outputLimit: -1).result(), "")
         do {
             _ = try await ManagedProcess(executable: "/bin/sh", arguments: ["-c", "printf 'Permission denied' >&2; exit 255"]).result()
             XCTFail("Nonzero exit must fail")

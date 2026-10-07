@@ -62,6 +62,28 @@ public struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
         return resolved
     }
 
+    /// The herdr session this device connects to, read from its socket path:
+    /// `…/herdr/sessions/<name>/herdr.sock` is `<name>`, `…/herdr/herdr.sock`
+    /// (or an empty remote socket) is `default`. Other paths use the device name.
+    public var sessionName: String {
+        if kind == .ssh && socketPath.isEmpty { return "default" }
+        let parts = socketPath.split(separator: "/").map(String.init)
+        guard parts.last == "herdr.sock", parts.count >= 2 else { return name }
+        if parts.count >= 3, parts[parts.count - 3] == "sessions" { return parts[parts.count - 2] }
+        return parts[parts.count - 2] == "herdr" ? "default" : name
+    }
+
+    /// Devices on the same machine share a sidebar group: every local device,
+    /// or SSH devices with the same effective host, user and port, so
+    /// `alex@host` matches `host` with Username `alex`, and no port matches 22.
+    public var machineKey: String {
+        if kind == .local { return "local" }
+        let at = host.lastIndex(of: "@")
+        let machineHost = at.map { String(host[host.index(after: $0)...]) } ?? host
+        let machineUser = at.map { String(host[..<$0]) } ?? user
+        return "ssh:\(machineHost)|\(machineUser)|\(Int(port) ?? 22)".lowercased()
+    }
+
     /// Herdr derives its binary terminal socket from the API filename's stem.
     public static func clientSocketPath(for apiSocket: String) -> String {
         (apiSocket as NSString).deletingPathExtension + "-client.sock"

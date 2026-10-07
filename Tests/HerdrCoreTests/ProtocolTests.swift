@@ -21,6 +21,7 @@ import HerdrCore
         try await DeviceProfileTests.run()
         try await DevicePowerTests.run()
         try await FileTransferTests.run()
+        try await SessionDiscoveryTests.run()
         TerminalStartSizeTests.run()
         await TerminalStartSizeTests.runGate()
         KeyboardShortcutTests.run()
