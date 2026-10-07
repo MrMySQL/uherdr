@@ -244,8 +244,11 @@ final class DeviceStore: ObservableObject {
             await waitForSocket(session.profile.socketPath, present: true)
             session.reconnect()
             // Re-read directly: discovery returns at once while a scan is running.
-            listingGeneration += 1
-            if let after = try? await SessionControl.list(run) { herdrSessions = after }
+            // Only a successful re-read outdates that scan; otherwise the scan still lands.
+            if let after = try? await SessionControl.list(run) {
+                listingGeneration += 1
+                herdrSessions = after
+            }
             await discoverSessions()
         } catch {
             report(error, for: session)
