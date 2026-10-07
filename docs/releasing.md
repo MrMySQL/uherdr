@@ -1,13 +1,14 @@
 # Releasing uHerdr
 
-Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed. The workflow builds a universal (Apple silicon + Intel) `uHerdr.app`, signs it with Developer ID, notarizes and staples it, and publishes `uHerdr-<version>.dmg`, `uHerdr-<version>.zip`, and `SHA256SUMS` to a GitHub release with generated notes.
+Releases are built by `.github/workflows/release.yml` when a version tag such as `v0.2.0` (matching `v[0-9]*`) is pushed. The workflow builds a universal (Apple silicon + Intel) `uHerdr.app`, signs it with Developer ID, notarizes and staples it, and publishes `uHerdr-<version>.dmg`, `uHerdr-<version>.zip`, and `SHA256SUMS` to a GitHub release with generated notes.
 
 ## Cutting a release
 
 ```sh
 git switch main && git pull
-git tag v0.2.0            # or v0.3.0-beta.1 for a pre-release
-git push origin v0.2.0
+TAG=v0.2.0                # or v0.3.0-beta.1 for a pre-release
+git tag "$TAG"
+git push origin "$TAG"
 ```
 
 The tag sets the version: `CFBundleShortVersionString` is the tag without `v` or any pre-release suffix, and `CFBundleVersion` is the commit count. Tags with a `-suffix` are published as pre-releases.

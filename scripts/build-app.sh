@@ -17,6 +17,10 @@ if [[ ! "$BUNDLE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 1
 fi
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD)}"
+if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+    printf 'BUILD_NUMBER must be up to three dot-separated integers (got %s)\n' "$BUILD_NUMBER" >&2
+    exit 1
+fi
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 APP="$PWD/dist/uHerdr.app"
 rm -rf "$APP"

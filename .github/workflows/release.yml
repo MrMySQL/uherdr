@@ -91,10 +91,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          flags=(--verify-tag --generate-notes --title "uHerdr $VERSION")
-          [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
-          gh release create "$GITHUB_REF_NAME" "${flags[@]}" \
-            "dist/uHerdr-$VERSION.dmg" "dist/uHerdr-$VERSION.zip" dist/SHA256SUMS
+          assets=("dist/uHerdr-$VERSION.dmg" "dist/uHerdr-$VERSION.zip" dist/SHA256SUMS)
+          # A re-run after a partial publish replaces the assets instead of failing.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          else
+            flags=(--verify-tag --generate-notes --title "uHerdr $VERSION")
+            [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
+            gh release create "$GITHUB_REF_NAME" "${flags[@]}" "${assets[@]}"
+          fi
 
       - name: Upload test build
         if: env.SIGNED != 'true'
