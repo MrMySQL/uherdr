@@ -9,6 +9,7 @@ struct WorkspaceView: View {
     @ObservedObject var devices: DeviceStore
     @StateObject private var shortcutHints = ShortcutHintMonitor()
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
+    @State private var newSessionName = ""
     var body: some View {
         NavigationSplitView(columnVisibility: $sidebarVisibility) {
             DeviceSidebarView(devices: devices, showShortcutHints: shortcutHints.isHeld)
@@ -104,6 +105,15 @@ struct WorkspaceView: View {
                 devices.pendingMachineRemoval = nil
             }
         } message: { Text("This removes the saved SSH connection from uHerdr. The herdr sessions on \(devices.pendingMachineRemoval.flatMap { devices.machine($0)?.name } ?? "that machine") keep running.") }
+        .alert("New session", isPresented: $devices.newSessionPrompt) {
+            TextField("Name", text: $newSessionName)
+            Button("Cancel", role: .cancel) { newSessionName = "" }
+            Button("Create") {
+                let name = newSessionName.trimmingCharacters(in: .whitespaces)
+                newSessionName = ""
+                Task { await devices.createHerdrSession(named: name) }
+            }.keyboardShortcut(.defaultAction)
+        } message: { Text("Starts a new herdr session on this Mac. Use letters, numbers, “.”, “_” and “-”.") }
         .alert("Couldn’t complete the action", isPresented: Binding(get: { store.operationError != nil }, set: { if !$0 { store.operationError = nil } })) {
             Button("OK") { store.operationError = nil }
         } message: { Text(store.operationError ?? "") }

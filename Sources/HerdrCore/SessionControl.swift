@@ -46,8 +46,7 @@ public enum SessionControl {
     public static func serverLaunch(for profile: DeviceProfile, in sessions: [HerdrSessionEntry],
                                     environment: [String: String]) -> ServerLaunch? {
         guard profile.kind == .local else { return nil }
-        // HERDR_CONFIG_PATH is the user's config override, not pane state.
-        var env = environment.filter { !$0.key.hasPrefix("HERDR_") || $0.key == "HERDR_CONFIG_PATH" }
+        var env = serverEnvironment(environment)
         if let entry = session(for: profile, in: sessions) {
             return ServerLaunch(arguments: entry.isDefault ? ["server"] : ["--session", entry.name, "server"], environment: env)
         }
@@ -55,6 +54,27 @@ public enum SessionControl {
         // A custom socket that herdr doesn't list as a session.
         env["HERDR_SOCKET_PATH"] = SessionDiscovery.normalized(profile.socketPath)
         return ServerLaunch(arguments: ["server"], environment: env)
+    }
+
+    /// `herdr --session <name> server` creates the named session and serves it.
+    public static func newSessionLaunch(name: String, environment: [String: String]) -> ServerLaunch {
+        ServerLaunch(arguments: ["--session", name, "server"], environment: serverEnvironment(environment))
+    }
+
+    /// HERDR_CONFIG_PATH is the user's config override, not pane state.
+    static func serverEnvironment(_ environment: [String: String]) -> [String: String] {
+        environment.filter { !$0.key.hasPrefix("HERDR_") || $0.key == "HERDR_CONFIG_PATH" }
+    }
+
+    /// Why herdr would refuse `name` for a new session, or nil. herdr allows
+    /// ASCII letters, digits, '.', '_' and '-', but not "." or "..".
+    public static func newSessionNameProblem(_ name: String, existing: [HerdrSessionEntry]) -> String? {
+        if name.isEmpty { return "Enter a name for the session." }
+        if name == "." || name == ".." { return "A session can’t be named “\(name)”." }
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        guard name.allSatisfy(allowed.contains) else { return "Use only letters, numbers, “.”, “_” and “-”." }
+        if existing.contains(where: { $0.name == name }) { return "A session named “\(name)” already exists." }
+        return nil
     }
 
     /// herdr refuses to delete its default session.

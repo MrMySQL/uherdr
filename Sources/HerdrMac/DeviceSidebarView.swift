@@ -38,6 +38,7 @@ struct DeviceSidebarView: View {
                 Spacer()
                 Menu("Add device") {
                     Button("SSH device…") { addDevice() }
+                    Button("New session on this Mac…") { devices.newSessionPrompt = true }.disabled(devices.creatingSession)
                     Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
                 }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }.font(.system(size: 11)).buttonStyle(.plain).padding(12)
@@ -139,6 +140,7 @@ struct DeviceSidebarView: View {
                     Button("Remove machine…", role: .destructive) { devices.pendingMachineRemoval = machine.id }
                 }
             } else {
+                Button("New session…") { devices.newSessionPrompt = true }.disabled(devices.creatingSession)
                 Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
                 // Only when herdr lists a stopped session; an empty or disabled item reads as broken.
                 if !devices.stoppedHerdrSessions.isEmpty {

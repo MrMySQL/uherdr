@@ -66,6 +66,16 @@ enum SessionControlTests {
         XCTAssertEqual(local("/Users/alex/.config/herdr/sessions/old/../gone/herdr.sock").pathSessionName, "gone")
         XCTAssertEqual(SessionControl.serverLaunch(for: local("/tmp/uh/herdr.sock"), in: [], environment: inherited),
                        SessionControl.ServerLaunch(arguments: ["server"], environment: clean.merging(["HERDR_SOCKET_PATH": "/tmp/uh/herdr.sock"]) { $1 }))
-        print("PASS: session stop and delete use herdr's CLI, stop before delete, and never delete default")
+        // A new session is created by serving it by name, with the same environment rules.
+        XCTAssertEqual(SessionControl.newSessionLaunch(name: "work-2", environment: inherited),
+                       SessionControl.ServerLaunch(arguments: ["--session", "work-2", "server"], environment: clean))
+        // Names follow herdr's rule (checked against herdr 0.9.3), and must be free.
+        for valid in ["work-2", "UPPER.dot_x", "a", "-dash"] {
+            precondition(SessionControl.newSessionNameProblem(valid, existing: sessions) == nil, valid)
+        }
+        for invalid in ["", ".", "..", "has space", "bad/name", "café", "menqal", "default"] {
+            precondition(SessionControl.newSessionNameProblem(invalid, existing: sessions) != nil, invalid)
+        }
+        print("PASS: session stop and delete use herdr's CLI, stop before delete, and never delete default; new session names follow herdr's rule")
     }
 }

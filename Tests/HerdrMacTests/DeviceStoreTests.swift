@@ -21,6 +21,7 @@ import HerdrCore
         try await testSessionActionFailures()
         try await testSessionActionsSerialize()
         try await testRestartAndStartState()
+        try await testCreateSession()
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -445,6 +446,65 @@ import HerdrCore
         await scan.value
         precondition(devices.herdrSession(for: session)?.running == true, "The older scan must not undo it")
         print("PASS: Restart reports an old server that hasn't stopped, and Start refreshes herdr's list during a scan")
+    }
+
+    /// New session against a fake herdr whose launcher creates the session it names.
+    @MainActor static func testCreateSession() async throws {
+        let suiteName = "dev.herdr.session-create-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = "/tmp/uh-session-create-\(UUID().uuidString)"
+        let defaultSocket = "\(root)/herdr/herdr.sock"
+        func socket(_ name: String) -> String { name == "default" ? defaultSocket : "\(root)/herdr/sessions/\(name)/herdr.sock" }
+        var entries: [String] = ["default"]
+        func listing() -> String {
+            let items = entries.map { #"{"default":\#($0 == "default"),"name":"\#($0)","running":true,"socket_path":"\#(socket($0))"}"# }
+            return #"{"sessions":["# + items.joined(separator: ",") + "]}"
+        }
+        var listFails = false, launchStarts = true
+        var launches: [SessionControl.ServerLaunch] = []
+        let run: SessionControl.Runner = { args in
+            guard args == ["session", "list", "--json"] else { return "" }
+            if listFails { throw HerdrError.message("unrecognized subcommand 'session'") }
+            return listing()
+        }
+        let first = DeviceProfile(name: "This Mac", kind: .local, socketPath: defaultSocket, executable: "/usr/bin/true")
+        let devices = DeviceStore(defaults: defaults, profiles: [first], sessionLister: { _ in try SessionDiscovery.parse(listing()) },
+                                  sessionRunner: { _ in run }, launchServer: { _, launch in
+            launches.append(launch)
+            if launchStarts, let flag = launch.arguments.firstIndex(of: "--session") { entries.append(launch.arguments[flag + 1]) }
+        })
+        defer { devices.stop() }
+        func takeError() -> String? { defer { devices.activeSession.operationError = nil }; return devices.activeSession.operationError }
+        // Created by name, added as a device and selected.
+        await devices.createHerdrSession(named: "work")
+        precondition(launches.map(\.arguments) == [["--session", "work", "server"]], "\(launches)")
+        precondition(devices.sessions.map(\.profile.sessionName) == ["default", "work"])
+        precondition(devices.activeSession.profile.socketPath == socket("work") && takeError() == nil)
+        precondition(devices.herdrSession(for: devices.activeSession)?.running == true)
+        // A taken or invalid name starts nothing and says why.
+        await devices.createHerdrSession(named: "work")
+        precondition(launches.count == 1 && takeError()?.contains("already exists") == true)
+        await devices.createHerdrSession(named: "bad name")
+        precondition(launches.count == 1 && takeError() != nil)
+        // Without herdr's list (an older CLI) nothing starts.
+        listFails = true
+        await devices.createHerdrSession(named: "side")
+        precondition(launches.count == 1 && takeError() != nil && devices.sessions.count == 2)
+        listFails = false
+        // A session removed from the list and deleted in herdr comes back when created again.
+        devices.remove(devices.sessions[1].profile.id)
+        entries.removeAll { $0 == "work" }
+        precondition(defaults.stringArray(forKey: SessionDiscovery.dismissedKey) == [SessionDiscovery.normalized(socket("work"))])
+        await devices.createHerdrSession(named: "work")
+        precondition(devices.sessions.map(\.profile.sessionName) == ["default", "work"] && takeError() == nil)
+        precondition(defaults.stringArray(forKey: SessionDiscovery.dismissedKey) == [], "Creating a session again un-hides it")
+        // herdr never lists the new session: an error once the wait ends, and no device.
+        launchStarts = false
+        await devices.createHerdrSession(named: "ghost")
+        precondition(takeError()?.contains("didn’t start") == true && devices.sessions.count == 2)
+        precondition(!devices.creatingSession)
+        print("PASS: New session starts herdr by name, adds and selects its device, rejects taken or invalid names, fails closed without a list, and reports a server that never starts")
     }
 
     /// Stop/Remove against a fake herdr CLI, racing an older discovery.
