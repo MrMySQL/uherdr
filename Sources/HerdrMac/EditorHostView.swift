@@ -390,16 +390,37 @@ private extension Array {
 }
 
 extension CodeTextView {
-    /// System colours, so light and dark mode both stay readable.
+    /// Xcode's default theme, in its light and dark versions, following the
+    /// window's appearance.
     static func color(_ token: SyntaxHighlighter.Token) -> NSColor {
         switch token {
-        case .comment: return .secondaryLabelColor
-        case .string: return .systemGreen
-        case .number: return .systemOrange
-        case .keyword: return .systemPurple
-        case .type: return .systemYellow
-        case .key: return .systemBlue
-        case .heading: return .systemTeal
+        case .comment: return palette.comment
+        case .string: return palette.string
+        case .number: return palette.number
+        case .keyword: return palette.keyword
+        case .type: return palette.type
+        case .key: return palette.key
+        case .heading: return palette.heading
+        }
+    }
+
+    private static let palette = (
+        comment: dynamic(light: 0x5D6C79, dark: 0x6C7986),
+        string: dynamic(light: 0xC41A16, dark: 0xFC6A5D),
+        number: dynamic(light: 0x1C00CF, dark: 0xD0BF69),
+        keyword: dynamic(light: 0x9B2393, dark: 0xFC5FA3),
+        type: dynamic(light: 0x3900A0, dark: 0xD0A8FF),
+        key: dynamic(light: 0x326D74, dark: 0x67B7A4),
+        heading: dynamic(light: 0x0F68A0, dark: 0x5DD8FF)
+    )
+
+    private static func dynamic(light: UInt32, dark: UInt32) -> NSColor {
+        func rgb(_ value: UInt32) -> NSColor {
+            NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
+                    blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+        }
+        return NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? rgb(dark) : rgb(light)
         }
     }
 }

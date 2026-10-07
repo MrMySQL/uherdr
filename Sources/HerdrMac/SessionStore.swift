@@ -128,6 +128,32 @@ final class SessionStore: ObservableObject {
     var currentSpace: Workspace? { workspaces.first { $0.id == selectedSpace } }
     var currentRoot: String? { selectedSpace.flatMap { workspaceRoots.root(for: $0) } }
 
+    /// Spaces whose folder was already guessed this session (also failed
+    /// guesses, so they aren't retried on every poll).
+    private var guessedRoots: Set<String> = []
+
+    /// A space with no folder yet takes the Git repository around its first
+    /// terminal's starting folder (or that folder), once. A space whose
+    /// terminal starts in the home folder keeps asking (`FolderGuess`).
+    private func guessMissingRoots() {
+        let home = isRemote ? remoteHome : NSHomeDirectory()
+        guard let home else { return } // the device's home arrives with the tunnel
+        for space in workspaces where workspaceRoots.root(for: space.id) == nil && !guessedRoots.contains(space.id) {
+            guard let tab = tabs.first(where: { $0.workspaceID == space.id }),
+                  let pane = panes.first(where: { $0.tabID == tab.id }),
+                  let folder = pane.cwd ?? pane.foregroundCwd, folder.hasPrefix("/") else { continue }
+            guessedRoots.insert(space.id)
+            let runner: ScriptRunner = isRemote ? .remote(RemoteShell(profile: profile)) : .local
+            let id = space.id
+            Task { [weak self] in
+                guard let guess = await FolderGuess.folder(for: folder, home: home, runner: runner), let self else { return }
+                // Only if nobody chose a folder meanwhile, and the space still exists.
+                guard self.workspaceRoots.root(for: id) == nil, self.workspaces.contains(where: { $0.id == id }) else { return }
+                self.setRoot(guess, for: id)
+            }
+        }
+    }
+
     func setRoot(_ path: String, for workspaceID: String) {
         workspaceRoots.remember(path, for: workspaceID)
         rootsRevision += 1
@@ -264,6 +290,7 @@ final class SessionStore: ObservableObject {
         tabOrder = defaults.dictionary(forKey: "tabOrder:\(value.id.uuidString)") as? [String: [String]] ?? [:]
         workspaces = []; tabs = []; panes = []; agents = []; layouts = [:]
         selectedSpace = nil; selectedTab = nil; selectedPane = nil
+        guessedRoots = []
         reconnect()
     }
 
@@ -308,6 +335,7 @@ final class SessionStore: ObservableObject {
             }
             if tabs != snapshot.tabs { tabs = snapshot.tabs }
             if panes != snapshot.panes { panes = snapshot.panes }
+            guessMissingRoots()
             if agents != snapshot.agents { agents = snapshot.agents }
             if revision == selectionRevision {
                 if !workspaces.contains(where: { $0.id == selectedSpace }) {

@@ -45,3 +45,36 @@ public struct WorkspaceRoots: Codable, Equatable, Sendable {
         }
     }
 }
+
+/// A folder for a space that has none yet (one herdr made, or one from before
+/// uHerdr remembered folders): the Git repository around its first terminal's
+/// folder, or that folder itself. Never the home folder, "/", or anything
+/// above home: a whole home tree is too broad to list and search, and macOS
+/// would ask for access to Documents and Desktop.
+public enum FolderGuess {
+    /// Args: the terminal's folder. Prints the repository's top folder (empty
+    /// outside a repository) and the folder itself, NUL-separated.
+    static let script = #"""
+    for v in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+    export GIT_OPTIONAL_LOCKS=0 LC_ALL=C
+    cd "$1" 2>/dev/null || exit 21
+    t=""
+    command -v git >/dev/null 2>&1 && t=$(git rev-parse --show-toplevel 2>/dev/null)
+    printf '%s\0%s' "$t" "$(pwd -P)"
+    """#
+
+    public static func folder(for directory: String, home: String, runner: ScriptRunner) async -> String? {
+        guard directory.hasPrefix("/"),
+              let result = try? await runner.run(script, [directory], maxBytes: 64 << 10, timeout: .seconds(15)),
+              result.status == 0 else { return nil }
+        let parts = result.stdout.split(separator: 0, omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
+        guard parts.count == 2 else { return nil }
+        return [parts[0], parts[1]].first { !$0.isEmpty && !isTooBroad($0, home: home) }
+    }
+
+    /// "/", the home folder, or any folder that contains home.
+    public static func isTooBroad(_ path: String, home: String) -> Bool {
+        let path = MarkdownLink.normalize(path), home = MarkdownLink.normalize(home)
+        return path == "/" || path == home || home.hasPrefix(path + "/")
+    }
+}

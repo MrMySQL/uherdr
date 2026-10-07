@@ -43,6 +43,7 @@ import HerdrCore
         try await SearchTests.run()
         try await RipgrepInstallerTests.run()
         try SidebarMemoryTests.run()
+        try await FolderGuessTests.run()
         LineDiffTests.run()
         try DraftStoreTests.run()
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--live" { try await LiveTests.run(socket: CommandLine.arguments[2]) }

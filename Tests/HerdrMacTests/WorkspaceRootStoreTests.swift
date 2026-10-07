@@ -44,7 +44,31 @@ import HerdrCore
         b.setRoot("/b", for: "w1")
         precondition(SessionStore(profile: profile, defaults: defaults, client: client).workspaceRoots.root(for: "w1") == "/a")
         precondition(SessionStore(profile: other, defaults: defaults, client: client).workspaceRoots.root(for: "w1") == "/b")
-        print("PASS: space folders: remembered on create, kept across launches, pruned when closed, safe from stale snapshots, per device")
+        // Spaces with no folder take one from their first terminal: the Git repository
+        // around it, never the home folder; a chosen folder always wins.
+        let fm = FileManager.default
+        let base = PathBoundary.canonical(NSTemporaryDirectory())! + "/uherdr-guess-store-\(UUID().uuidString)"
+        defer { try? fm.removeItem(atPath: base) }
+        try fm.createDirectory(atPath: base + "/app/Sources", withIntermediateDirectories: true)
+        let git = Process()
+        git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        git.arguments = ["-C", base + "/app", "init", "-q"]
+        git.standardOutput = FileHandle.nullDevice
+        try git.run(); git.waitUntilExit()
+        let guessing = RootsClient()
+        await guessing.setWorkspaces(["w1", "w2", "w3"])
+        await guessing.setTerminalFolders(["w1": base + "/app/Sources", "w2": NSHomeDirectory(), "w3": base + "/app"])
+        let guessed = SessionStore(profile: DeviceProfile(name: "Guess", kind: .local, socketPath: "/tmp/uherdr-guess.sock", executable: "/tmp/herdr"),
+                                   defaults: defaults, client: guessing)
+        guessed.setRoot("/chosen", for: "w3")
+        guessed.connected = true
+        await guessed.refresh()
+        for _ in 0..<100 where guessed.workspaceRoots.root(for: "w1") == nil { try await Task.sleep(for: .milliseconds(20)) }
+        precondition(guessed.workspaceRoots.root(for: "w1") == base + "/app", "A space takes the repository around its first terminal")
+        try await Task.sleep(for: .milliseconds(200))
+        precondition(guessed.workspaceRoots.root(for: "w2") == nil, "A terminal in the home folder gives no folder; the sidebar asks")
+        precondition(guessed.workspaceRoots.root(for: "w3") == "/chosen", "A chosen folder is never replaced")
+        print("PASS: space folders: remembered on create, kept across launches, pruned when closed, safe from stale snapshots, per device, guessed from the first terminal (never home, never over a choice)")
     }
 
     @MainActor static func settle(_ store: SessionStore) async throws {
@@ -60,11 +84,15 @@ import HerdrCore
 private actor RootsClient: HerdrRequesting {
     var workspaceIDs = ["w1", "w5"]
     var snapshotDelay: Duration = .zero
+    /// The starting folder of each space's first terminal (no entry: no terminals listed).
+    var terminalFolders: [String: String] = [:]
 
     func setWorkspaces(_ ids: [String], delay: Duration = .zero) {
         workspaceIDs = ids
         snapshotDelay = delay
     }
+
+    func setTerminalFolders(_ folders: [String: String]) { terminalFolders = folders }
 
     static func workspace(_ id: String) -> JSONValue {
         .object(["workspace_id": .string(id), "label": .string(id), "active_tab_id": .string("\(id):t1"),
@@ -81,8 +109,16 @@ private actor RootsClient: HerdrRequesting {
             if snapshotDelay > .zero { try await Task.sleep(for: snapshotDelay) }
             return .object(["snapshot": .object([
                 "version": .string("test"), "protocol": .number(20),
-                "workspaces": .array(ids.map(Self.workspace)), "tabs": .array([]),
-                "panes": .array([]), "agents": .array([])
+                "workspaces": .array(ids.map(Self.workspace)),
+                "tabs": .array(ids.filter { terminalFolders[$0] != nil }.map { id in
+                    .object(["tab_id": .string("\(id):t1"), "workspace_id": .string(id), "label": .string("1"),
+                             "pane_count": .number(1), "agent_status": .string("unknown")])
+                }),
+                "panes": .array(ids.compactMap { id in terminalFolders[id].map { folder in
+                    .object(["pane_id": .string("\(id):p1"), "terminal_id": .string("term-\(id)"), "workspace_id": .string(id),
+                             "tab_id": .string("\(id):t1"), "cwd": .string(folder), "agent_status": .string("unknown")])
+                } }),
+                "agents": .array([])
             ])])
         default: throw HerdrError.message("Unexpected request: \(method)")
         }

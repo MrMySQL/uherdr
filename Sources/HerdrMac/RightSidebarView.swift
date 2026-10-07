@@ -71,11 +71,13 @@ struct RightSidebarView: View {
             search.open(root: store.currentRoot, runner: runner, ripgrep: store.isRemote ? nil : ContentSearch.localRipgrep(), key: changesKey)
             configureInstaller(session)
             await restoreMemory()
-            search.unsavedText = { [weak editors, weak files] in
-                guard let editors, let files, let space = session.selectedSpace, let root = files.canonicalRoot else { return [:] }
+            // The models belong to the window, not to the search or changes models: no cycle.
+            let editors = editors, files = files
+            search.unsavedText = {
+                guard let space = session.selectedSpace, let root = files.canonicalRoot else { return [:] }
                 return Self.unsavedText(editors.tabs(in: space), root: root)
             }
-            changes.onChange = { [weak editors] in if let space = session.selectedSpace { editors?.reloadDiffs(in: space) } }
+            changes.onChange = { if let space = session.selectedSpace { editors.reloadDiffs(in: space) } }
             guard store.currentRoot != nil else { return }
             await changes.watch(every: store.isRemote ? .seconds(10) : .seconds(3)) { !session.isRemote || session.connected }
         }
