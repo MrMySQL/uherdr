@@ -51,6 +51,7 @@ jobs:
           CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           KEY: ${{ secrets.NOTARY_KEY_P8 }}
         run: |
+          umask 077  # the .p12 and .p8 written below are readable by this user only
           KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
           echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
