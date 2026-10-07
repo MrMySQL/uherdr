@@ -78,6 +78,7 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         content.userInfo = ["deviceID": session.profile.id.uuidString, "paneID": agent.paneID]
         let id = AttentionTracker.notificationID(device: session.profile.id, paneID: agent.paneID)
         center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+        tracker.markAlerted(device: session.profile.id, paneID: agent.paneID)
     }
 
     func reveal(deviceID: String, paneID: String) {
