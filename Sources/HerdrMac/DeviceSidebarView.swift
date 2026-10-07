@@ -140,7 +140,10 @@ struct DeviceSidebarView: View {
                 }
             } else {
                 Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
-                Button("Start herdr server") { devices.startDefaultServer() }.disabled(!devices.canStartDefaultServer)
+                // Only while the default session is stopped; a disabled item reads as broken.
+                if devices.canStartDefaultServer {
+                    Button("Start herdr server") { devices.startDefaultServer() }
+                }
             }
         } label: { Image(systemName: "ellipsis") }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Machine actions")
