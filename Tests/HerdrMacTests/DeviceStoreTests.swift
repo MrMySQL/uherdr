@@ -16,9 +16,12 @@ import HerdrCore
         try await testSessionDiscovery(socketA: socketA, socketB: socketB, exe: exe)
         try testMachineGroups(exe: exe)
         testMachineActions(exe: exe)
+        try await testServerStart(exe: exe)
         try await testSessionActionOrdering()
         try await testSessionActionFailures()
         try await testSessionActionsSerialize()
+        try await testRestartAndStartState()
+        try await testCreateSession()
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -350,7 +353,158 @@ import HerdrCore
         held?.resume(); held = nil
         await stopping.value
         precondition(!devices.isActing(session) && devices.sessions.count == 2)
-        print("PASS: one Stop or Remove at a time per session")
+        // Restart holds its session until its new server starts, including while it
+        // waits for the old server's socket to go away after the stop.
+        let restartRoot = "/tmp/uh-session-restart-\(UUID().uuidString)"
+        let restartSocket = "\(restartRoot)/herdr/sessions/work/herdr.sock"
+        try FileManager.default.createDirectory(atPath: (restartSocket as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: restartRoot) }
+        FileManager.default.createFile(atPath: restartSocket, contents: Data())
+        let restartWork = DeviceProfile(name: "work", kind: .local, socketPath: restartSocket, executable: "/usr/bin/true")
+        var running = true
+        var lists = 0
+        var restartCommands: [[String]] = []
+        var launches: [SessionControl.ServerLaunch] = []
+        let restartRun: SessionControl.Runner = { args in
+            restartCommands.append(args)
+            if args.starts(with: ["session", "stop"]) { running = false }
+            if args == ["session", "list", "--json"] { lists += 1 }
+            return args == ["session", "list", "--json"]
+                ? #"{"sessions":[{"default":false,"name":"work","running":\#(running),"socket_path":"\#(restartSocket)"}]}"# : ""
+        }
+        let restarting = DeviceStore(defaults: defaults, profiles: [keep, restartWork], sessionLister: { _ in [] },
+                                     sessionRunner: { _ in restartRun }, launchServer: { _, launch in
+            launches.append(launch)
+            FileManager.default.createFile(atPath: restartSocket, contents: Data())
+        })
+        defer { restarting.stop() }
+        let restartSession = restarting.sessions[1]
+        let restart = Task { await restarting.restartHerdrSession(restartSession) }
+        // After the stop and its listing, Restart polls for the old socket to disappear.
+        await waitUntil("Restart to stop the session and refresh its listing") { lists >= 2 }
+        try await Task.sleep(for: .milliseconds(120))
+        precondition(restarting.isActing(restartSession), "Restart keeps its session busy while the old server goes away")
+        await restarting.startServer(for: restartSession)
+        await restarting.stopHerdrSession(restartSession)
+        precondition(launches.isEmpty && restartCommands.filter { $0.starts(with: ["session", "stop"]) }.count == 1,
+                     "Start and Stop wait for a running Restart: \(restartCommands)")
+        try FileManager.default.removeItem(atPath: restartSocket)
+        await restart.value
+        precondition(launches.map(\.arguments) == [["--session", "work", "server"]] && !restarting.isActing(restartSession))
+        print("PASS: one Start, Stop, Restart or Remove at a time per session")
+    }
+
+    /// Restart whose old server outlives the wait, and Start during a running scan.
+    @MainActor static func testRestartAndStartState() async throws {
+        let suiteName = "dev.herdr.session-restart-state-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = "/tmp/uh-session-restart-state-\(UUID().uuidString)"
+        let workSocket = "\(root)/herdr/sessions/work/herdr.sock"
+        try FileManager.default.createDirectory(atPath: (workSocket as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        var running = true
+        var stopEnds = false
+        var launches: [SessionControl.ServerLaunch] = []
+        let run: SessionControl.Runner = { args in
+            if args.starts(with: ["session", "stop"]), stopEnds { running = false }
+            return args == ["session", "list", "--json"]
+                ? #"{"sessions":[{"default":false,"name":"work","running":\#(running),"socket_path":"\#(workSocket)"}]}"# : ""
+        }
+        var holdNext = false
+        var held: CheckedContinuation<Void, Never>?
+        let keep = DeviceProfile(name: "keep", kind: .local, socketPath: "\(root)/keep.sock", executable: "/usr/bin/true")
+        let work = DeviceProfile(name: "work", kind: .local, socketPath: workSocket, executable: "/usr/bin/true")
+        let devices = DeviceStore(defaults: defaults, profiles: [keep, work], sessionLister: { _ in
+            let snapshot = try await SessionControl.list(run)
+            if holdNext { holdNext = false; await withCheckedContinuation { held = $0 } }
+            return snapshot
+        }, sessionRunner: { _ in run }, launchServer: { _, launch in
+            launches.append(launch)
+            running = true
+            FileManager.default.createFile(atPath: workSocket, contents: Data())
+        })
+        defer { devices.stop() }
+        let session = devices.sessions[1]
+        // The old server is still listed as running after the stop: Restart reports it and starts nothing.
+        await devices.restartHerdrSession(session)
+        precondition(launches.isEmpty, "Restart must not treat the old server as its new one")
+        precondition(devices.activeSession.operationError?.contains("still stopping") == true, devices.activeSession.operationError ?? "nil")
+        precondition(!devices.isActing(session))
+        devices.activeSession.operationError = nil
+        // Start while a periodic scan is mid-flight: the menus see the new server at once.
+        stopEnds = true
+        await devices.stopHerdrSession(session)
+        try? FileManager.default.removeItem(atPath: workSocket)
+        holdNext = true
+        let scan = Task { await devices.discoverSessions() }
+        await waitUntil("the fake herdr to hold a call") { held != nil }
+        await devices.startServer(for: session)
+        precondition(launches.map(\.arguments) == [["--session", "work", "server"]])
+        precondition(devices.herdrSession(for: session)?.running == true, "Start must refresh herdr's list itself")
+        held?.resume(); held = nil
+        await scan.value
+        precondition(devices.herdrSession(for: session)?.running == true, "The older scan must not undo it")
+        print("PASS: Restart reports an old server that hasn't stopped, and Start refreshes herdr's list during a scan")
+    }
+
+    /// New session against a fake herdr whose launcher creates the session it names.
+    @MainActor static func testCreateSession() async throws {
+        let suiteName = "dev.herdr.session-create-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = "/tmp/uh-session-create-\(UUID().uuidString)"
+        let defaultSocket = "\(root)/herdr/herdr.sock"
+        func socket(_ name: String) -> String { name == "default" ? defaultSocket : "\(root)/herdr/sessions/\(name)/herdr.sock" }
+        var entries: [String] = ["default"]
+        func listing() -> String {
+            let items = entries.map { #"{"default":\#($0 == "default"),"name":"\#($0)","running":true,"socket_path":"\#(socket($0))"}"# }
+            return #"{"sessions":["# + items.joined(separator: ",") + "]}"
+        }
+        var listFails = false, launchStarts = true
+        var launches: [SessionControl.ServerLaunch] = []
+        let run: SessionControl.Runner = { args in
+            guard args == ["session", "list", "--json"] else { return "" }
+            if listFails { throw HerdrError.message("unrecognized subcommand 'session'") }
+            return listing()
+        }
+        let first = DeviceProfile(name: "This Mac", kind: .local, socketPath: defaultSocket, executable: "/usr/bin/true")
+        let devices = DeviceStore(defaults: defaults, profiles: [first], sessionLister: { _ in try SessionDiscovery.parse(listing()) },
+                                  sessionRunner: { _ in run }, launchServer: { _, launch in
+            launches.append(launch)
+            if launchStarts, let flag = launch.arguments.firstIndex(of: "--session") { entries.append(launch.arguments[flag + 1]) }
+        })
+        defer { devices.stop() }
+        func takeError() -> String? { defer { devices.activeSession.operationError = nil }; return devices.activeSession.operationError }
+        // Created by name, added as a device and selected.
+        await devices.createHerdrSession(named: "work")
+        precondition(launches.map(\.arguments) == [["--session", "work", "server"]], "\(launches)")
+        precondition(devices.sessions.map(\.profile.sessionName) == ["default", "work"])
+        precondition(devices.activeSession.profile.socketPath == socket("work") && takeError() == nil)
+        precondition(devices.herdrSession(for: devices.activeSession)?.running == true)
+        // A taken or invalid name starts nothing and says why.
+        await devices.createHerdrSession(named: "work")
+        precondition(launches.count == 1 && takeError()?.contains("already exists") == true)
+        await devices.createHerdrSession(named: "bad name")
+        precondition(launches.count == 1 && takeError() != nil)
+        // Without herdr's list (an older CLI) nothing starts.
+        listFails = true
+        await devices.createHerdrSession(named: "side")
+        precondition(launches.count == 1 && takeError() != nil && devices.sessions.count == 2)
+        listFails = false
+        // A session removed from the list and deleted in herdr comes back when created again.
+        devices.remove(devices.sessions[1].profile.id)
+        entries.removeAll { $0 == "work" }
+        precondition(defaults.stringArray(forKey: SessionDiscovery.dismissedKey) == [SessionDiscovery.normalized(socket("work"))])
+        await devices.createHerdrSession(named: "work")
+        precondition(devices.sessions.map(\.profile.sessionName) == ["default", "work"] && takeError() == nil)
+        precondition(defaults.stringArray(forKey: SessionDiscovery.dismissedKey) == [], "Creating a session again un-hides it")
+        // herdr never lists the new session: an error once the wait ends, and no device.
+        launchStarts = false
+        await devices.createHerdrSession(named: "ghost")
+        precondition(takeError()?.contains("didn’t start") == true && devices.sessions.count == 2)
+        precondition(!devices.creatingSession)
+        print("PASS: New session starts herdr by name, adds and selects its device, rejects taken or invalid names, fails closed without a list, and reports a server that never starts")
     }
 
     /// Stop/Remove against a fake herdr CLI, racing an older discovery.
@@ -365,7 +519,8 @@ import HerdrCore
             let entry = work.map { #",{"default":false,"name":"work","running":\#($0),"socket_path":"\#(workSocket)"}"# } ?? ""
             return #"{"sessions":[{"default":true,"name":"default","running":false,"socket_path":"\#(defaultSocket)"}\#(entry)]}"#
         }
-        // /usr/bin/true stands in for `herdr server`, so Start never launches a real server.
+        // A fake launcher records Start, so no server is launched.
+        var launches: [SessionControl.ServerLaunch] = []
         let first = DeviceProfile(name: "default", kind: .local, socketPath: defaultSocket, executable: "/usr/bin/true")
         let second = DeviceProfile(name: "work", kind: .local, socketPath: workSocket, executable: "/usr/bin/true")
         var state = listing(work: true)
@@ -380,7 +535,7 @@ import HerdrCore
             let snapshot = state
             if holdNext { holdNext = false; await withCheckedContinuation { held = $0 } }
             return try SessionDiscovery.parse(snapshot)
-        }, sessionRunner: { _ in run })
+        }, sessionRunner: { _ in run }, launchServer: { _, launch in launches.append(launch) })
         defer { devices.stop() }
         await devices.discoverSessions()
         let work = devices.sessions[1]
@@ -408,8 +563,10 @@ import HerdrCore
         // Starting the default server reconnects its device.
         let defaultDevice = devices.sessions[0]
         defaultDevice.disconnect()
-        precondition(devices.canStartDefaultServer)
-        devices.startDefaultServer()
+        let stoppedDefault = devices.stoppedHerdrSessions.first(where: \.isDefault)
+        precondition(stoppedDefault != nil)
+        await devices.startHerdrSession(stoppedDefault!)
+        precondition(launches.map(\.arguments) == [["server"]], "\(launches)")
         precondition(!defaultDevice.suspended, "Start herdr server must reconnect the default session")
         print("PASS: Stop disconnects its device, older discoveries never overwrite an action, and Start reconnects")
     }
@@ -534,5 +691,86 @@ import HerdrCore
         for _ in 0..<80 where !(a.connected && b.connected) { try await Task.sleep(for: .milliseconds(50)) }
         precondition(a.connected && b.connected, "Reconnect all must bring every session back")
         print("PASS: Reconnect and Disconnect all act on every session of a machine")
+    }
+
+    /// Start and Restart name the session; no real herdr server is started or stopped.
+    @MainActor static func testServerStart(exe: String) async throws {
+        let suiteName = "dev.herdr.server-start-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = URL(fileURLWithPath: "/tmp/uh-start-fake-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("sessions/side-projects"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("sessions/simplied"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaultSocket = root.appendingPathComponent("herdr.sock").path
+        let sideSocket = root.appendingPathComponent("sessions/side-projects/herdr.sock").path
+        let stoppedSocket = root.appendingPathComponent("sessions/simplied/herdr.sock").path
+        // The fake herdr: a session runs while its socket file exists.
+        func listing() -> String {
+            func entry(_ name: String, _ socket: String, _ isDefault: Bool) -> String {
+                #"{"default":\#(isDefault),"name":"\#(name)","running":\#(FileManager.default.fileExists(atPath: socket)),"session_dir":"x","socket_path":"\#(socket)"}"#
+            }
+            return #"{"sessions":[\#(entry("default", defaultSocket, true)),\#(entry("side-projects", sideSocket, false)),\#(entry("simplied", stoppedSocket, false))]}"#
+        }
+        FileManager.default.createFile(atPath: sideSocket, contents: Data())
+        var commands: [[String]] = []
+        var launches: [SessionControl.ServerLaunch] = []
+        var listFails = false
+        let socketFor = ["side-projects": sideSocket, "simplied": stoppedSocket]
+        let run: SessionControl.Runner = { args in
+            commands.append(args)
+            if listFails, args.starts(with: ["session", "list"]) { throw HerdrError.message("session list failed") }
+            if args.starts(with: ["session", "stop"]), let socket = socketFor[args[2]] { try? FileManager.default.removeItem(atPath: socket) }
+            return args.starts(with: ["session", "list"]) ? listing() : ""
+        }
+        let devices = DeviceStore(defaults: defaults, profiles: [
+            DeviceProfile(name: "This Mac", kind: .local, socketPath: sideSocket, executable: exe),
+        ], sessionLister: { _ in try SessionDiscovery.parse(listing()) }, sessionRunner: { _ in run }, launchServer: { _, launch in
+            launches.append(launch)
+            let name = launch.arguments.count == 3 ? launch.arguments[1] : "default"
+            FileManager.default.createFile(atPath: socketFor[name] ?? defaultSocket, contents: Data())
+        })
+        defer { devices.stop() }
+        await devices.discoverSessions()
+        let side = devices.sessions[0]
+        precondition(Set(devices.stoppedHerdrSessions.map(\.name)) == ["default", "simplied"])
+        precondition(devices.herdrSession(for: side)?.running == true)
+        // Pretend to run inside a herdr pane; only the fake launcher can see these.
+        setenv("HERDR_PANE_ID", "test-pane", 1); setenv("HERDR_SESSION", "menqal", 1)
+        defer { unsetenv("HERDR_PANE_ID"); unsetenv("HERDR_SESSION") }
+        precondition(ProcessInfo.processInfo.environment["HERDR_PANE_ID"] == "test-pane", "The test must see the pane variables it set")
+        // Restart stops what answers on the session's socket, then starts the session's own server.
+        await devices.restartHerdrSession(side)
+        precondition(devices.activeSession.operationError == nil, devices.activeSession.operationError ?? "")
+        precondition(commands.contains(["session", "stop", "side-projects"]))
+        precondition(launches.map(\.arguments) == [["--session", "side-projects", "server"]])
+        precondition(launches[0].environment.keys.allSatisfy { !$0.hasPrefix("HERDR_") }, "Inherited herdr pane variables must not reach the server")
+        precondition(launches[0].environment["PATH"] != nil, "The rest of the environment is kept")
+        // A stopped session starts from the machine menu and gets its device.
+        await devices.startHerdrSession(devices.stoppedHerdrSessions.first { $0.name == "simplied" }!)
+        precondition(launches.last?.arguments == ["--session", "simplied", "server"])
+        precondition(devices.sessions.contains { $0.profile.socketPath == stoppedSocket })
+        precondition(devices.stoppedHerdrSessions.map(\.name) == ["default"])
+        // The default session starts with a plain `herdr server` (its own data).
+        await devices.startHerdrSession(devices.stoppedHerdrSessions[0])
+        precondition(launches.last?.arguments == ["server"] && launches.count == 3)
+        // Starting a session herdr lists as running reconnects instead of launching a second server.
+        side.disconnect()
+        await devices.startServer(for: side)
+        precondition(launches.count == 3, "A running session must not get a second server")
+        precondition(devices.activeSession.operationError == nil && !side.suspended, "Start on a running session reconnects")
+        // Without herdr's word for a session socket, nothing starts: a bare server there serves default's data.
+        devices.save(DeviceProfile(name: "Fresh", kind: .local, socketPath: root.appendingPathComponent("sessions/fresh/herdr.sock").path, executable: exe))
+        let fresh = devices.sessions.last!
+        listFails = true
+        await devices.startServer(for: fresh)
+        precondition(launches.count == 3, "A failed session list must not start a server")
+        precondition(devices.activeSession.operationError != nil, "A failed session list must show an error")
+        devices.activeSession.operationError = nil; listFails = false
+        await devices.startServer(for: fresh)
+        precondition(launches.count == 3, "A session herdr doesn't list must not start bare")
+        precondition(devices.activeSession.operationError != nil, "A session herdr doesn't list must show an error")
+        devices.activeSession.operationError = nil
+        print("PASS: Start and Restart run herdr with the session's own name and no inherited herdr variables")
     }
 }

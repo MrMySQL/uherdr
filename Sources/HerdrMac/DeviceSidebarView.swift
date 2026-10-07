@@ -38,6 +38,7 @@ struct DeviceSidebarView: View {
                 Spacer()
                 Menu("Add device") {
                     Button("SSH device…") { addDevice() }
+                    Button("New session on this Mac…") { devices.newSessionPrompt = true }.disabled(devices.creatingSession)
                     Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
                 }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }.font(.system(size: 11)).buttonStyle(.plain).padding(12)
@@ -139,10 +140,15 @@ struct DeviceSidebarView: View {
                     Button("Remove machine…", role: .destructive) { devices.pendingMachineRemoval = machine.id }
                 }
             } else {
+                Button("New session…") { devices.newSessionPrompt = true }.disabled(devices.creatingSession)
                 Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
-                // Only while the default session is stopped; a disabled item reads as broken.
-                if devices.canStartDefaultServer {
-                    Button("Start herdr server") { devices.startDefaultServer() }
+                // Only when herdr lists a stopped session; an empty or disabled item reads as broken.
+                if !devices.stoppedHerdrSessions.isEmpty {
+                    Menu("Start session") {
+                        ForEach(devices.stoppedHerdrSessions, id: \.socketPath) { entry in
+                            Button(entry.name) { Task { await devices.startHerdrSession(entry) } }
+                        }
+                    }
                 }
             }
         } label: { Image(systemName: "ellipsis") }
@@ -154,9 +160,16 @@ struct DeviceSidebarView: View {
         return Menu {
             Button("Reconnect") { session.reconnect() }
             Button("Disconnect") { session.disconnect() }.disabled(session.suspended)
-            if herdrSession != nil {
-                Button("Stop session…") { devices.pendingSessionAction = .stop(session.profile.id) }
-                    .disabled(herdrSession?.running != true || devices.isActing(session))
+            if let herdrSession {
+                if herdrSession.running {
+                    Button("Restart session…") { devices.pendingSessionAction = .restart(session.profile.id) }
+                        .disabled(devices.isActing(session))
+                    Button("Stop session…") { devices.pendingSessionAction = .stop(session.profile.id) }
+                        .disabled(devices.isActing(session))
+                } else {
+                    Button("Start session") { Task { await devices.startServer(for: session) } }
+                        .disabled(devices.isActing(session))
+                }
             }
             Button("Edit socket…") { devices.editor = DeviceEditorTarget(profile: session.profile, sessionOnly: true) }
             if devices.canRemoveHerdrSession(session) {

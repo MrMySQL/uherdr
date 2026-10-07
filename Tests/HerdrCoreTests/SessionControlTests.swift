@@ -42,6 +42,40 @@ enum SessionControlTests {
         do { try await SessionControl.delete(sessions.first { $0.name == "menqal" }!, run) } catch { threw = true }
         XCTAssertTrue(threw)
         XCTAssertEqual(calls, [["session", "stop", "menqal"]])
-        print("PASS: session stop and delete use herdr's CLI, stop before delete, and never delete default")
+        // Starting a server names its session; a bare `herdr server` would use the default
+        // session's data on any socket. Inherited herdr pane variables never reach it.
+        let inherited = ["PATH": "/usr/bin", "XDG_CONFIG_HOME": "/Users/alex/.config", "HERDR_SESSION": "side-projects",
+                         "HERDR_SOCKET_PATH": "/x/herdr.sock", "HERDR_PANE_ID": "p1", "HERDR_ENV": "1", "HERDR_CLIENT_SOCKET_PATH": "/y",
+                         "HERDR_CONFIG_PATH": "/Users/alex/herdr.toml"]
+        // HERDR_CONFIG_PATH is the user's config override, so it is kept.
+        let clean = ["PATH": "/usr/bin", "XDG_CONFIG_HOME": "/Users/alex/.config", "HERDR_CONFIG_PATH": "/Users/alex/herdr.toml"]
+        XCTAssertEqual(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/menqal/herdr.sock"), in: sessions, environment: inherited),
+                       SessionControl.ServerLaunch(arguments: ["--session", "menqal", "server"], environment: clean))
+        XCTAssertEqual(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/herdr.sock"), in: sessions, environment: inherited),
+                       SessionControl.ServerLaunch(arguments: ["server"], environment: clean))
+        XCTAssertEqual(SessionControl.serverLaunch(for: local("/tmp/custom.sock"), in: sessions, environment: inherited),
+                       SessionControl.ServerLaunch(arguments: ["server"], environment: clean.merging(["HERDR_SOCKET_PATH": "/tmp/custom.sock"]) { $1 }))
+        XCTAssertTrue(SessionControl.serverLaunch(for: remote, in: sessions, environment: inherited) == nil)
+        // A herdr session socket herdr doesn't list never starts bare; only a custom socket does.
+        XCTAssertTrue(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/gone/herdr.sock"), in: sessions, environment: inherited) == nil)
+        XCTAssertTrue(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/menqal/herdr.sock"), in: [], environment: inherited) == nil)
+        XCTAssertTrue(SessionControl.serverLaunch(for: local("/tmp/xdg/herdr/herdr.sock"), in: sessions, environment: inherited) == nil)
+        // `..` can't make a session socket look custom.
+        XCTAssertTrue(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/old/../gone/herdr.sock"), in: sessions, environment: inherited) == nil)
+        XCTAssertTrue(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/gone/../../herdr.sock"), in: [], environment: inherited) == nil)
+        XCTAssertEqual(local("/Users/alex/.config/herdr/sessions/old/../gone/herdr.sock").pathSessionName, "gone")
+        XCTAssertEqual(SessionControl.serverLaunch(for: local("/tmp/uh/herdr.sock"), in: [], environment: inherited),
+                       SessionControl.ServerLaunch(arguments: ["server"], environment: clean.merging(["HERDR_SOCKET_PATH": "/tmp/uh/herdr.sock"]) { $1 }))
+        // A new session is created by serving it by name, with the same environment rules.
+        XCTAssertEqual(SessionControl.newSessionLaunch(name: "work-2", environment: inherited),
+                       SessionControl.ServerLaunch(arguments: ["--session", "work-2", "server"], environment: clean))
+        // Names follow herdr's rule (checked against herdr 0.9.3), and must be free.
+        for valid in ["work-2", "UPPER.dot_x", "a", "-dash"] {
+            precondition(SessionControl.newSessionNameProblem(valid, existing: sessions) == nil, valid)
+        }
+        for invalid in ["", ".", "..", "has space", "bad/name", "café", "menqal", "default"] {
+            precondition(SessionControl.newSessionNameProblem(invalid, existing: sessions) != nil, invalid)
+        }
+        print("PASS: session stop and delete use herdr's CLI, stop before delete, and never delete default; new session names follow herdr's rule")
     }
 }

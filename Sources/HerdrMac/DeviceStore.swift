@@ -10,6 +10,10 @@ final class DeviceStore: ObservableObject {
     @Published var pendingRemoval: UUID?
     @Published var pendingSessionAction: SessionAction?
     @Published var pendingMachineRemoval: String?
+    /// The New session prompt is showing.
+    @Published var newSessionPrompt = false
+    /// A New session is being created; the menu item waits for it.
+    @Published private(set) var creatingSession = false
     /// The latest `herdr session list`, refreshed by discovery and after actions.
     @Published private(set) var herdrSessions: [HerdrSessionEntry] = []
     @Published var sidebarMode = "spaces"
@@ -17,6 +21,7 @@ final class DeviceStore: ObservableObject {
     private var subscriptions: [AnyCancellable] = []
     private let sessionLister: @MainActor (String) async throws -> [HerdrSessionEntry]
     private let sessionRunner: @MainActor (String) -> SessionControl.Runner
+    private let launchServer: @MainActor (String, SessionControl.ServerLaunch) throws -> Void
     private var discoveryTask: Task<Void, Never>?
     private var discovering = false
     /// Bumped after a session action, so an older in-flight listing is discarded.
@@ -26,10 +31,12 @@ final class DeviceStore: ObservableObject {
 
     init(defaults: UserDefaults = .standard, profiles: [DeviceProfile]? = nil,
          sessionLister: @escaping @MainActor (String) async throws -> [HerdrSessionEntry] = { try await SessionDiscovery.list(executable: $0) },
-         sessionRunner: @escaping @MainActor (String) -> SessionControl.Runner = { SessionControl.runner(executable: $0) }) {
+         sessionRunner: @escaping @MainActor (String) -> SessionControl.Runner = { SessionControl.runner(executable: $0) },
+         launchServer: @escaping @MainActor (String, SessionControl.ServerLaunch) throws -> Void = DeviceStore.launchDetachedServer) {
         self.defaults = defaults
         self.sessionLister = sessionLister
         self.sessionRunner = sessionRunner
+        self.launchServer = launchServer
         let profiles = profiles ?? DeviceProfile.load(from: defaults, environment: ProcessInfo.processInfo.environment, home: NSHomeDirectory(), executable: SessionStore.findExecutable())
         precondition(!profiles.isEmpty)
         sessions = profiles.map { SessionStore(profile: $0, defaults: defaults) }
@@ -179,7 +186,7 @@ final class DeviceStore: ObservableObject {
 
     /// Whether a device sheet or confirmation is showing.
     var isPresenting: Bool {
-        editor != nil || pendingRemoval != nil || pendingSessionAction != nil || pendingMachineRemoval != nil
+        editor != nil || pendingRemoval != nil || pendingSessionAction != nil || pendingMachineRemoval != nil || newSessionPrompt
     }
 
     func machine(_ id: String) -> MachineGroup? { machineGroups.first { $0.id == id } }
@@ -199,23 +206,127 @@ final class DeviceStore: ObservableObject {
         return machine.isRemote && sessions.count > machine.sessions.count
     }
 
-    /// Whether this Mac's default herdr session is known and stopped.
-    var canStartDefaultServer: Bool { herdrSessions.first(where: \.isDefault).map { !$0.running } ?? false }
+    /// This Mac's herdr sessions that are not running, for the machine menu.
+    var stoppedHerdrSessions: [HerdrSessionEntry] { herdrSessions.filter { !$0.running } }
 
-    func startDefaultServer() {
-        guard let entry = herdrSessions.first(where: \.isDefault), !entry.running else { return }
+    /// Starts a stopped session from the machine menu, adding its device if needed.
+    func startHerdrSession(_ entry: HerdrSessionEntry) async {
         let socket = SessionDiscovery.normalized(entry.socketPath)
         var target = sessions.first { !$0.isRemote && SessionDiscovery.normalized($0.profile.socketPath) == socket }
         if target == nil {
             save(DeviceProfile(name: entry.name, kind: .local, socketPath: socket, executable: localExecutable))
             target = sessions.last
         }
-        target?.startServer()
-        target?.reconnect()
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
-            await self?.discoverSessions()
+        if let target { await startServer(for: target) }
+    }
+
+    /// Creates a named herdr session on this Mac, then adds its device and selects it.
+    func createHerdrSession(named name: String) async {
+        guard !creatingSession else { return }
+        creatingSession = true
+        defer { creatingSession = false }
+        let executable = localExecutable
+        let run = sessionRunner(executable)
+        do {
+            // Fail closed: herdr's list confirms named sessions work and the name is free.
+            let current = try await SessionControl.list(run)
+            herdrSessions = current
+            if let problem = SessionControl.newSessionNameProblem(name, existing: current) { throw HerdrError.message(problem) }
+            try launchServer(executable, SessionControl.newSessionLaunch(name: name, environment: ProcessInfo.processInfo.environment))
+            // herdr chooses the socket; wait until it lists the session as running.
+            var created: HerdrSessionEntry?
+            for _ in 0..<25 where created == nil {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard let after = try? await SessionControl.list(run) else { continue }
+                listingGeneration += 1
+                herdrSessions = after
+                created = after.first { $0.name == name && $0.running }
+            }
+            guard let created else { throw HerdrError.message("herdr didn’t start “\(name)”. See herdr-server.log in herdr’s config folder.") }
+            let socket = SessionDiscovery.normalized(created.socketPath)
+            // Creating it is a fresh choice, even if this socket was removed from the list before.
+            if var dismissed = defaults.stringArray(forKey: SessionDiscovery.dismissedKey), dismissed.contains(socket) {
+                dismissed.removeAll { $0 == socket }
+                defaults.set(dismissed, forKey: SessionDiscovery.dismissedKey)
+            }
+            let added = SessionDiscovery.newProfiles(for: [created], existing: sessions.map(\.profile), dismissed: [], executable: executable)
+            for profile in added { save(profile) }
+            guard let session = sessions.first(where: { !$0.isRemote && SessionDiscovery.normalized($0.profile.socketPath) == socket }) else { return }
+            // A new device connects on save; an existing one (e.g. left from a deleted session) reconnects.
+            if added.isEmpty { session.reconnect() }
+            select(session)
+        } catch {
+            activeSession.operationError = error.localizedDescription
         }
+    }
+
+    /// Starts the server for a local device with its own session's data.
+    func startServer(for session: SessionStore) async {
+        guard !session.isRemote, begin(session) else { return }
+        defer { end(session) }
+        await startOwnServer(for: session)
+    }
+
+    /// `afterStop` is Restart's start: a session still running then is the
+    /// old server not yet gone, which is an error rather than success.
+    private func startOwnServer(for session: SessionStore, afterStop: Bool = false) async {
+        let run = sessionRunner(session.executable)
+        do {
+            // Fail closed: without herdr's list a named session would start bare.
+            let current = try await SessionControl.list(run)
+            herdrSessions = current
+            // Already running: a second server would fight the first for the socket.
+            if SessionControl.session(for: session.profile, in: current)?.running == true {
+                if afterStop { throw HerdrError.message("The old server is still stopping. Try Restart again in a moment.") }
+                session.reconnect()
+                return
+            }
+            guard let launch = SessionControl.serverLaunch(for: session.profile, in: current, environment: ProcessInfo.processInfo.environment) else {
+                throw HerdrError.message("herdr no longer lists this session.")
+            }
+            try launchServer(session.executable, launch)
+            await waitForSocket(session.profile.socketPath, present: true)
+            session.reconnect()
+            // Re-read directly: discovery returns at once while a scan is running.
+            // Only a successful re-read outdates that scan; otherwise the scan still lands.
+            if let after = try? await SessionControl.list(run) {
+                listingGeneration += 1
+                herdrSessions = after
+            }
+            await discoverSessions()
+        } catch {
+            report(error, for: session)
+        }
+    }
+
+    /// Stops whatever server answers on the session's socket (even one
+    /// started with the wrong data) and starts the session's own.
+    func restartHerdrSession(_ session: SessionStore) async {
+        guard !session.isRemote, begin(session) else { return }
+        defer { end(session) }
+        guard await performSessionAction(on: session, { entry, run in try await SessionControl.stop(entry.name, run) }) else { return }
+        await waitForSocket(session.profile.socketPath, present: false)
+        await startOwnServer(for: session, afterStop: true)
+    }
+
+    private func waitForSocket(_ path: String, present: Bool) async {
+        let socket = SessionDiscovery.normalized(path)
+        for _ in 0..<100 where FileManager.default.fileExists(atPath: socket) != present {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    /// Runs herdr detached from the app, so quitting uHerdr leaves it running.
+    static func launchDetachedServer(executable: String, launch: SessionControl.ServerLaunch) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+        process.arguments = [(executable as NSString).expandingTildeInPath] + launch.arguments
+        process.environment = launch.environment
+        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
     }
 
     /// A stopped session's device is disconnected instead of polling a dead socket.
@@ -235,19 +346,24 @@ final class DeviceStore: ObservableObject {
         }
     }
 
-    /// Sessions with a Stop or Remove still running; their actions stay disabled.
+    /// Sessions with a Start, Stop, Restart or Remove still running; their actions stay disabled.
     @Published private(set) var actingSessions: Set<UUID> = []
     func isActing(_ session: SessionStore) -> Bool { actingSessions.contains(session.profile.id) }
-
-    /// Re-reads the session list first, so the action uses herdr's current state.
     /// One action per session at a time; another is refused until it finishes.
+    private func begin(_ session: SessionStore) -> Bool { actingSessions.insert(session.profile.id).inserted }
+    private func end(_ session: SessionStore) { actingSessions.remove(session.profile.id) }
+
     @discardableResult
     private func runSessionAction(on session: SessionStore,
                                   _ action: @MainActor (HerdrSessionEntry, SessionControl.Runner) async throws -> Void) async -> Bool {
-        let id = session.profile.id
-        guard !actingSessions.contains(id) else { return false }
-        actingSessions.insert(id)
-        defer { actingSessions.remove(id) }
+        guard begin(session) else { return false }
+        defer { end(session) }
+        return await performSessionAction(on: session, action)
+    }
+
+    /// Re-reads the session list first, so the action uses herdr's current state.
+    private func performSessionAction(on session: SessionStore,
+                                      _ action: @MainActor (HerdrSessionEntry, SessionControl.Runner) async throws -> Void) async -> Bool {
         let run = sessionRunner(session.executable)
         do {
             let current = try await SessionControl.list(run)
@@ -342,14 +458,15 @@ struct DeviceEditorTarget: Identifiable {
 }
 
 enum SessionAction: Identifiable {
-    case stop(UUID), remove(UUID)
+    case stop(UUID), remove(UUID), restart(UUID)
     var id: String {
         switch self {
         case .stop(let id): "stop:\(id)"
         case .remove(let id): "remove:\(id)"
+        case .restart(let id): "restart:\(id)"
         }
     }
     var deviceID: UUID {
-        switch self { case .stop(let id), .remove(let id): id }
+        switch self { case .stop(let id), .remove(let id), .restart(let id): id }
     }
 }

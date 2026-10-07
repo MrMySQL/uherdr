@@ -86,7 +86,6 @@ final class SessionStore: ObservableObject {
     private var powerReadID: UUID?
     private var nextPowerRefresh = Date.distantPast
     private var refreshingGeneration: UUID?
-    private var serverProcess: Process?
     private var selectionRevision = 0
     private var paneMoveID: UUID?
     private var layoutRevision = 0
@@ -644,28 +643,6 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    func startServer() {
-        guard !isRemote else { return }
-        guard serverProcess?.isRunning != true else { return }
-        do {
-            let path = (socketPath as NSString).expandingTildeInPath
-            try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true)
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
-            process.arguments = [(executable as NSString).expandingTildeInPath, "server"]
-            var env = ProcessInfo.processInfo.environment
-            env.removeValue(forKey: "HERDR_SESSION")
-            env.removeValue(forKey: "HERDR_CLIENT_SOCKET_PATH")
-            env["HERDR_SOCKET_PATH"] = path
-            process.environment = env
-            process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
-            process.standardInput = FileHandle.nullDevice
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            try process.run()
-            serverProcess = process
-        } catch { operationError = error.localizedDescription }
-    }
 }
 
 struct ResourceTarget: Identifiable {
