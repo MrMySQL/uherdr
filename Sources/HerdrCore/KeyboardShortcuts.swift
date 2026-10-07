@@ -314,7 +314,11 @@ public struct ShortcutBindings: Codable, Equatable, Sendable {
 
     /// Ghostty key bindings for the terminal's own shortcuts.
     public var ghosttyKeybinds: [String] {
-        var binds = ["super+a=select_all"]
+        // Line editing as in Terminal and Ghostty, whose own defaults
+        // "keybind = clear" drops: Command-Backspace deletes to the start of the
+        // line (Control-U), Command-Left/Right go to its start and end
+        // (Control-A/E), Option-Left/Right move by word (Esc-b/f).
+        var binds = ["super+a=select_all"] + Self.lineEditingKeybinds
         if let copy = chord(for: .copy) { binds.append(Self.ghostty(copy) + "=copy_to_clipboard") }
         if let paste = chord(for: .paste) { binds.append(Self.ghostty(paste) + "=paste_from_clipboard") }
         if let newLine = chord(for: .newLine) {
@@ -324,6 +328,11 @@ public struct ShortcutBindings: Codable, Equatable, Sendable {
         }
         return binds
     }
+
+    public static let lineEditingKeybinds = [
+        "super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05",
+        "alt+arrow_left=esc:b", "alt+arrow_right=esc:f",
+    ]
 
     static func ghostty(_ chord: KeyChord, key: String? = nil) -> String {
         var parts: [String] = []

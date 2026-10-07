@@ -89,13 +89,15 @@ enum KeyboardShortcutTests {
         bindings.resetAll()
         XCTAssertEqual(bindings, ShortcutBindings())
         // The terminal's own keys become Ghostty bindings.
-        XCTAssertEqual(ShortcutBindings().ghosttyKeybinds, ["super+a=select_all", "super+c=copy_to_clipboard", "super+v=paste_from_clipboard",
+        XCTAssertEqual(ShortcutBindings().ghosttyKeybinds, ["super+a=select_all", "super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05",
+                                                            "alt+arrow_left=esc:b", "alt+arrow_right=esc:f", "super+c=copy_to_clipboard", "super+v=paste_from_clipboard",
                                                             "shift+enter=text:\\x1b[13;2u", "shift+numpad_enter=text:\\x1b[13;2u"])
         var terminal = ShortcutBindings()
         terminal.assign(KeyChord("return", .option), to: .newLine)
         terminal.assign(KeyChord("c", [.control, .shift]), to: .copy)
         terminal.assign(KeyChord("v", .command), to: .closePane)
-        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=select_all", "ctrl+shift+c=copy_to_clipboard",
+        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=select_all", "super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05",
+                                                  "alt+arrow_left=esc:b", "alt+arrow_right=esc:f", "ctrl+shift+c=copy_to_clipboard",
                                                   "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
         // The change flow: invalid keys first, then a clash, then the terminal warning, each once.
         let plain = ShortcutBindings()
