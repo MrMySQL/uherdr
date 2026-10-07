@@ -28,6 +28,10 @@ if [[ "${UNIVERSAL:-0}" == 1 ]]; then
     for ARCH in arm64 x86_64; do
         swift build -c release --product Herdr --arch "$ARCH"
         BIN_DIR="$(swift build -c release --arch "$ARCH" --show-bin-path)"
+        if ! lipo "$BIN_DIR/Herdr" -verify_arch "$ARCH"; then
+            printf '%s slice is %s, not %s\n' "$BIN_DIR/Herdr" "$(lipo -archs "$BIN_DIR/Herdr")" "$ARCH" >&2
+            exit 1
+        fi
         cp "$BIN_DIR/Herdr" ".build/Herdr-$ARCH"
         SLICES+=(".build/Herdr-$ARCH")
     done

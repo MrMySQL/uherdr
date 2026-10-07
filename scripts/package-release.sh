@@ -26,6 +26,10 @@ NOTARY_ARGS=()
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
     NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")
 elif [[ -n "${NOTARY_KEY_PATH:-}" ]]; then
+    if [[ -z "${NOTARY_KEY_ID:-}" || -z "${NOTARY_ISSUER_ID:-}" ]]; then
+        echo "NOTARY_KEY_PATH also needs NOTARY_KEY_ID and NOTARY_ISSUER_ID" >&2
+        exit 1
+    fi
     NOTARY_ARGS=(--key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
 fi
 
@@ -33,12 +37,15 @@ notarize() {
     [[ ${#NOTARY_ARGS[@]} -gt 0 ]] || return 0
     local result status id
     printf 'Notarizing %s\n' "$(basename "$1")"
-    result="$(xcrun notarytool submit "$1" "${NOTARY_ARGS[@]}" --wait --output-format json)"
-    status="$(plutil -extract status raw - <<<"$result")"
+    # notarytool exits non-zero for rejections and transient errors; keep its
+    # output so the diagnostics below always run.
+    result="$(xcrun notarytool submit "$1" "${NOTARY_ARGS[@]}" --wait --timeout 30m --output-format json)" || true
+    status="$(plutil -extract status raw - <<<"$result" 2>/dev/null)" || status=unknown
     if [[ "$status" != Accepted ]]; then
-        id="$(plutil -extract id raw - <<<"$result")"
-        printf 'Notarization %s for %s\n' "$status" "$1" >&2
-        xcrun notarytool log "$id" "${NOTARY_ARGS[@]}" >&2 || true
+        printf 'Notarization %s for %s\n%s\n' "$status" "$1" "$result" >&2
+        if id="$(plutil -extract id raw - <<<"$result" 2>/dev/null)"; then
+            xcrun notarytool log "$id" "${NOTARY_ARGS[@]}" >&2 || true
+        fi
         exit 1
     fi
     xcrun stapler staple "$2"
