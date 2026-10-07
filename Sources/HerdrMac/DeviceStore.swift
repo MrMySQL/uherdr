@@ -95,7 +95,12 @@ final class DeviceStore: ObservableObject {
     private func scanSessions(includeDismissed: Bool) async {
         let generation = listingGeneration
         let executable = sessions.first { !$0.isRemote }?.executable ?? SessionStore.findExecutable()
-        guard let found = try? await sessionLister(executable), generation == listingGeneration else { return }
+        guard let found = try? await sessionLister(executable) else { return }
+        guard generation == listingGeneration else {
+            // A Stop or Remove finished meanwhile; an explicit request runs again.
+            if includeDismissed { explicitDiscoveryQueued = true }
+            return
+        }
         herdrSessions = found
         if includeDismissed { defaults.removeObject(forKey: SessionDiscovery.dismissedKey) }
         let dismissed = Set(defaults.stringArray(forKey: SessionDiscovery.dismissedKey) ?? [])
@@ -255,9 +260,22 @@ final class DeviceStore: ObservableObject {
             if let after = try? await SessionControl.list(run) { herdrSessions = after }
             return true
         } catch {
-            activeSession.operationError = error.localizedDescription
+            report(error, for: session)
+            // A step may have run before the failure (Remove stops, then deletes).
+            if let after = try? await SessionControl.list(run) {
+                listingGeneration += 1
+                herdrSessions = after
+                if SessionControl.session(for: session.profile, in: after)?.running == false { session.disconnect() }
+            }
             return false
         }
+    }
+
+    /// Shows the error where the user is looking: on the selected device,
+    /// naming the session it came from when that is another one.
+    private func report(_ error: Error, for session: SessionStore) {
+        let message = error.localizedDescription
+        activeSession.operationError = session === activeSession ? message : "\(session.displayName): \(message)"
     }
 
     private var localExecutable: String {

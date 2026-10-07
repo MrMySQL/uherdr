@@ -17,6 +17,7 @@ import HerdrCore
         try testMachineGroups(exe: exe)
         testMachineActions(exe: exe)
         try await testSessionActionOrdering()
+        try await testSessionActionFailures()
         try await testSessionActionsSerialize()
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
@@ -411,6 +412,59 @@ import HerdrCore
         devices.startDefaultServer()
         precondition(!defaultDevice.suspended, "Start herdr server must reconnect the default session")
         print("PASS: Stop disconnects its device, older discoveries never overwrite an action, and Start reconnects")
+    }
+
+    /// A Remove that stops but fails to delete, and an explicit discovery an action outdates.
+    @MainActor static func testSessionActionFailures() async throws {
+        let suiteName = "dev.herdr.session-failure-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = "/tmp/uh-session-failure-\(UUID().uuidString)"
+        let keepSocket = "\(root)/keep.sock", workSocket = "\(root)/herdr/sessions/work/herdr.sock"
+        let sideSocket = "\(root)/herdr/sessions/side/herdr.sock"
+        var workRunning = true
+        func listing() -> String {
+            #"{"sessions":[{"default":false,"name":"work","running":\#(workRunning),"socket_path":"\#(workSocket)"},{"default":false,"name":"side","running":true,"socket_path":"\#(sideSocket)"}]}"#
+        }
+        let run: SessionControl.Runner = { args in
+            if args == ["session", "stop", "work"] { workRunning = false }
+            if args == ["session", "delete", "work"] { throw HerdrError.message("snapshot busy") }
+            return args == ["session", "list", "--json"] ? listing() : ""
+        }
+        var holdNext = false
+        var held: CheckedContinuation<Void, Never>?
+        let keep = DeviceProfile(name: "keep", kind: .local, socketPath: keepSocket, executable: "/usr/bin/true")
+        let work = DeviceProfile(name: "work", kind: .local, socketPath: workSocket, executable: "/usr/bin/true")
+        defaults.set([SessionDiscovery.normalized(sideSocket)], forKey: SessionDiscovery.dismissedKey)
+        let devices = DeviceStore(defaults: defaults, profiles: [keep, work], sessionLister: { _ in
+            let snapshot = listing()
+            if holdNext { holdNext = false; await withCheckedContinuation { held = $0 } }
+            return try SessionDiscovery.parse(snapshot)
+        }, sessionRunner: { _ in run })
+        defer { devices.stop() }
+        await devices.discoverSessions()
+        precondition(devices.sessions.count == 2, "The dismissed session stays hidden")
+        let workSession = devices.sessions[1]
+        precondition(devices.activeSession !== workSession)
+        // Remove stops "work", then the delete fails: the device stays, shown disconnected.
+        await devices.removeHerdrSession(workSession)
+        precondition(devices.sessions.count == 2 && workSession.suspended && !workSession.connected,
+                     "A session stopped by a failed Remove must not stay connected")
+        precondition(devices.herdrSession(for: workSession)?.running == false, "The failure refreshes herdr's list")
+        // The error shows on the selected device and names the session it came from.
+        precondition(devices.activeSession.operationError == "work: snapshot busy", devices.activeSession.operationError ?? "nil")
+        precondition(workSession.operationError == nil)
+        devices.activeSession.operationError = nil
+        // An explicit discovery that an action outdates runs again instead of being dropped.
+        workRunning = true
+        holdNext = true
+        let explicit = Task { await devices.discoverSessions(includeDismissed: true) }
+        await waitUntil("the fake herdr to hold a call") { held != nil }
+        await devices.stopHerdrSession(workSession)
+        held?.resume(); held = nil
+        await explicit.value
+        precondition(devices.sessions.map(\.profile.name) == ["keep", "work", "side"], "\(devices.sessions.map(\.profile.name))")
+        print("PASS: a failed Remove refreshes herdr's list and disconnects a stopped session; errors name their session; outdated explicit discoveries rerun")
     }
 
     /// Stops and deletes server A's real session through herdr's CLI.
