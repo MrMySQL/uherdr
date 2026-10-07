@@ -5,7 +5,8 @@
 #   BUILD_NUMBER   CFBundleVersion (default: commit count).
 #   UNIVERSAL=1    Build arm64 + x86_64 instead of the host architecture.
 #   SIGN_IDENTITY  codesign identity (default: ad-hoc "-"). A Developer ID
-#                  identity also gets a secure timestamp for notarization.
+#                  identity also gets the hardened runtime and a secure
+#                  timestamp for notarization.
 #   SPARKLE_PUBLIC_KEY  EdDSA public key for Sparkle updates (default: the
 #                  release key below). Set it empty to build without updates.
 #   SPARKLE_FEED_URL    Appcast URL (default: the latest GitHub release's).
@@ -105,8 +106,10 @@ cp LICENSE "$APP/Contents/Resources/LICENSE"
 swift scripts/make-icon.swift .build/uHerdr.iconset
 iconutil -c icns .build/uHerdr.iconset -o "$APP/Contents/Resources/uHerdr.icns"
 
-SIGN_FLAGS=(--force --options runtime --sign "$SIGN_IDENTITY")
-[[ "$SIGN_IDENTITY" != - ]] && SIGN_FLAGS+=(--timestamp)
+SIGN_FLAGS=(--force --sign "$SIGN_IDENTITY")
+# Notarization needs the hardened runtime. Its library validation rejects
+# ad-hoc-signed frameworks such as Sparkle, so ad-hoc builds go without it.
+[[ "$SIGN_IDENTITY" != - ]] && SIGN_FLAGS+=(--options runtime --timestamp)
 # Sign inside out: Sparkle's helpers, the framework, then the app.
 codesign "${SIGN_FLAGS[@]}" "$SPARKLE/Versions/B/Autoupdate"
 codesign "${SIGN_FLAGS[@]}" "$SPARKLE/Versions/B/Updater.app"
