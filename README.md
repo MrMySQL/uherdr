@@ -15,7 +15,7 @@ Requirements:
 
 ## Build from source
 
-Building requires Swift command-line tools (Swift 6.0 or newer).
+Building requires Xcode 26 or newer (the macOS 26 SDK); the app still runs on macOS 14.
 
 ```sh
 git clone https://github.com/MrMySQL/uherdr.git
