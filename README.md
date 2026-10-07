@@ -4,19 +4,24 @@ A native SwiftUI + AppKit client for the herdr runtime. Spaces map to herdr work
 
 <img width="1299" height="909" alt="Screenshot 2026-09-23 at 16 18 45" src="https://github.com/user-attachments/assets/dfc6656a-3202-41ab-bbf7-e28acb92b190" />
 
-## Requirements
+## Install
+
+Download the latest `uHerdr-<version>.dmg` from [Releases](https://github.com/MrMySQL/uherdr/releases/latest), open it, and drag **uHerdr** to Applications. Builds are universal (Apple silicon and Intel), signed with Developer ID, and notarized.
+
+Requirements:
 
 - macOS 14 or newer.
-- Swift command-line tools (Swift 6.0 or newer) to build.
-- herdr 0.9.0 or newer with `herdr terminal session control` support.
+- herdr 0.9.0 or newer with `herdr terminal session control` support, installed separately.
 
-## Build and run
+## Build from source
+
+Building requires Xcode 26 or newer (the macOS 26 SDK); the app still runs on macOS 14.
 
 ```sh
 git clone https://github.com/MrMySQL/uherdr.git
 cd uherdr
 ./scripts/build-app.sh
-open dist/Herdr.app
+open dist/uHerdr.app
 ```
 
 Open `Package.swift` in Xcode to develop the app, or use `swift build` and `swift run HerdrCoreTests` from a terminal. Swift Package Manager downloads GhosttyTerminal's checksummed native XCFramework and MSDisplayLink on the first build. The pinned Swift wrapper is vendored in this repository.
@@ -67,7 +72,7 @@ Connection state is refreshed from authoritative snapshots. UI actions use expli
 
 ## Distribution
 
-The build script creates an ad-hoc-signed app for local use. Distribution to other Macs requires your own Developer ID signing and notarization. The herdr runtime is installed separately.
+`scripts/build-app.sh` creates an ad-hoc-signed app for local use; set `UNIVERSAL=1` for an Apple silicon + Intel build. Tagged releases are signed, notarized, and published by GitHub Actions; see [Releasing](docs/releasing.md). The herdr runtime is installed separately.
 
 ## Dependencies
 

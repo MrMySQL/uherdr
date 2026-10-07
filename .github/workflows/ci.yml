@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Package.swift', 'Vendor/GhosttyTerminal/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Build core tests
+        run: swift build --product HerdrCoreTests
+
+      - name: Core tests
+        # A pseudo-terminal keeps output line-buffered if the process dies.
+        run: script -q /dev/null "$(swift build --show-bin-path)/HerdrCoreTests"
+
+      - name: Diagnose core test failure
+        if: failure()
+        run: |
+          BIN="$(swift build --show-bin-path)/HerdrCoreTests"
+          codesign -dvvv "$BIN" 2>&1 || true
+          log show --last 5m --style compact \
+            --predicate 'eventMessage CONTAINS "HerdrCoreTests" OR process == "HerdrCoreTests"' | tail -60 || true
+
+      - name: Build app bundle
+        run: ./scripts/build-app.sh
+
+      - name: Verify bundle
+        run: |
+          codesign --verify --strict dist/uHerdr.app
+          plutil -lint dist/uHerdr.app/Contents/Info.plist
