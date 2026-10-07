@@ -140,10 +140,8 @@ struct DeviceSidebarView: View {
                 }
             } else {
                 Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
-                // A disabled submenu still opens (empty) inside a menu, so show a plain item instead.
-                if devices.stoppedHerdrSessions.isEmpty {
-                    Button("Start session") {}.disabled(true)
-                } else {
+                // Only when herdr lists a stopped session; an empty or disabled item reads as broken.
+                if !devices.stoppedHerdrSessions.isEmpty {
                     Menu("Start session") {
                         ForEach(devices.stoppedHerdrSessions, id: \.socketPath) { entry in
                             Button(entry.name) { Task { await devices.startHerdrSession(entry) } }
