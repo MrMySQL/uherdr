@@ -12,6 +12,7 @@ struct HerdrApp: App {
         Window("uHerdr", id: "main") {
             WorkspaceView(store: store, devices: devices)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in devices.stop() }
+                .task { appDelegate.attention.attach(devices) }
         }
         .defaultSize(width: 1280, height: 820)
         .windowToolbarStyle(.unifiedCompact)
@@ -142,7 +143,10 @@ struct HerdrApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let attention = AttentionNotifier()
+    func applicationWillFinishLaunching(_ notification: Notification) { attention.install() }
     func applicationDidFinishLaunching(_ notification: Notification) {
         signal(SIGPIPE, SIG_IGN)
         NSApplication.shared.setActivationPolicy(.regular)

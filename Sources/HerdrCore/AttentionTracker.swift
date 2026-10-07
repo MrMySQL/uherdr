@@ -1,0 +1,79 @@
+import Foundation
+
+extension AgentStatus {
+    /// Blocked agents wait for input; done agents finished and are unseen.
+    public var needsAttention: Bool { self == .blocked || self == .done }
+}
+
+/// The user's choice in Settings; notifications are on unless turned off.
+public enum AgentNotificationPreference {
+    public static let key = "agentNotificationsEnabled"
+    public static func isEnabled(in defaults: UserDefaults) -> Bool { defaults.object(forKey: key) as? Bool ?? true }
+}
+
+/// Whether an alert becomes a banner: notifications are on, and the user
+/// isn't already looking at that pane in uHerdr.
+public enum AttentionDelivery {
+    public static func shouldNotify(enabled: Bool, appActive: Bool, showingPane: Bool) -> Bool {
+        enabled && !(appActive && showingPane)
+    }
+}
+
+/// A click can launch uHerdr before its devices connect, so its pane is
+/// revealed once that device connects, or after `timeout` regardless.
+public enum AttentionReveal {
+    public static let timeout: TimeInterval = 15
+    public static func isReady(connected: Bool, waited: TimeInterval) -> Bool { connected || waited >= timeout }
+    /// Time left until `timeout`, counted from the click.
+    public static func remaining(waited: TimeInterval) -> TimeInterval { max(timeout - waited, 0) }
+}
+
+/// Finds agents that just finished or started waiting. Only a change from a
+/// known status counts, so agents already waiting at launch, on reconnect,
+/// or when first seen raise nothing. Pane IDs repeat across servers, so
+/// agents are keyed by device and pane.
+public struct AttentionTracker {
+    /// One alert per agent in this window, so an agent flipping between
+    /// working and waiting does not alert on every flip.
+    public static let cooldown: TimeInterval = 120
+
+    private var known: [UUID: [String: AgentStatus]] = [:]
+    private var lastAlert: [String: Date] = [:]
+
+    public init() {}
+
+    /// Waiting (blocked, or done and unseen), and any finish: herdr reports
+    /// working -> idle instead of done when a focused terminal shows the tab.
+    public static func alerts(from old: AgentStatus, to new: AgentStatus) -> Bool {
+        (!old.needsAttention && new.needsAttention) || (old == .working && new == .idle)
+    }
+
+    /// Agents due an alert: a status change that alerts, outside the agent's
+    /// cooldown. Records statuses only; `markAlerted` starts the cooldown.
+    public mutating func update(device: UUID, agents: [Agent], now: Date = Date()) -> [Agent] {
+        lastAlert = lastAlert.filter { now.timeIntervalSince($0.value) < Self.cooldown }
+        let previous = known[device]
+        var current: [String: AgentStatus] = [:]
+        var alerts: [Agent] = []
+        for agent in agents where current[agent.paneID] == nil {
+            current[agent.paneID] = agent.agentStatus
+            guard let old = previous?[agent.paneID], Self.alerts(from: old, to: agent.agentStatus) else { continue }
+            let id = Self.notificationID(device: device, paneID: agent.paneID)
+            guard lastAlert[id] == nil else { continue }
+            alerts.append(agent)
+        }
+        known[device] = current
+        return alerts
+    }
+
+    /// Starts an agent's cooldown. Call it only for a banner actually shown,
+    /// so a suppressed alert does not silence the next one.
+    public mutating func markAlerted(device: UUID, paneID: String, now: Date = Date()) {
+        lastAlert[Self.notificationID(device: device, paneID: paneID)] = now
+    }
+
+    /// Drops a device's baseline, e.g. while it is disconnected.
+    public mutating func forget(device: UUID) { known[device] = nil }
+
+    public static func notificationID(device: UUID, paneID: String) -> String { "\(device.uuidString):\(paneID)" }
+}

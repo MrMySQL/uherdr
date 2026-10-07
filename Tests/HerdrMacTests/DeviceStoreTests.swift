@@ -224,6 +224,10 @@ import HerdrCore
         precondition(devices.sessions.count == 1 && !beta.connected)
         await devices.discoverSessions()
         precondition(devices.sessions.count == 1, "A removed session must not come back on its own")
+        // Removing the same socket again, written differently, records it once.
+        devices.save(DeviceProfile(name: "Beta again", kind: .local, socketPath: (socketB as NSString).deletingLastPathComponent + "/./" + (socketB as NSString).lastPathComponent, executable: exe))
+        devices.remove(devices.sessions[1].profile.id)
+        precondition(defaults.stringArray(forKey: SessionDiscovery.dismissedKey) == [SessionDiscovery.normalized(socketB)], "A socket is dismissed once")
         // The last device can never be removed.
         devices.remove(devices.sessions[0].profile.id)
         precondition(devices.sessions.count == 1)
