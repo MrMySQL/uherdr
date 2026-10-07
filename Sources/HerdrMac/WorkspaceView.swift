@@ -458,13 +458,19 @@ struct WorkspaceView: View {
         ForEach(editors.tabs(in: space)) { tab in
             let selected = activeEditor?.id == tab.id
             HStack(spacing: 6) {
-                Button { editors.show(tab.id, in: space); store.focusOwner = .editor } label: {
+                Button { VisibleTabNavigation.select(.editor(tab.id), session: store, editors: editors) } label: {
                     HStack(spacing: 6) {
                         if let image = FileIcon.image(named: FileIconName.name(for: tab.name, isDirectory: false)) {
                             Image(nsImage: image).resizable().frame(width: 12, height: 12)
                         }
                         Text(tab.name).lineLimit(1).italic(tab.isPreview)
                         if let kind = tab.kindLabel { Text(kind).foregroundStyle(.secondary) }
+                        if let index = VisibleTabNavigation.entries(session: store, editors: editors).firstIndex(where: { $0.id == .editor(tab.id) }),
+                           let key = AppHotkeys.tabSelectionKey(at: index), let chord = shortcuts.bindings.chord(for: .selectTab) {
+                            Text(KeyChord.modifierGlyphs(chord.modifiers) + String(key)).font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(Color.accentColor).opacity(shortcutHints.isHeld ? 1 : 0)
+                                .accessibilityHidden(!shortcutHints.isHeld)
+                        }
                     }
                     .contentShape(Rectangle())
                 }
@@ -514,7 +520,7 @@ struct WorkspaceView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
                     ForEach(Array(store.visibleTabs.enumerated()), id: \.element.id) { index, tab in
-                        Button { store.selectTab(tab); editors.showTerminals(in: tab.workspaceID) } label: {
+                        Button { VisibleTabNavigation.select(.terminal(tab.id), session: store, editors: editors) } label: {
                             HStack(spacing: 6) {
                                 let agents = store.panes.filter { $0.tabID == tab.id }.compactMap(\.agent)
                                 if agents.isEmpty {

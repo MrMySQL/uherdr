@@ -144,9 +144,11 @@ struct HerdrApp: App {
                     .disabled(!entry.session.connected || !canInteract)
                 }
                 Divider()
-                ForEach(Array(store.visibleTabs.prefix(10).enumerated()), id: \.element.id) { index, tab in
+                ForEach(Array(navigationTabs.prefix(10).enumerated()), id: \.element.id) { index, tab in
                     if let key = AppHotkeys.tabSelectionKey(at: index) {
-                        Button("Switch to Tab \(index + 1): \(tab.label)") { store.selectTab(tab) }
+                        Button("Switch to Tab \(index + 1): \(tab.label)") {
+                            VisibleTabNavigation.select(at: index, session: store, editors: currentEditors)
+                        }
                             .keyboardShortcut(rangeShortcut(.selectTab, digit: key))
                             .disabled(!canNavigateTabs)
                     }
@@ -208,14 +210,15 @@ struct HerdrApp: App {
     private var canUseCurrentSpace: Bool {
         store.connected && store.currentSpace != nil && canInteract
     }
+    private var currentEditors: EditorStore { editors.store(for: store.profile.id) }
+    private var navigationTabs: [VisibleTabNavigation.Entry] {
+        VisibleTabNavigation.entries(session: store, editors: currentEditors)
+    }
     private var canNavigateTabs: Bool {
-        store.connected && !store.visibleTabs.isEmpty && canInteract
+        store.connected && !navigationTabs.isEmpty && canInteract
     }
     private func moveTab(_ offset: Int) {
-        let tabs = store.visibleTabs
-        guard !tabs.isEmpty else { return }
-        let index = tabs.firstIndex { $0.id == store.selectedTab } ?? 0
-        store.selectTab(tabs[(index + offset + tabs.count) % tabs.count])
+        VisibleTabNavigation.move(offset, session: store, editors: currentEditors)
     }
     private func movePane(_ offset: Int) {
         let panes = store.visiblePanes

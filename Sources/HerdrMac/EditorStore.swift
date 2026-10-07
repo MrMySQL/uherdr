@@ -578,6 +578,8 @@ final class EditorStores: ObservableObject {
     /// changes, so typing doesn't rebuild the menus.
     struct MenuState: Equatable { var shown: Set<String> = []; var savable: Set<String> = []; var markdown: Set<String> = [] }
     @Published private(set) var menuState: [UUID: MenuState] = [:]
+    /// Refresh numbered navigation menus when tabs open, close or change order.
+    @Published private(set) var tabIDs: [UUID: [String: [String]]] = [:]
     let drafts: DraftStore?
     let defaults: UserDefaults?
     /// A space's name and folder on a device, for drafts.
@@ -611,6 +613,8 @@ final class EditorStores: ObservableObject {
         stores[profile] = store
         watchers[profile] = store.$tabs.combineLatest(store.$active).sink { [weak self] tabs, active in
             var state = MenuState()
+            let ids = tabs.mapValues { $0.map(\.id) }
+            if self?.tabIDs[profile] != ids { self?.tabIDs[profile] = ids }
             for (space, id) in active {
                 guard let tab = tabs[space]?.first(where: { $0.id == id }) else { continue }
                 state.shown.insert(space)
@@ -627,6 +631,7 @@ final class EditorStores: ObservableObject {
         stores[profile] = nil
         watchers[profile] = nil
         menuState[profile] = nil
+        tabIDs[profile] = nil
         drafts?.removeAll(profile: profile)
         defaults?.removeObject(forKey: Self.tabsKey(profile))
     }
