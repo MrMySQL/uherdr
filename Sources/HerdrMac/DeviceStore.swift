@@ -223,7 +223,9 @@ final class DeviceStore: ObservableObject {
         await startOwnServer(for: session)
     }
 
-    private func startOwnServer(for session: SessionStore) async {
+    /// `afterStop` is Restart's start: a session still running then is the
+    /// old server not yet gone, which is an error rather than success.
+    private func startOwnServer(for session: SessionStore, afterStop: Bool = false) async {
         let run = sessionRunner(session.executable)
         do {
             // Fail closed: without herdr's list a named session would start bare.
@@ -231,6 +233,7 @@ final class DeviceStore: ObservableObject {
             herdrSessions = current
             // Already running: a second server would fight the first for the socket.
             if SessionControl.session(for: session.profile, in: current)?.running == true {
+                if afterStop { throw HerdrError.message("The old server is still stopping. Try Restart again in a moment.") }
                 session.reconnect()
                 return
             }
@@ -240,9 +243,12 @@ final class DeviceStore: ObservableObject {
             try launchServer(session.executable, launch)
             await waitForSocket(session.profile.socketPath, present: true)
             session.reconnect()
+            // Re-read directly: discovery returns at once while a scan is running.
+            listingGeneration += 1
+            if let after = try? await SessionControl.list(run) { herdrSessions = after }
             await discoverSessions()
         } catch {
-            activeSession.operationError = error.localizedDescription
+            report(error, for: session)
         }
     }
 
@@ -253,7 +259,7 @@ final class DeviceStore: ObservableObject {
         defer { end(session) }
         guard await performSessionAction(on: session, { entry, run in try await SessionControl.stop(entry.name, run) }) else { return }
         await waitForSocket(session.profile.socketPath, present: false)
-        await startOwnServer(for: session)
+        await startOwnServer(for: session, afterStop: true)
     }
 
     private func waitForSocket(_ path: String, present: Bool) async {

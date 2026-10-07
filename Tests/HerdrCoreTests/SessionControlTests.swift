@@ -45,8 +45,10 @@ enum SessionControlTests {
         // Starting a server names its session; a bare `herdr server` would use the default
         // session's data on any socket. Inherited herdr pane variables never reach it.
         let inherited = ["PATH": "/usr/bin", "XDG_CONFIG_HOME": "/Users/alex/.config", "HERDR_SESSION": "side-projects",
-                         "HERDR_SOCKET_PATH": "/x/herdr.sock", "HERDR_PANE_ID": "p1", "HERDR_ENV": "1", "HERDR_CLIENT_SOCKET_PATH": "/y"]
-        let clean = ["PATH": "/usr/bin", "XDG_CONFIG_HOME": "/Users/alex/.config"]
+                         "HERDR_SOCKET_PATH": "/x/herdr.sock", "HERDR_PANE_ID": "p1", "HERDR_ENV": "1", "HERDR_CLIENT_SOCKET_PATH": "/y",
+                         "HERDR_CONFIG_PATH": "/Users/alex/herdr.toml"]
+        // HERDR_CONFIG_PATH is the user's config override, so it is kept.
+        let clean = ["PATH": "/usr/bin", "XDG_CONFIG_HOME": "/Users/alex/.config", "HERDR_CONFIG_PATH": "/Users/alex/herdr.toml"]
         XCTAssertEqual(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/sessions/menqal/herdr.sock"), in: sessions, environment: inherited),
                        SessionControl.ServerLaunch(arguments: ["--session", "menqal", "server"], environment: clean))
         XCTAssertEqual(SessionControl.serverLaunch(for: local("/Users/alex/.config/herdr/herdr.sock"), in: sessions, environment: inherited),

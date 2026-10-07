@@ -20,6 +20,7 @@ import HerdrCore
         try await testSessionActionOrdering()
         try await testSessionActionFailures()
         try await testSessionActionsSerialize()
+        try await testRestartAndStartState()
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -390,6 +391,60 @@ import HerdrCore
         await restart.value
         precondition(launches.map(\.arguments) == [["--session", "work", "server"]] && !restarting.isActing(restartSession))
         print("PASS: one Start, Stop, Restart or Remove at a time per session")
+    }
+
+    /// Restart whose old server outlives the wait, and Start during a running scan.
+    @MainActor static func testRestartAndStartState() async throws {
+        let suiteName = "dev.herdr.session-restart-state-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = "/tmp/uh-session-restart-state-\(UUID().uuidString)"
+        let workSocket = "\(root)/herdr/sessions/work/herdr.sock"
+        try FileManager.default.createDirectory(atPath: (workSocket as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        var running = true
+        var stopEnds = false
+        var launches: [SessionControl.ServerLaunch] = []
+        let run: SessionControl.Runner = { args in
+            if args.starts(with: ["session", "stop"]), stopEnds { running = false }
+            return args == ["session", "list", "--json"]
+                ? #"{"sessions":[{"default":false,"name":"work","running":\#(running),"socket_path":"\#(workSocket)"}]}"# : ""
+        }
+        var holdNext = false
+        var held: CheckedContinuation<Void, Never>?
+        let keep = DeviceProfile(name: "keep", kind: .local, socketPath: "\(root)/keep.sock", executable: "/usr/bin/true")
+        let work = DeviceProfile(name: "work", kind: .local, socketPath: workSocket, executable: "/usr/bin/true")
+        let devices = DeviceStore(defaults: defaults, profiles: [keep, work], sessionLister: { _ in
+            let snapshot = try await SessionControl.list(run)
+            if holdNext { holdNext = false; await withCheckedContinuation { held = $0 } }
+            return snapshot
+        }, sessionRunner: { _ in run }, launchServer: { _, launch in
+            launches.append(launch)
+            running = true
+            FileManager.default.createFile(atPath: workSocket, contents: Data())
+        })
+        defer { devices.stop() }
+        let session = devices.sessions[1]
+        // The old server is still listed as running after the stop: Restart reports it and starts nothing.
+        await devices.restartHerdrSession(session)
+        precondition(launches.isEmpty, "Restart must not treat the old server as its new one")
+        precondition(devices.activeSession.operationError?.contains("still stopping") == true, devices.activeSession.operationError ?? "nil")
+        precondition(!devices.isActing(session))
+        devices.activeSession.operationError = nil
+        // Start while a periodic scan is mid-flight: the menus see the new server at once.
+        stopEnds = true
+        await devices.stopHerdrSession(session)
+        try? FileManager.default.removeItem(atPath: workSocket)
+        holdNext = true
+        let scan = Task { await devices.discoverSessions() }
+        await waitUntil("the fake herdr to hold a call") { held != nil }
+        await devices.startServer(for: session)
+        precondition(launches.map(\.arguments) == [["--session", "work", "server"]])
+        precondition(devices.herdrSession(for: session)?.running == true, "Start must refresh herdr's list itself")
+        held?.resume(); held = nil
+        await scan.value
+        precondition(devices.herdrSession(for: session)?.running == true, "The older scan must not undo it")
+        print("PASS: Restart reports an old server that hasn't stopped, and Start refreshes herdr's list during a scan")
     }
 
     /// Stop/Remove against a fake herdr CLI, racing an older discovery.
