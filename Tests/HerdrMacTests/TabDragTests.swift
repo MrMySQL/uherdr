@@ -11,7 +11,7 @@ import HerdrCore
                                     socketPath: "/tmp/uherdr-tab-drag.sock", executable: "/tmp/herdr")
         defaults.set(["w": ["c", "a", "b"]], forKey: "tabOrder:\(profile.id.uuidString)")
         let client = TabFixtureClient()
-        let store = SessionStore(profile: profile, defaults: defaults, client: client)
+        let store = SessionStore(profile: profile, defaults: defaults, client: client, powerReader: { _ in nil })
         await store.refresh()
         precondition(store.visibleTabs.map(\.id) == ["c", "a", "b"], "Restore the saved display order instead of the server order")
         let selectedTab = store.selectedTab, selectedPane = store.selectedPane
@@ -33,7 +33,7 @@ import HerdrCore
         precondition(store.visibleTabs.map(\.id) == ["a", "c", "b"], "Polling must preserve custom order")
         precondition(notifications == 0, "Unchanged polls must remain silent after reordering")
         observation.cancel()
-        let restored = SessionStore(profile: profile, defaults: defaults, client: client)
+        let restored = SessionStore(profile: profile, defaults: defaults, client: client, powerReader: { _ in nil })
         await restored.refresh()
         precondition(restored.visibleTabs.map(\.id) == ["a", "c", "b"], "Reordering must persist across launches")
         await client.setIDs(["a", "b", "d"])
@@ -58,7 +58,7 @@ import HerdrCore
         store.busy = false
         precondition(store.moveTab(valid, relativeTo: "a", after: false))
         let otherProfile = DeviceProfile(name: "Other", kind: .local, socketPath: profile.socketPath, executable: profile.executable)
-        let otherStore = SessionStore(profile: otherProfile, defaults: defaults, client: client)
+        let otherStore = SessionStore(profile: otherProfile, defaults: defaults, client: client, powerReader: { _ in nil })
         await otherStore.refresh()
         precondition(otherStore.visibleTabs.map(\.id) == ["a", "b", "d"], "Overlapping IDs on different devices must not share order")
         store.updateProfile(otherProfile)
@@ -78,7 +78,7 @@ import HerdrCore
         let profile = DeviceProfile(name: "Space fixture", kind: .local,
                                     socketPath: "/tmp/uherdr-space-order.sock", executable: "/tmp/herdr")
         let client = TabFixtureClient()
-        let store = SessionStore(profile: profile, defaults: defaults, client: client)
+        let store = SessionStore(profile: profile, defaults: defaults, client: client, powerReader: { _ in nil })
         await store.refresh()
         precondition(store.workspaces.map(\.id) == ["w", "w2"], "Without a saved order, follow herdr")
         let selected = store.selectedSpace
@@ -93,11 +93,11 @@ import HerdrCore
         precondition(store.workspaces.map(\.id) == ["w2", "w"], "Polling keeps the custom order")
         precondition(notifications == 0, "Dropping in place and unchanged polls stay silent")
         observation.cancel()
-        let restored = SessionStore(profile: profile, defaults: defaults, client: client)
+        let restored = SessionStore(profile: profile, defaults: defaults, client: client, powerReader: { _ in nil })
         await restored.refresh()
         precondition(restored.workspaces.map(\.id) == ["w2", "w"], "The order persists across launches")
         let other = SessionStore(profile: DeviceProfile(name: "Other", kind: .local, socketPath: profile.socketPath, executable: profile.executable),
-                                 defaults: defaults, client: client)
+                                 defaults: defaults, client: client, powerReader: { _ in nil })
         await other.refresh()
         precondition(other.workspaces.map(\.id) == ["w", "w2"], "Each device keeps its own order")
         let foreign = WorkspaceDragPayload(deviceID: UUID(), connectionGeneration: source.connectionGeneration, workspaceID: "w2")
