@@ -25,6 +25,14 @@ SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 APP="$PWD/dist/uHerdr.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+# Swift Build, SwiftPM's default build system, records the deployment target as
+# the binary's SDK version. AppKit and SwiftUI then keep macOS 14 behavior, in
+# which no SwiftUI drag starts. Record the SDK the binary was built against.
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+stamp_sdk() {
+    vtool -set-build-version macos 14.0 "$SDK_VERSION" -replace -output "$1.stamped" "$1"
+    mv "$1.stamped" "$1"
+}
 if [[ "${UNIVERSAL:-0}" == 1 ]]; then
     # Build each slice separately; multi-arch flags are not honored by every
     # SwiftPM build system, and single-arch builds may share one output path.
@@ -37,6 +45,7 @@ if [[ "${UNIVERSAL:-0}" == 1 ]]; then
             exit 1
         fi
         cp "$BIN_DIR/Herdr" ".build/Herdr-$ARCH"
+        stamp_sdk ".build/Herdr-$ARCH"
         SLICES+=(".build/Herdr-$ARCH")
     done
     lipo -create "${SLICES[@]}" -output "$APP/Contents/MacOS/uHerdr"
@@ -44,6 +53,7 @@ else
     swift build -c release --product Herdr
     BIN_DIR="$(swift build -c release --show-bin-path)"
     cp "$BIN_DIR/Herdr" "$APP/Contents/MacOS/uHerdr"
+    stamp_sdk "$APP/Contents/MacOS/uHerdr"
 fi
 cp -R "$BIN_DIR/GhosttyKit_GhosttyTerminal.bundle" "$APP/Contents/Resources/"
 cp -R "$BIN_DIR/HerdrMac_HerdrMac.bundle" "$APP/Contents/Resources/"
