@@ -68,6 +68,48 @@ import HerdrCore
         precondition(store.visibleTabs.map(\.id) == ["a", "b", "d"], "Profile updates load the new device’s order")
         precondition(!store.moveTab(valid, relativeTo: "a", after: false), "Disconnected sessions reject drops")
         print("PASS: tab insertion, selection, persistence, polling, additions/removals, device/workspace isolation, and invalid drops")
+        try await testWorkspaceOrder()
+    }
+
+    @MainActor static func testWorkspaceOrder() async throws {
+        let suite = "dev.herdr.workspace-order-tests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let profile = DeviceProfile(name: "Space fixture", kind: .local,
+                                    socketPath: "/tmp/uherdr-space-order.sock", executable: "/tmp/herdr")
+        let client = TabFixtureClient()
+        let store = SessionStore(profile: profile, defaults: defaults, client: client)
+        await store.refresh()
+        precondition(store.workspaces.map(\.id) == ["w", "w2"], "Without a saved order, follow herdr")
+        let selected = store.selectedSpace
+        let source = store.workspaceDragPayload(for: "w2")!
+        precondition(store.moveWorkspace(source, relativeTo: "w", after: false))
+        precondition(store.workspaces.map(\.id) == ["w2", "w"], "Move a space to the front")
+        precondition(store.selectedSpace == selected, "Reordering keeps the selected space")
+        var notifications = 0
+        let observation = store.objectWillChange.sink { notifications += 1 }
+        precondition(store.moveWorkspace(source, relativeTo: "w", after: false))
+        for _ in 0..<3 { await store.refresh() }
+        precondition(store.workspaces.map(\.id) == ["w2", "w"], "Polling keeps the custom order")
+        precondition(notifications == 0, "Dropping in place and unchanged polls stay silent")
+        observation.cancel()
+        let restored = SessionStore(profile: profile, defaults: defaults, client: client)
+        await restored.refresh()
+        precondition(restored.workspaces.map(\.id) == ["w2", "w"], "The order persists across launches")
+        let other = SessionStore(profile: DeviceProfile(name: "Other", kind: .local, socketPath: profile.socketPath, executable: profile.executable),
+                                 defaults: defaults, client: client)
+        await other.refresh()
+        precondition(other.workspaces.map(\.id) == ["w", "w2"], "Each device keeps its own order")
+        let foreign = WorkspaceDragPayload(deviceID: UUID(), connectionGeneration: source.connectionGeneration, workspaceID: "w2")
+        let stale = WorkspaceDragPayload(deviceID: profile.id, connectionGeneration: UUID(), workspaceID: "w2")
+        for invalid in [foreign, stale] {
+            precondition(!store.moveWorkspace(invalid, relativeTo: "w", after: true), "Reject foreign devices and stale connections")
+        }
+        precondition(!store.moveWorkspace(source, relativeTo: "w2", after: true) && !store.moveWorkspace(source, relativeTo: "missing", after: true),
+                     "Reject self and missing targets")
+        store.disconnect()
+        precondition(!store.moveWorkspace(source, relativeTo: "w", after: true), "Disconnected sessions reject drops")
+        print("PASS: spaces reorder, persist per device, survive polling, and reject invalid drops")
     }
 }
 

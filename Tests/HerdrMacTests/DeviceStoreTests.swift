@@ -190,6 +190,40 @@ import HerdrCore
         precondition(shown("q2", "spaces") == ["menqal"] && shown("q2") == [])
         precondition(SidebarSearch(text: "mini.local", mode: "spaces").spaces(devices.sessions[1], machineMatches: false).map(\.id) == ["m1"])
         print("PASS: sessions group by machine, take their names from sockets, and keep shortcuts in sidebar order; search finds hosts and every device name")
+        try testDeviceOrder(exe: exe)
+    }
+
+    @MainActor static func testDeviceOrder(exe: String) throws {
+        let suiteName = "dev.herdr.device-order-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let mini = DeviceProfile(name: "Mac mini", host: "alex@mini.local", executable: exe)
+        let studio = DeviceProfile(name: "Studio", host: "studio.local", executable: exe)
+        var miniWork = DeviceProfile(name: "Mini work", host: "alex@mini.local", executable: exe)
+        miniWork.socketPath = "~/.config/herdr/sessions/work/herdr.sock"
+        let local = DeviceProfile(name: "This Mac", kind: .local, socketPath: "/tmp/uh-order/sessions/side/herdr.sock", executable: exe)
+        let localWork = DeviceProfile(name: "work", kind: .local, socketPath: "/tmp/uh-order/sessions/work/herdr.sock", executable: exe)
+        let devices = DeviceStore(defaults: defaults, profiles: [mini, studio, miniWork, local, localWork]) { _ in [] }
+        func machines() -> [String] { devices.machineGroups.map(\.name) }
+        func names(_ index: Int) -> [String] { devices.machineGroups[index].sessions.map(\.profile.name) }
+        precondition(machines() == ["This Mac", "Mac mini", "Studio"], "This Mac leads even when added last")
+        let localID = devices.machineGroups[0].id, miniID = devices.machineGroups[1].id, studioID = devices.machineGroups[2].id
+        precondition(devices.moveMachine(studioID, relativeTo: miniID, after: false))
+        precondition(machines() == ["This Mac", "Studio", "Mac mini"], "Move a machine before another")
+        precondition(devices.moveMachine(studioID, relativeTo: miniID, after: true))
+        precondition(machines() == ["This Mac", "Mac mini", "Studio"], "Move a machine after another")
+        precondition(devices.moveMachine(studioID, relativeTo: localID, after: false))
+        precondition(machines() == ["This Mac", "Studio", "Mac mini"], "Dropping on This Mac lands right after it")
+        precondition(!devices.moveMachine(localID, relativeTo: studioID, after: true), "This Mac stays first")
+        precondition(names(2) == ["Mac mini", "Mini work"], "A machine moves with all its sessions")
+        precondition(devices.moveSession(localWork.id, relativeTo: local.id, after: false))
+        precondition(names(0) == ["work", "This Mac"], "Reorder sessions on This Mac")
+        precondition(!devices.moveSession(miniWork.id, relativeTo: mini.id, after: false), "An SSH machine keeps its first session and name")
+        precondition(!devices.moveSession(localWork.id, relativeTo: mini.id, after: true), "Sessions stay on their machine")
+        let reloaded = DeviceStore(defaults: defaults) { _ in [] }
+        precondition(reloaded.machineGroups.map(\.name) == ["This Mac", "Studio", "Mac mini"]
+                     && reloaded.machineGroups[0].sessions.map(\.profile.name) == ["work", "This Mac"], "The order persists")
+        print("PASS: This Mac stays first; machines and sessions reorder and persist")
     }
 
     @MainActor static func testSessionDiscovery(socketA: String, socketB: String, exe: String) async throws {
