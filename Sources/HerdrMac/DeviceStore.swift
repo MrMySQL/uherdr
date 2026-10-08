@@ -48,7 +48,7 @@ final class DeviceStore: ObservableObject {
 
     var activeSession: SessionStore { sessions.first { $0.profile.id == selectedDeviceID } ?? sessions[0] }
     var attentionCount: Int { sessions.reduce(0) { $0 + $1.attentionCount } }
-    /// Sessions grouped by machine, in order of first appearance.
+    /// Sessions grouped by machine, in order of first appearance; This Mac always leads.
     var machineGroups: [MachineGroup] {
         var groups: [MachineGroup] = []
         for session in sessions {
@@ -56,7 +56,41 @@ final class DeviceStore: ObservableObject {
             if let index = groups.firstIndex(where: { $0.id == key }) { groups[index].sessions.append(session) }
             else { groups.append(MachineGroup(id: key, name: session.isRemote ? session.profile.name : "This Mac", isRemote: session.isRemote, sessions: [session])) }
         }
-        return groups
+        return groups.filter { !$0.isRemote } + groups.filter(\.isRemote)
+    }
+
+    /// Moves an SSH machine before or after another one. This Mac stays first,
+    /// so dropping on it places the machine right after it.
+    @discardableResult
+    func moveMachine(_ machineID: String, relativeTo targetID: String, after: Bool) -> Bool {
+        var groups = machineGroups
+        guard machineID != targetID, let source = groups.firstIndex(where: { $0.id == machineID }), groups[source].isRemote,
+              groups.contains(where: { $0.id == targetID }) else { return false }
+        let moved = groups.remove(at: source)
+        guard let target = groups.firstIndex(where: { $0.id == targetID }) else { return false }
+        groups.insert(moved, at: groups[target].isRemote ? target + (after ? 1 : 0) : target + 1)
+        reorder(groups.flatMap(\.sessions))
+        return true
+    }
+
+    /// Moves a session on This Mac before or after another one. An SSH machine
+    /// is named after its first session, so its sessions keep their order.
+    @discardableResult
+    func moveSession(_ id: UUID, relativeTo targetID: UUID, after: Bool) -> Bool {
+        guard id != targetID, let session = sessions.first(where: { $0.profile.id == id }),
+              let target = sessions.first(where: { $0.profile.id == targetID }),
+              !session.isRemote, !target.isRemote else { return false }
+        var order = machineGroups.flatMap(\.sessions).filter { $0 !== session }
+        guard let index = order.firstIndex(where: { $0 === target }) else { return false }
+        order.insert(session, at: index + (after ? 1 : 0))
+        reorder(order)
+        return true
+    }
+
+    private func reorder(_ order: [SessionStore]) {
+        guard order.map(\.profile.id) != sessions.map(\.profile.id) else { return }
+        sessions = order
+        persist()
     }
     /// Follows the sidebar's grouped order.
     var workspaceShortcuts: [(session: SessionStore, workspace: Workspace)] {
