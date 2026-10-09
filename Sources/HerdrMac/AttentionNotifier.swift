@@ -8,14 +8,16 @@ import HerdrCore
 @MainActor
 final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     private weak var devices: DeviceStore?
+    private weak var editors: EditorStores?
     private var tracker = AttentionTracker()
     private var subscription: AnyCancellable?
     private var center: UNUserNotificationCenter?
     private var scanQueued = false
 
-    func attach(_ devices: DeviceStore) {
+    func attach(_ devices: DeviceStore, editors: EditorStores) {
         guard self.devices == nil else { return }
         self.devices = devices
+        self.editors = editors
         // Notifications need an app bundle; `swift run` has none.
         if Bundle.main.bundleIdentifier != nil {
             let center = UNUserNotificationCenter.current()
@@ -50,7 +52,7 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     private func post(_ agent: Agent, in session: SessionStore) {
         guard let center, AttentionDelivery.shouldNotify(
             enabled: AgentNotificationPreference.isEnabled(in: .standard), appActive: NSApp.isActive,
-            showingPane: devices?.activeSession === session && session.selectedPane == agent.paneID) else { return }
+            showingPane: devices?.activeSession === session && session.isAgentPaneVisible(agent, editorShown: editors?.store(for: session.profile.id).activeTab(in: agent.workspaceID) != nil)) else { return }
         let content = UNMutableNotificationContent()
         content.title = agent.agentStatus == .blocked ? "\(agent.displayName) needs you" : "\(agent.displayName) finished"
         let space = session.workspaces.first { $0.id == agent.workspaceID }?.label

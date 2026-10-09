@@ -16,7 +16,8 @@ struct HerdrApp: App {
             WorkspaceView(store: store, devices: devices, editors: editors.store(for: store.profile.id))
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in devices.stop(); SSHMasters.shared.stopAll() }
                 .task {
-                    attention.attach(devices)
+                    attention.attach(devices, editors: editors)
+                    SessionStore.revealTerminals = { [editors] profile, space in editors.store(for: profile).showTerminals(in: space) }
                     editors.spaceInfo = { [devices] profile, space in
                         guard let session = devices.sessions.first(where: { $0.profile.id == profile }),
                               let root = session.workspaceRoots.root(for: space) else { return nil }

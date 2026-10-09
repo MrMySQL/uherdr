@@ -430,7 +430,16 @@ final class SessionStore: ObservableObject {
         perform("pane.focus", params: ["pane_id": .string(id)], showBusy: false)
     }
 
+    /// App wiring uncovers editor-backed spaces when agent navigation chooses a terminal.
+    static var revealTerminals: ((UUID, String) -> Void)?
+
+    func isAgentPaneVisible(_ agent: Agent, editorShown: Bool) -> Bool {
+        !editorShown && selectedSpace == agent.workspaceID && selectedTab == agent.tabID && selectedPane == agent.paneID
+    }
+
     func revealAgent(_ agent: Agent) {
+        Self.revealTerminals?(profile.id, agent.workspaceID)
+        focusOwner = .terminal
         selectionRevision += 1
         selectedSpace = agent.workspaceID
         selectedTab = agent.tabID

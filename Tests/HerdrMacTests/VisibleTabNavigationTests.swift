@@ -40,6 +40,21 @@ private actor NavigationClient: HerdrRequesting {
             VisibleTabNavigation.select(at: index, session: session, editors: editors)
             check(id, session, editors)
         }
+        // S4: revealing an agent must uncover its terminal even if already selected underneath.
+        let agent = try JSONDecoder().decode(Agent.self, from: Data(#"{"pane_id":"pane","tab_id":"a","workspace_id":"w","agent":"claude","agent_status":"blocked"}"#.utf8))
+        VisibleTabNavigation.select(.editor("/p/f.swift"), session: session, editors: editors)
+        session.selectedPane = agent.paneID
+        SessionStore.revealTerminals = { id, space in stores.store(for: id).showTerminals(in: space) }
+        defer { SessionStore.revealTerminals = nil }
+        precondition(!session.isAgentPaneVisible(agent, editorShown: true), "S4: covered pane is not visible")
+        session.revealAgent(agent)
+        precondition(editors.activeTab(in: "w") == nil && session.focusOwner == .terminal, "S4: reveal uncovers terminal")
+        precondition(session.isAgentPaneVisible(agent, editorShown: false))
+        session.selectedSpace = "other"
+        precondition(!session.isAgentPaneVisible(agent, editorShown: false))
+        session.selectedSpace = "w"
+        VisibleTabNavigation.select(.editor(diff), session: session, editors: editors)
+
         // Wrap both ways, then cross the terminal/file boundary in each direction.
         for (offset, id) in [(1, expected[0]), (-1, expected[3]), (-1, expected[2]), (-1, expected[1]),
                              (1, expected[2]), (1, expected[3])] {
@@ -81,6 +96,9 @@ private actor NavigationClient: HerdrRequesting {
         check(.editor("/p/only.swift"), session, editors)
         // Guard the menu wiring: model tests alone cannot catch a menu still using terminal-only actions.
         let app = try String(contentsOfFile: "Sources/HerdrMac/HerdrApp.swift", encoding: .utf8)
+        precondition(app.contains("SessionStore.revealTerminals = { [editors] profile, space in editors.store(for: profile).showTerminals(in: space) }"))
+        let notifier = try String(contentsOfFile: "Sources/HerdrMac/AttentionNotifier.swift", encoding: .utf8)
+        precondition(notifier.contains("session.isAgentPaneVisible(agent, editorShown: editors?.store(for: session.profile.id).activeTab(in: agent.workspaceID) != nil)"))
         precondition(app.contains("navigationTabs.prefix(10).enumerated()"))
         precondition(app.components(separatedBy: "VisibleTabNavigation.select(at: index, session: store, editors: currentEditors)").count - 1 == 1)
         precondition(app.components(separatedBy: "VisibleTabNavigation.move(offset, session: store, editors: currentEditors)").count - 1 == 1)
