@@ -402,14 +402,14 @@ final class EditorStore: ObservableObject {
         draftTimers[key(space, id)]?.cancel()
         draftTimers[key(space, id)] = nil
         guard let drafts, let context = draftContext?(space) else { return }
-        drafts.remove(profile: context.profile, path: id)
+        drafts.remove(profile: context.profile, workspace: space, path: id)
     }
 
     /// A tab just loaded: if an earlier session left unsaved text for it in
     /// this same space, offer it.
     private func attachDraft(_ id: String, in space: String) {
         guard let drafts, let context = draftContext?(space),
-              let draft = drafts.load(profile: context.profile, path: id),
+              let draft = drafts.load(profile: context.profile, workspace: space, path: id),
               draft.workspaceID == space, draft.spaceLabel == context.label,
               let current = tab(id, in: space), current.canEdit, !current.isDirty, draft.text != current.baselineText else { return }
         update(id, in: space) { $0.recoveredDraft = draft }

@@ -34,14 +34,14 @@ public struct DraftStore: Sendable {
 
     public init(directory: URL = DraftStore.defaultDirectory) { self.directory = directory }
 
-    /// profile/<hash of path>.json: one draft per file per device.
-    func url(profile: UUID, path: String) -> URL {
+    /// One draft per workspace and file per device. Legacy files remain recoverable.
+    func url(profile: UUID, workspace: String? = nil, path: String) -> URL {
         let hash = SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
-        return directory.appendingPathComponent(profile.uuidString, isDirectory: true).appendingPathComponent(hash + ".json")
+        return directory.appendingPathComponent(profile.uuidString, isDirectory: true).appendingPathComponent((workspace.map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() + "-" } ?? "") + hash + ".json")
     }
 
     public func save(_ draft: Draft) throws {
-        let file = url(profile: draft.profileID, path: draft.path)
+        let file = url(profile: draft.profileID, workspace: draft.workspaceID, path: draft.path)
         let folder = file.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         chmod(directory.path, 0o700)
@@ -56,9 +56,15 @@ public struct DraftStore: Sendable {
             unlink(temp.path)
             throw CocoaError(.fileWriteUnknown)
         }
+        removeLegacy(profile: draft.profileID, workspace: draft.workspaceID, path: draft.path)
     }
 
-    public func load(profile: UUID, path: String) -> Draft? { read(url(profile: profile, path: path)) }
+    public func load(profile: UUID, workspace: String, path: String) -> Draft? {
+        if let draft = read(url(profile: profile, workspace: workspace, path: path)) { return draft }
+        // Old versions keyed only by path. Never attach another space's legacy draft.
+        guard let legacy = read(url(profile: profile, path: path)), legacy.workspaceID == workspace else { return nil }
+        return legacy
+    }
 
     /// Every draft of one device, oldest first; unreadable files are skipped.
     public func all(profile: UUID) -> [Draft] {
@@ -67,8 +73,14 @@ public struct DraftStore: Sendable {
         return files.filter { $0.pathExtension == "json" }.compactMap(read).sorted { $0.savedAt < $1.savedAt }
     }
 
-    public func remove(profile: UUID, path: String) {
-        try? FileManager.default.removeItem(at: url(profile: profile, path: path))
+    public func remove(profile: UUID, workspace: String, path: String) {
+        try? FileManager.default.removeItem(at: url(profile: profile, workspace: workspace, path: path))
+        removeLegacy(profile: profile, workspace: workspace, path: path)
+    }
+
+    private func removeLegacy(profile: UUID, workspace: String, path: String) {
+        let legacy = url(profile: profile, path: path)
+        if read(legacy)?.workspaceID == workspace { try? FileManager.default.removeItem(at: legacy) }
     }
 
     /// A removed device takes its drafts with it.

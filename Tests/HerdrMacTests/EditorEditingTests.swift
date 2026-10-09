@@ -67,14 +67,14 @@ actor FakeFile {
         var tab = store.tab("/p/a.swift", in: "w1")!
         precondition(tab.isDirty && !tab.isPreview, "Editing marks the tab dirty and keeps it")
         try await settle()
-        precondition(drafts.load(profile: device, path: "/p/a.swift")?.text == "one\ntwo\n", "A draft is written after typing pauses")
+        precondition(drafts.load(profile: device, workspace: "w1", path: "/p/a.swift")?.text == "one\ntwo\n", "A draft is written after typing pauses")
 
         // Saving: written, clean, draft gone.
         await store.save("/p/a.swift", in: "w1")
         diskText = await file.text(); precondition(diskText == "one\ntwo\n")
         tab = store.tab("/p/a.swift", in: "w1")!
         precondition(!tab.isDirty && tab.saveState == .idle)
-        precondition(drafts.load(profile: device, path: "/p/a.swift") == nil, "Saving removes the draft")
+        precondition(drafts.load(profile: device, workspace: "w1", path: "/p/a.swift") == nil, "Saving removes the draft")
 
         // Typing during a save keeps the newer text unsaved.
         store.edit("/p/a.swift", in: "w1", text: "v2\n")
@@ -154,7 +154,7 @@ actor FakeFile {
 
         // Pruning a vanished space keeps its unsaved text as a draft.
         previews.prune(keeping: [])
-        precondition(drafts.load(profile: device, path: "/p/one")?.text == "1!", "A vanished space's edits are kept as a draft")
+        precondition(drafts.load(profile: device, workspace: "w1", path: "/p/one")?.text == "1!", "A vanished space's edits are kept as a draft")
 
         // A draft from an earlier session is offered when its file reopens.
         let reopened = makeStore()
@@ -171,6 +171,21 @@ actor FakeFile {
         precondition(reopened.tab("/p/two", in: "w1")?.recoveredDraft == nil, "Drafts never attach to a different space")
         reopened.discardDraft("/p/one", in: "w1")
 
+        // B2: the same file in independent spaces has independent recovery.
+        let siblings = makeStore()
+        let sharedFile = FakeFile("shared baseline")
+        for space in ["w1", "w2", "w3"] { siblings.open("/p/shared", in: space, preview: false, io: sharedFile.io) }
+        try await settle()
+        siblings.edit("/p/shared", in: "w1", text: "first draft")
+        siblings.edit("/p/shared", in: "w2", text: "second draft")
+        siblings.flushDrafts()
+        siblings.close("/p/shared", in: "w3")
+        let recoveredSiblings = makeStore()
+        for space in ["w1", "w2"] { recoveredSiblings.open("/p/shared", in: space, preview: false, io: sharedFile.io) }
+        try await settle()
+        precondition(recoveredSiblings.tab("/p/shared", in: "w1")?.recoveredDraft?.text == "first draft", "B2: clean sibling cannot delete another space's draft")
+        precondition(recoveredSiblings.tab("/p/shared", in: "w2")?.recoveredDraft?.text == "second draft")
+
         // B1: Keep never authorizes replacing a newer disk version.
         let recoveryFile = FakeFile("original")
         let original = await recoveryFile.read()
@@ -186,7 +201,7 @@ actor FakeFile {
         precondition(diskText == "newer on disk")
         recovery.edit("/p/recovery", in: "w1", text: "draft edited again")
         recovery.flushDrafts()
-        precondition(drafts.load(profile: device, path: "/p/recovery")?.baselineSHA == original.sha256, "B1: repeated recovery preserves the original baseline")
+        precondition(drafts.load(profile: device, workspace: "w1", path: "/p/recovery")?.baselineSHA == original.sha256, "B1: repeated recovery preserves the original baseline")
         await recovery.save("/p/recovery", in: "w1", mode: .overwrite)
         precondition(recovery.tab("/p/recovery", in: "w1")?.isDirty == false)
 
@@ -237,9 +252,9 @@ actor FakeFile {
         // Don't Save drops the drafts too.
         quitting.edit("/p/q1", in: "w1", text: "lost\n")
         try await settle()
-        precondition(drafts.load(profile: device, path: "/p/q1") != nil)
+        precondition(drafts.load(profile: device, workspace: "w1", path: "/p/q1") != nil)
         quitting.discardUnsaved()
-        precondition(drafts.load(profile: device, path: "/p/q1") == nil, "Don't Save removes the draft")
+        precondition(drafts.load(profile: device, workspace: "w1", path: "/p/q1") == nil, "Don't Save removes the draft")
 
         // Watching the disk: a changed stamp reloads a clean tab in every space showing it;
         // a failed check, our own save, and an unchanged file do nothing.
