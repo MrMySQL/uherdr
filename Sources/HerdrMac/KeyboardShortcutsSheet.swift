@@ -156,7 +156,7 @@ struct KeyboardShortcutsSheet: View {
             case .terminalReserved:
                 Label("\(keys) won’t reach the terminal any more.", systemImage: "apple.terminal")
                     .font(.system(size: 12, weight: .semibold))
-                Text("Terminal programs rely on ⌃ with a letter: ⌃C interrupts, ⌃D ends input. If \(pending.action.title) takes \(keys), uHerdr handles it first in every pane.")
+                Text("Terminal programs use ⌃ and ⌥ with letters. ⌃C interrupts and ⌃D ends input; ⌥ sends Meta commands. If \(pending.action.title) takes \(keys), uHerdr handles it first in every pane.")
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack { Spacer(); Button("Cancel") { self.pending = nil }; Button("Use Anyway") { advance(terminalAccepted: true) }.buttonStyle(.borderedProminent) }
             default:

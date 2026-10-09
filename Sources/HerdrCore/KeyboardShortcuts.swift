@@ -280,11 +280,12 @@ public struct ShortcutBindings: Codable, Equatable, Sendable {
         return chord.modifiers == .shift && (chord.key == "return" || chord.key == "tab")
     }
 
-    /// ⌃ with a letter (⌃C, ⌃D, ⌃R…) means something to terminal programs;
+    /// ⌃ or ⌥ with a letter means something to terminal programs;
+    /// macos-option-as-alt sends Option as Meta.
     /// ⌘ shortcuts never reach the terminal.
     public static func isTerminalReserved(_ chord: KeyChord, for action: ShortcutAction) -> Bool {
         action.chords(for: chord).contains { candidate in
-            candidate.modifiers.contains(.control) && !candidate.modifiers.contains(.command)
+            !candidate.modifiers.isDisjoint(with: [.control, .option]) && !candidate.modifiers.contains(.command)
                 && candidate.key.count == 1 && candidate.key.first!.isASCII && candidate.key.first!.isLetter
         }
     }

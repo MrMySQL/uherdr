@@ -73,6 +73,20 @@ enum KeyboardShortcutTests {
         XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("w", [.command, .shift]), for: .closePane))
         XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("x", .control), for: .selectTab))
         XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("tab", .control), for: .nextTab))
+        // Option is Meta in the terminal; warn before a menu consumes these letters.
+        for key in ["c", "d", "r"] {
+            for modifiers: KeyChord.Modifiers in [.option, [.option, .shift], [.option, .control]] {
+                let chord = KeyChord(key, modifiers)
+                XCTAssertTrue(ShortcutBindings.isTerminalReserved(chord, for: .closePane))
+                XCTAssertEqual(ShortcutChangeStep.next(for: chord, action: .closePane, in: ShortcutBindings()), .terminalReserved)
+                XCTAssertEqual(ShortcutChangeStep.next(for: chord, action: .closePane, in: ShortcutBindings(), terminalAccepted: true), .apply)
+            }
+        }
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("c", [.option, .command]), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("1", .option), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("é", .option), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("tab", .option), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("x", .option), for: .selectTab))
         // A shortcut needs ⌘, ⌃ or ⌥; ⇧ alone only with Return or Tab.
         XCTAssertTrue(ShortcutBindings.isValid(KeyChord("return", .shift)) && ShortcutBindings.isValid(KeyChord("k", .option)))
         XCTAssertTrue(!ShortcutBindings.isValid(KeyChord("k", .shift)) && !ShortcutBindings.isValid(KeyChord("k", [])))
