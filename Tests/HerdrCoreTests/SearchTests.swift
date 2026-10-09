@@ -8,6 +8,7 @@ enum SearchTests {
         globs()
         textSearch()
         dirtyLimits()
+        try await boundedBatch()
         try await ripgrep()
         links()
         print("PASS: search: fuzzy ranking, rg JSON (text, bytes, UTF-16 offsets), problems, globs, in-memory search, ripgrep here and over SSH with limits, unsaved merge, file lists with Git fallback")
@@ -88,6 +89,8 @@ enum SearchTests {
         XCTAssertTrue(!Glob.allows("Vendor/A.swift", include: ["*.swift"], exclude: ["Vendor/**"]))
         XCTAssertEqual(SearchOptions(query: "q", include: " *.swift, ,docs/** ", exclude: "Vendor").ripgrepArguments,
                        ["--json", "--no-config", "--fixed-strings", "--ignore-case", "--hidden", "--type-add", "uherdrinclude:*.swift", "--type-add", "uherdrinclude:**", "--type", "uherdrinclude", "--glob", "!.git", "--glob", "!Vendor", "--", "q", "."])
+        let filter = Glob.Filter(include: ["**/*.{swift,m}"], exclude: ["Vendor/**"])
+        XCTAssertTrue(filter.allows("Sources/a.swift") && !filter.allows("Vendor/a.swift") && !filter.allows("a.md"))
         XCTAssertEqual(SearchOptions(query: "-e", caseSensitive: true, wholeWord: true).ripgrepArguments,
                        ["--json", "--no-config", "--fixed-strings", "--case-sensitive", "--word-regexp", "--", "-e", "."])
     }
@@ -120,6 +123,23 @@ enum SearchTests {
         XCTAssertTrue(timed.hits.isEmpty && timed.stoppedAt?.contains("seconds") == true)
         let cancelled = ContentSearch.merging(SearchOutcome(), unsaved: many, options: options, isCancelled: { true })
         XCTAssertTrue(cancelled.hits.isEmpty)
+    }
+
+    static func boundedBatch() async throws {
+        let root = NSTemporaryDirectory() + "search-batch-" + UUID().uuidString
+        let fm = FileManager.default
+        try fm.createDirectory(atPath: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(atPath: root) }
+        let record = #"{"type":"match","data":{"path":{"text":"./a.swift"},"lines":{"text":"print(selectedSpace, selectedSpace)\n"},"line_number":3,"absolute_offset":25,"submatches":[{"match":{"text":"selectedSpace"},"start":6,"end":19},{"match":{"text":"selectedSpace"},"start":21,"end":34}]}}"#
+        try Data(String(repeating: record + "\n", count: 500).utf8).write(to: URL(fileURLWithPath: root + "/records"))
+        let tool = root + "/rg"
+        fm.createFile(atPath: tool, contents: Data(("#!/bin/sh\ncat " + RemoteShell.quote(root + "/records") + "\n").utf8), attributes: [.posixPermissions: 0o755])
+        let result = try await ContentSearch.search(SearchOptions(query: "selectedSpace"), root: root, runner: .local, ripgrep: tool)
+        XCTAssertEqual(result.hits.count, 500)
+        XCTAssertEqual(result.hits.reduce(0) { $0 + $1.ranges.count }, 1_000)
+        let limited = try await ContentSearch.search(SearchOptions(query: "selectedSpace"), root: root, runner: .local, ripgrep: tool, limits: SearchLimits(matches: 3))
+        XCTAssertEqual(limited.hits.reduce(0) { $0 + $1.ranges.count }, 3)
+        XCTAssertEqual(limited.stoppedAt, "3 matches")
     }
 
     static func ripgrep() async throws {
@@ -165,7 +185,7 @@ enum SearchTests {
             let limited = try await ContentSearch.search(SearchOptions(query: "selected"), root: root, runner: runner, ripgrep: path, limits: SearchLimits(matches: 2))
             XCTAssertEqual(limited.stoppedAt, "2 matches")
             let limitedCount = limited.hits.reduce(0) { $0 + $1.ranges.count }
-            XCTAssertTrue(limitedCount >= 2 && limitedCount < 7) // reading stopped at the limit
+            XCTAssertEqual(limitedCount, 2) // reading stopped at the limit
             let bytes = try await ContentSearch.search(SearchOptions(query: "selected"), root: root, runner: runner, ripgrep: path, limits: SearchLimits(bytes: 300))
             XCTAssertTrue(bytes.stoppedAt?.hasSuffix("of results") == true)
             do {

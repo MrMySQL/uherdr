@@ -138,19 +138,38 @@ public enum RipgrepJSON {
 /// memory: a pattern without "/" matches the name at any depth; one with "/" is
 /// anchored at the space folder; "**" spans folders, "*" and "?" don't.
 public enum Glob {
-    public static func matches(_ pattern: String, _ path: String) -> Bool {
+    private static func expression(_ pattern: String) -> NSRegularExpression? {
         var pattern = pattern
         let anchored = pattern.dropLast().contains("/")
         if pattern.hasPrefix("/") { pattern.removeFirst() }
         if pattern.hasSuffix("/") { pattern += "**" }
-        guard let regex = try? NSRegularExpression(pattern: "^" + (anchored ? "" : "(?:.*/)?") + translate(pattern) + "(?:/.*)?$") else { return false }
-        return regex.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)) != nil
+        return try? NSRegularExpression(pattern: "^" + (anchored ? "" : "(?:.*/)?") + translate(pattern) + "(?:/.*)?$")
+    }
+
+    public static func matches(_ pattern: String, _ path: String) -> Bool {
+        expression(pattern)?.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)) != nil
+    }
+
+    /// Compile once per search, rather than once per returned hit.
+    public struct Filter {
+        private let includes: [NSRegularExpression]
+        private let excludes: [NSRegularExpression]
+        private let hasIncludes: Bool
+        public init(include: [String], exclude: [String]) {
+            hasIncludes = !include.isEmpty
+            includes = include.compactMap { Glob.expression($0) }
+            excludes = exclude.compactMap { Glob.expression($0) }
+        }
+        public func allows(_ path: String) -> Bool {
+            let range = NSRange(path.startIndex..., in: path)
+            return (!hasIncludes || includes.contains { $0.firstMatch(in: path, range: range) != nil })
+                && !excludes.contains { $0.firstMatch(in: path, range: range) != nil }
+        }
     }
 
     /// Whether a relative path passes the include and exclude lists.
     public static func allows(_ path: String, include: [String], exclude: [String]) -> Bool {
-        if !include.isEmpty, !include.contains(where: { matches($0, path) }) { return false }
-        return !exclude.contains { matches($0, path) }
+        Filter(include: include, exclude: exclude).allows(path)
     }
 
     private static func translate(_ glob: String) -> String {
@@ -320,25 +339,29 @@ public enum ContentSearch {
         let events = try runner.events(watchedScript, [ripgrep ?? "", root] + options.ripgrepArguments,
                                        maxBytes: limits.bytes, timeout: limits.deadline)
         var buffer = Data()
+        let filter = Glob.Filter(include: options.includeGlobs, exclude: [])
         var matches = 0
         do {
             reading: for try await event in events {
                 switch event {
                 case let .output(data):
                     buffer.append(data)
-                    while let newline = buffer.firstIndex(of: 10) {
-                        let line = buffer[buffer.startIndex..<newline]
-                        buffer = Data(buffer[buffer.index(after: newline)...])
+                    var cursor = buffer.startIndex
+                    while let newline = buffer[cursor...].firstIndex(of: 10) {
+                        let line = buffer[cursor..<newline]
+                        cursor = buffer.index(after: newline)
                         if case let .match(hit)? = RipgrepJSON.decode(Data(line)),
-                           Glob.allows(hit.path, include: options.includeGlobs, exclude: []) {
-                            outcome.hits.append(hit)
-                            matches += hit.ranges.count
+                           filter.allows(hit.path) {
+                            let ranges = Array(hit.ranges.prefix(max(0, limits.matches - matches)))
+                            outcome.hits.append(SearchHit(path: hit.path, line: hit.line, text: hit.text, ranges: ranges))
+                            matches += ranges.count
                             if matches >= limits.matches {
                                 outcome.stoppedAt = "\(limits.matches.formatted()) matches"
                                 break reading // ending the stream stops ripgrep
                             }
                         }
                     }
+                    if cursor != buffer.startIndex { buffer = Data(buffer[cursor...]) }
                 case let .exit(status, stderr):
                     switch status {
                     case 0, 1: break // matches, or none
@@ -371,9 +394,10 @@ public enum ContentSearch {
             guard budget.check(), let bounded = budget.take(hit) else { break }
             merged.hits.append(bounded)
         }
+        let filter = Glob.Filter(include: options.includeGlobs, exclude: options.excludeGlobs)
         for (path, text) in unsaved.sorted(by: { $0.key < $1.key }) {
             guard budget.check() else { break }
-            if Glob.allows(path, include: options.includeGlobs, exclude: options.excludeGlobs) {
+            if filter.allows(path) {
                 merged.hits += TextSearch.hits(in: text, path: path, options: options, budget: budget)
             }
         }
