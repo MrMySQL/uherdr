@@ -107,6 +107,7 @@ private actor NavigationClient: HerdrRequesting {
         precondition(app.contains("SessionStore.revealTerminals = { [editors] profile, space in editors.store(for: profile).showTerminals(in: space) }"))
         let notifier = try String(contentsOfFile: "Sources/HerdrMac/AttentionNotifier.swift", encoding: .utf8)
         precondition(notifier.contains("session.isAgentPaneVisible(agent, editorShown: editors?.store(for: session.profile.id).activeTab(in: agent.workspaceID) != nil)"))
+        precondition(app.components(separatedBy: "editors.all.forEach { $0.flushDrafts() }").count - 1 == 2, "Quit and termination both flush pending recovery")
         precondition(app.contains("navigationTabs.prefix(10).enumerated()"))
         precondition(app.components(separatedBy: "VisibleTabNavigation.select(at: index, session: store, editors: currentEditors)").count - 1 == 1)
         precondition(app.components(separatedBy: "VisibleTabNavigation.move(offset, session: store, editors: currentEditors)").count - 1 == 1)

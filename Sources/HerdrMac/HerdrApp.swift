@@ -14,7 +14,7 @@ struct HerdrApp: App {
     var body: some Scene {
         Window("uHerdr", id: "main") {
             WorkspaceView(store: store, devices: devices, editors: editors.store(for: store.profile.id))
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in devices.stop(); SSHMasters.shared.stopAll() }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in editors.all.forEach { $0.flushDrafts() }; devices.stop(); SSHMasters.shared.stopAll() }
                 .task {
                     attention.attach(devices, editors: editors)
                     SessionStore.revealTerminals = { [editors] profile, space in editors.store(for: profile).showTerminals(in: space) }
@@ -241,6 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let editors else { return .terminateNow }
+        editors.all.forEach { $0.flushDrafts() }
         let stores = editors.all.filter { !$0.dirtyTabs.isEmpty }
         let count = stores.reduce(0) { $0 + $1.dirtyTabs.count }
         guard count > 0 else { return .terminateNow }

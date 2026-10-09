@@ -211,13 +211,18 @@ actor FakeFile {
         try await settle()
         precondition(reopened.tab("/p/one", in: "w1")?.recoveredDraft?.text == "1!")
         precondition(reopened.tab("/p/one", in: "w1")?.isDirty == false, "A recovered draft waits for Keep")
+        reopened.requestClose("/p/one", in: "w1")
+        precondition(reopened.pendingClose != nil && reopened.tab("/p/one", in: "w1")?.recoveredDraft != nil, "Awaiting recovery also asks before closing")
+        reopened.pendingClose = nil
+        reopened.closeTabs(in: "w1", keepingUnder: ["/elsewhere"])
+        precondition(reopened.tab("/p/one", in: "w1") != nil, "Root change retains awaiting recovery")
         reopened.keepDraft("/p/one", in: "w1")
         precondition(reopened.tab("/p/one", in: "w1")?.text == "1!" && reopened.tab("/p/one", in: "w1")?.isDirty == true)
-        // A draft recorded for a different space label isn't attached.
+        // A rename preserves the space identity and its recovery.
         try drafts.save(Draft(profileID: device, workspaceID: "w1", spaceLabel: "other", root: "/p", path: "/p/two", text: "x", baselineSHA: ""))
         reopened.open("/p/two", in: "w1", preview: false, io: p2.io)
         try await settle()
-        precondition(reopened.tab("/p/two", in: "w1")?.recoveredDraft == nil, "Drafts never attach to a different space")
+        precondition(reopened.tab("/p/two", in: "w1")?.recoveredDraft?.text == "x", "A space rename cannot orphan its draft")
         reopened.discardDraft("/p/one", in: "w1")
 
         // B2: the same file in independent spaces has independent recovery.

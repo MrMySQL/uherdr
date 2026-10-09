@@ -103,6 +103,7 @@ final class EditorStore: ObservableObject {
         var baseline: FileContents? { if case let .loaded(contents) = load { return contents } else { return nil } }
         var baselineText: String? { if case let .text(text)? = baseline?.kind { return text } else { return nil } }
         var isDirty: Bool { text != nil && text != baselineText }
+        var hasUnsavedWork: Bool { isDirty || recoveredDraft != nil }
         var canEdit: Bool { readOnlyNote == nil && baselineText != nil }
     }
 
@@ -134,8 +135,8 @@ final class EditorStore: ObservableObject {
     func tabs(in space: String) -> [Tab] { tabs[space] ?? [] }
     func activeTab(in space: String) -> Tab? { active[space].flatMap { id in tabs[space]?.first { $0.id == id } } }
     func tab(_ id: String, in space: String) -> Tab? { tabs[space]?.first { $0.id == id } }
-    func hasUnsavedEdits(in space: String) -> Bool { tabs(in: space).contains(where: \.isDirty) }
-    var hasUnsavedEdits: Bool { tabs.values.joined().contains(where: \.isDirty) }
+    func hasUnsavedEdits(in space: String) -> Bool { tabs(in: space).contains(where: \.hasUnsavedWork) }
+    var hasUnsavedEdits: Bool { tabs.values.joined().contains(where: \.hasUnsavedWork) }
 
     /// Opens a file in a space: a single click reuses the preview tab, a
     /// double-click (preview false) keeps the tab. An open file is just shown.
@@ -183,7 +184,7 @@ final class EditorStore: ObservableObject {
         tab.diff = diff
         tab.isTransient = transient
         // A preview never replaces a tab with unsaved edits.
-        if preview, let index = list.firstIndex(where: { $0.isPreview && !$0.isDirty }) {
+        if preview, let index = list.firstIndex(where: { $0.isPreview && !$0.hasUnsavedWork }) {
             forget(list[index].id, in: space)
             list[index] = tab
         } else {
@@ -424,7 +425,7 @@ final class EditorStore: ObservableObject {
     private func attachDraft(_ id: String, in space: String) {
         guard let drafts, let context = draftContexts[key(space, id)],
               let draft = drafts.load(profile: context.profile, workspace: space, path: id),
-              draft.workspaceID == space, draft.spaceLabel == context.label,
+              draft.workspaceID == space, draft.root == context.root,
               let current = tab(id, in: space), current.canEdit, !current.isDirty, draft.text != current.baselineText else { return }
         update(id, in: space) { $0.recoveredDraft = draft }
     }
@@ -466,12 +467,13 @@ final class EditorStore: ObservableObject {
 
     /// Closes a tab, or asks first (through `pendingClose`) when it has unsaved edits.
     func requestClose(_ id: String, in space: String) {
-        if tab(id, in: space)?.isDirty == true { pendingClose = PendingClose(space: space, id: id) } else { close(id, in: space) }
+        if tab(id, in: space)?.hasUnsavedWork == true { pendingClose = PendingClose(space: space, id: id) } else { close(id, in: space) }
     }
 
     /// "Save" in the close prompt: closes only once the save went through.
     func saveAndClose(_ pending: PendingClose) async {
         pendingClose = nil
+        keepDraft(pending.id, in: pending.space)
         await save(pending.id, in: pending.space)
         if tab(pending.id, in: pending.space)?.isDirty == false { close(pending.id, in: pending.space) }
     }
@@ -481,20 +483,20 @@ final class EditorStore: ObservableObject {
     /// `roots` lists the folder's spellings (as typed and resolved).
     func closeTabs(in space: String, keepingUnder roots: [String]) {
         let prefixes = roots.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
-        for tab in tabs(in: space) where !tab.isDirty && !prefixes.contains(where: { tab.filePath.hasPrefix($0) }) {
+        for tab in tabs(in: space) where !tab.hasUnsavedWork && !prefixes.contains(where: { tab.filePath.hasPrefix($0) }) {
             close(tab.id, in: space)
         }
     }
 
     /// Every edited tab, as (space, id).
     var dirtyTabs: [(space: String, id: String)] {
-        tabs.sorted { $0.key < $1.key }.flatMap { space, list in list.filter(\.isDirty).map { (space, $0.id) } }
+        tabs.sorted { $0.key < $1.key }.flatMap { space, list in list.filter(\.hasUnsavedWork).map { (space, $0.id) } }
     }
 
     /// Quit's "Save All": true when every edited tab was written. A tab that
     /// couldn't be saved (conflict, read-only, device down) is shown instead.
     func saveAll() async -> Bool {
-        for (space, id) in dirtyTabs { await save(id, in: space) }
+        for (space, id) in dirtyTabs { keepDraft(id, in: space); await save(id, in: space) }
         guard let (space, id) = dirtyTabs.first else { return true }
         show(id, in: space)
         return false
@@ -551,7 +553,7 @@ final class EditorStore: ObservableObject {
     var remembered: [String: [Remembered]] {
         var result = waitingToReopen
         for (space, list) in tabs {
-            let kept = list.filter { !$0.isTransient && (!$0.isPreview || $0.isDirty) }.map { Remembered(path: $0.id, outsideLink: $0.readOnlyNote != nil) }
+            let kept = list.filter { !$0.isTransient && (!$0.isPreview || $0.hasUnsavedWork) }.map { Remembered(path: $0.id, outsideLink: $0.readOnlyNote != nil) }
             result[space] = kept.isEmpty ? nil : kept
         }
         return result
