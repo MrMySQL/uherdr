@@ -11,8 +11,7 @@ let package = Package(
     targets: [
         .target(name: "HerdrCore"),
         // The only code that imports cmark; HerdrCore and the stores stay dependency-free.
-        .target(name: "HerdrMarkdown", dependencies: ["HerdrCore",
-                                                      .product(name: "cmark-gfm", package: "swift-cmark"),
+        .target(name: "HerdrMarkdown", dependencies: [.product(name: "cmark-gfm", package: "swift-cmark"),
                                                       .product(name: "cmark-gfm-extensions", package: "swift-cmark")]),
         .executableTarget(name: "HerdrMac", dependencies: ["HerdrCore", "HerdrMarkdown", .product(name: "GhosttyTerminal", package: "GhosttyTerminal")],
                           resources: [.copy("Resources/AgentIcons"), .copy("Resources/FileIcons")]),
