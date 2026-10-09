@@ -21,6 +21,7 @@ struct WorkspaceView: View {
     @AppStorage("rightSidebar.visible") private var rightSidebarVisible = true
     @AppStorage("rightSidebar.width") private var rightSidebarWidth = 300.0
     @State private var windowWidth = 1280.0
+    @State private var sidebarResizeStartWidth: Double?
     @State private var drawerOpen = false
     /// Below this window width the right sidebar becomes a drawer over the content.
     static let drawerThreshold = 1000.0
@@ -320,8 +321,10 @@ struct WorkspaceView: View {
                 Color.clear.frame(width: 6).contentShape(Rectangle())
                     .onHover { inside in if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
                     .gesture(DragGesture(minimumDistance: 1).onChanged { value in
-                        rightSidebarWidth = min(480, max(240, rightSidebarWidth - value.translation.width))
-                    })
+                        let start = sidebarResizeStartWidth ?? rightSidebarWidth
+                        sidebarResizeStartWidth = start
+                        rightSidebarWidth = min(480, max(240, start - value.translation.width))
+                    }.onEnded { _ in sidebarResizeStartWidth = nil })
             }
     }
 

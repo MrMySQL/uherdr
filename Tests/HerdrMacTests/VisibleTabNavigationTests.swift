@@ -108,6 +108,11 @@ private actor NavigationClient: HerdrRequesting {
         precondition(terminalView.components(separatedBy: "deinit {").count - 1 == 1)
         let destructor = terminalView.components(separatedBy: "deinit {")[1].components(separatedBy: "override func mouseDown")[0]
         precondition(destructor.contains("NSEvent.removeMonitor(mouseUpWatcher)"))
+        let workspaceSource = try String(contentsOfFile: "Sources/HerdrMac/WorkspaceView.swift", encoding: .utf8)
+        let resizeBody = workspaceSource.components(separatedBy: "private var sidebarResizeHandle")[1].components(separatedBy: "private var sessionActionTitle")[0]
+        precondition(resizeBody.contains("sidebarResizeStartWidth = start"))
+        precondition(resizeBody.contains("start - value.translation.width"))
+        precondition(resizeBody.contains(".onEnded { _ in sidebarResizeStartWidth = nil }"))
         // Guard the menu wiring: model tests alone cannot catch a menu still using terminal-only actions.
         let app = try String(contentsOfFile: "Sources/HerdrMac/HerdrApp.swift", encoding: .utf8)
         precondition(app.contains("SessionStore.revealTerminals = { [editors] profile, space in editors.store(for: profile).showTerminals(in: space) }"))
