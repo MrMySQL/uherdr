@@ -115,6 +115,8 @@ final class EditorStore: ObservableObject {
     private var diffLoaders: [String: @Sendable () async throws -> GitDiff] = [:]
     private var draftTimers: [String: Task<Void, Never>] = [:]
     private var revisions: [String: Int] = [:]
+    /// Captured while the buffer's space/root exists; metadata may vanish before pruning.
+    private var draftContexts: [String: (profile: UUID, label: String, root: String)] = [:]
 
     /// Where drafts go, and what a draft records about its space. Nil in tests
     /// that don't need drafts.
@@ -185,6 +187,7 @@ final class EditorStore: ObservableObject {
         }
         tabs[space] = list
         active[space] = path
+        draftContexts[key(space, path)] = draftContext?(space)
         io[key(space, path)] = fileIO
         startLoad(path, in: space)
         onTabsChanged?()
@@ -392,7 +395,7 @@ final class EditorStore: ObservableObject {
 
     private func writeDraft(_ id: String, in space: String) {
         draftTimers[key(space, id)] = nil
-        guard let drafts, let context = draftContext?(space), let current = tab(id, in: space),
+        guard let drafts, let context = draftContexts[key(space, id)], let current = tab(id, in: space),
               current.isDirty, let text = current.text else { return }
         try? drafts.save(Draft(profileID: context.profile, workspaceID: space, spaceLabel: context.label, root: context.root,
                                path: id, text: text, baselineSHA: current.recoveredBaselineSHA ?? current.baseline?.sha256 ?? ""))
@@ -401,14 +404,14 @@ final class EditorStore: ObservableObject {
     private func removeDraft(_ id: String, in space: String) {
         draftTimers[key(space, id)]?.cancel()
         draftTimers[key(space, id)] = nil
-        guard let drafts, let context = draftContext?(space) else { return }
+        guard let drafts, let context = draftContexts[key(space, id)] else { return }
         drafts.remove(profile: context.profile, workspace: space, path: id)
     }
 
     /// A tab just loaded: if an earlier session left unsaved text for it in
     /// this same space, offer it.
     private func attachDraft(_ id: String, in space: String) {
-        guard let drafts, let context = draftContext?(space),
+        guard let drafts, let context = draftContexts[key(space, id)],
               let draft = drafts.load(profile: context.profile, workspace: space, path: id),
               draft.workspaceID == space, draft.spaceLabel == context.label,
               let current = tab(id, in: space), current.canEdit, !current.isDirty, draft.text != current.baselineText else { return }
@@ -564,6 +567,10 @@ final class EditorStore: ObservableObject {
         loads[k] = nil
         io[k] = nil
         diffLoaders[k] = nil
+        draftTimers[k]?.cancel()
+        draftTimers[k] = nil
+        draftContexts[k] = nil
+        revisions[k] = nil
     }
 
     private func update(_ id: String, in space: String, _ change: (inout Tab) -> Void) {

@@ -156,6 +156,18 @@ actor FakeFile {
         previews.prune(keeping: [])
         precondition(drafts.load(profile: device, workspace: "w1", path: "/p/one")?.text == "1!", "A vanished space's edits are kept as a draft")
 
+        // B4: production drops root metadata before SwiftUI prunes tabs.
+        let vanished = makeStore()
+        var rootKnown = true
+        vanished.draftContext = { _ in rootKnown ? (device, "uherdr", "/p") : nil }
+        vanished.draftDelay = .seconds(60)
+        vanished.open("/p/vanished", in: "w1", preview: false, io: p1.io)
+        try await settle()
+        vanished.edit("/p/vanished", in: "w1", text: "last edit")
+        rootKnown = false
+        vanished.prune(keeping: [])
+        precondition(drafts.load(profile: device, workspace: "w1", path: "/p/vanished")?.text == "last edit", "B4: lost metadata cannot drop pending recovery")
+
         // A draft from an earlier session is offered when its file reopens.
         let reopened = makeStore()
         reopened.open("/p/one", in: "w1", preview: false, io: p1.io)
