@@ -30,6 +30,10 @@ import ImageIO
         pdfContext.draw(bitmap.cgImage!, in: CGRect(x: 0, y: 0, width: 2, height: 3))
         pdfContext.endPDFPage(); pdfContext.closePDF()
         precondition(MediaDecoder.pdf(pdfBytes as Data) != nil)
+        for limits in [MediaDecoder.PDFLimits(pages: 0), MediaDecoder.PDFLimits(objects: 0),
+                       MediaDecoder.PDFLimits(pixels: 1), MediaDecoder.PDFLimits(depth: 0)] {
+            precondition(MediaDecoder.pdf(pdfBytes as Data, limits: limits) == nil, "PDF budget must reject before rendering")
+        }
         var oversized = pdfBytes as Data
         let marker = Data("/Width 2".utf8)
         let replacement = Data("/Width 9000".utf8)

@@ -37,10 +37,17 @@ enum MediaDecoder {
         return NSBitmapImageRep(cgImage: bitmap).representation(using: .png, properties: [:])
     }
 
-    static func pdf(_ data: Data) -> PDFDocument? {
+    struct PDFLimits {
+        var pages = 200
+        var objects = 10_000
+        var pixels = 32_000_000
+        var depth = 16
+    }
+
+    static func pdf(_ data: Data, limits: PDFLimits = PDFLimits()) -> PDFDocument? {
         guard let provider = CGDataProvider(data: data as CFData), let pdf = CGPDFDocument(provider),
-              !pdf.isEncrypted, pdf.numberOfPages > 0, pdf.numberOfPages <= 200 else { return nil }
-        let scan = PDFResources()
+              !pdf.isEncrypted, pdf.numberOfPages > 0, pdf.numberOfPages <= limits.pages else { return nil }
+        let scan = PDFResources(limits: limits)
         for number in 1...pdf.numberOfPages {
             guard let page = pdf.page(at: number), let dictionary = page.dictionary else { return nil }
             for box in [CGPDFBox.mediaBox, .cropBox, .bleedBox, .trimBox, .artBox] {
@@ -69,10 +76,14 @@ enum MediaDecoder {
 
     private final class PDFResources {
         var valid = true
-        var remainingObjects = 10_000
-        var remainingPixels = 32_000_000
+        var remainingObjects: Int
+        var remainingPixels: Int
+        let maximumDepth: Int
+        init(limits: PDFLimits) {
+            remainingObjects = limits.objects; remainingPixels = limits.pixels; maximumDepth = limits.depth
+        }
         func resources(_ dictionary: CGPDFDictionaryRef, depth: Int) {
-            guard depth < 16 else { valid = false; return }
+            guard depth < maximumDepth else { valid = false; return }
             var objects: CGPDFDictionaryRef?
             guard CGPDFDictionaryGetDictionary(dictionary, "XObject", &objects), let objects else { return }
             let context = Unmanaged.passUnretained(self).toOpaque()
