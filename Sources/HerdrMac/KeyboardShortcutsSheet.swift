@@ -16,10 +16,10 @@ struct KeyboardShortcutsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var settings = ShortcutSettings.shared
     @State private var search = ""
+    @FocusState private var searchFocused: Bool
     @State private var recording: ShortcutAction?
     @State private var invalidKeys = false
     @State private var pending: Pending?
-    @State private var keyMonitor: Any?
 
     private var bindings: ShortcutBindings { settings.bindings }
     private var groups: [ShortcutGroup] { ShortcutGroup.filtered(search) { bindings.chord(for: $0) } }
@@ -31,7 +31,7 @@ struct KeyboardShortcutsSheet: View {
                 Spacer()
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.tertiary)
-                    TextField("Search shortcuts", text: $search).textFieldStyle(.plain)
+                    TextField("Search shortcuts", text: $search).textFieldStyle(.plain).focused($searchFocused)
                 }
                 .font(.system(size: 12)).padding(.horizontal, 9).padding(.vertical, 6).frame(width: 260)
                 .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
@@ -60,8 +60,8 @@ struct KeyboardShortcutsSheet: View {
             .padding(.horizontal, 24).padding(.vertical, 14)
         }
         .frame(width: 860, height: 680)
-        .onAppear(perform: installKeyMonitor)
-        .onDisappear(perform: removeKeyMonitor)
+        .background(ShortcutRecordingMonitor(handler: record).frame(width: 0, height: 0))
+        .onDisappear(perform: cancelEditing)
     }
 
     private var footer: String {
@@ -172,6 +172,7 @@ struct KeyboardShortcutsSheet: View {
     // MARK: Editing
 
     private func startRecording(_ action: ShortcutAction) {
+        searchFocused = false
         pending = nil
         invalidKeys = false
         recording = action
@@ -218,25 +219,18 @@ struct KeyboardShortcutsSheet: View {
         }
     }
 
-    /// While recording, the next key press is the new shortcut; menus never see it.
-    private func installKeyMonitor() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard let action = recording else { return event }
-            if event.keyCode == 53 {
-                cancelEditing()
-                return nil
-            }
-            guard let chord = KeyChord(event: event) else { return nil }
-            recording = nil
-            invalidKeys = false
-            propose(chord, for: action)
+    /// The sheet monitor passes text-field and other-window events through.
+    private func record(_ event: NSEvent) -> NSEvent? {
+        guard let action = recording else { return event }
+        if event.keyCode == 53 {
+            cancelEditing()
             return nil
         }
-    }
-
-    private func removeKeyMonitor() {
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        keyMonitor = nil
+        guard let chord = KeyChord(event: event) else { return nil }
+        recording = nil
+        invalidKeys = false
+        propose(chord, for: action)
+        return nil
     }
 }
 
