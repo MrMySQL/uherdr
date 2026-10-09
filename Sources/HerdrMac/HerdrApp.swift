@@ -24,6 +24,11 @@ struct HerdrApp: App {
                         return (session.workspaces.first { $0.id == space }?.label ?? "", root)
                     }
                     devices.onRemove = { [editors] id in editors.forget(profile: id) }
+                    editors.onShowTerminals = { [devices] profile, space in
+                        guard let session = devices.sessions.first(where: { $0.profile.id == profile }),
+                              session.selectedSpace == space, session.focusOwner == .editor else { return }
+                        session.focusOwner = .terminal
+                    }
                     appDelegate.editors = editors
                     SessionStore.remoteDisconnected = { SSHMasters.shared.stop($0) }
                 }

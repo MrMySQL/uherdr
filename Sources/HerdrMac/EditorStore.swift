@@ -126,6 +126,8 @@ final class EditorStore: ObservableObject {
     var draftContext: ((_ space: String) -> (profile: UUID, label: String, root: String)?)?
     /// Called whenever the set of open tabs changes, so it can be remembered.
     var onTabsChanged: (() -> Void)?
+    /// The last active editor went away; let the selected terminal regain focus.
+    var onShowTerminals: ((String) -> Void)?
     /// How long typing must pause before a draft is written.
     var draftDelay: Duration = .seconds(2)
 
@@ -459,7 +461,7 @@ final class EditorStore: ObservableObject {
 
     /// Shows the space's terminals again (a terminal tab was chosen).
     func showTerminals(in space: String) {
-        if active[space] != nil { active[space] = nil }
+        if active[space] != nil { active[space] = nil; onShowTerminals?(space) }
     }
 
     /// Closes a tab, or asks first (through `pendingClose`) when it has unsaved edits.
@@ -518,6 +520,7 @@ final class EditorStore: ObservableObject {
         tabs[space] = list.isEmpty ? nil : list
         if active[space] == id {
             active[space] = list.isEmpty ? nil : list[min(index, list.count - 1)].id
+            if list.isEmpty { onShowTerminals?(space) }
         }
         onTabsChanged?()
     }
@@ -530,7 +533,7 @@ final class EditorStore: ObservableObject {
             for tab in tabs[space] ?? [] where tab.isDirty { writeDraft(tab.id, in: space) }
             for tab in tabs[space] ?? [] { forget(tab.id, in: space) }
             tabs[space] = nil
-            active[space] = nil
+            showTerminals(in: space)
             onTabsChanged?()
         }
     }
@@ -609,6 +612,7 @@ final class EditorStores: ObservableObject {
     let defaults: UserDefaults?
     /// A space's name and folder on a device, for drafts.
     var spaceInfo: ((_ profile: UUID, _ space: String) -> (label: String, root: String)?)?
+    var onShowTerminals: ((UUID, String) -> Void)?
 
     init(drafts: DraftStore? = nil, defaults: UserDefaults? = nil) {
         self.drafts = drafts
@@ -621,6 +625,7 @@ final class EditorStores: ObservableObject {
         if let store = stores[profile] { return store }
         let store = EditorStore()
         store.drafts = drafts
+        store.onShowTerminals = { [weak self] space in self?.onShowTerminals?(profile, space) }
         store.draftContext = { [weak self] space in
             self?.spaceInfo?(profile, space).map { (profile, $0.label, $0.root) }
         }

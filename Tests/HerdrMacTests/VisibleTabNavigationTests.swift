@@ -94,6 +94,14 @@ private actor NavigationClient: HerdrRequesting {
         editors.open("/p/only.swift", in: "files-only", preview: true, read: { FileContents.decode(Data()) })
         VisibleTabNavigation.move(-1, session: session, editors: editors)
         check(.editor("/p/only.swift"), session, editors)
+        // Last editor closed: terminal focus returns; closing a background space cannot steal focus.
+        stores.onShowTerminals = { id, space in
+            if id == profile.id && session.selectedSpace == space && session.focusOwner == .editor { session.focusOwner = .terminal }
+        }
+        session.focusOwner = .editor
+        editors.close("/p/only.swift", in: "files-only")
+        precondition(session.focusOwner == .terminal, "Last editor closure returns focus to terminal")
+
         // Guard the menu wiring: model tests alone cannot catch a menu still using terminal-only actions.
         let app = try String(contentsOfFile: "Sources/HerdrMac/HerdrApp.swift", encoding: .utf8)
         precondition(app.contains("SessionStore.revealTerminals = { [editors] profile, space in editors.store(for: profile).showTerminals(in: space) }"))
