@@ -1,0 +1,93 @@
+import AppKit
+import ImageIO
+import PDFKit
+
+/// Preflight dimensions without decoding pixels; only the first image frame is
+/// decoded, into a bounded bitmap. Never hand compressed data to NSImage.
+enum MediaDecoder {
+    static let maxSide = 8_192
+    static let maxPixels = 16_000_000
+    static let failure = "The file is invalid or exceeds the preview limits (8,192 pixels per side, 16 million pixels per image; PDFs: 200 pages and 2,048 points per page)."
+
+    static func allows(width: Int, height: Int) -> Bool {
+        width > 0 && height > 0 && width <= maxSide && height <= maxSide && width <= maxPixels / height
+    }
+
+    static func image(_ data: Data) -> NSImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              CGImageSourceGetCount(source) > 0,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              allows(width: width, height: height),
+              let bitmap = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return nil }
+        return NSImage(cgImage: bitmap, size: CGSize(width: width, height: height))
+    }
+
+    static func pdf(_ data: Data) -> PDFDocument? {
+        guard let provider = CGDataProvider(data: data as CFData), let pdf = CGPDFDocument(provider),
+              !pdf.isEncrypted, pdf.numberOfPages > 0, pdf.numberOfPages <= 200 else { return nil }
+        let scan = PDFResources()
+        for number in 1...pdf.numberOfPages {
+            guard let page = pdf.page(at: number), let dictionary = page.dictionary else { return nil }
+            let bounds = page.getBoxRect(.mediaBox)
+            guard bounds.width.isFinite, bounds.height.isFinite, bounds.width > 0, bounds.height > 0,
+                  bounds.width <= 2_048, bounds.height <= 2_048 else { return nil }
+            var resources: CGPDFDictionaryRef?
+            if CGPDFDictionaryGetDictionary(dictionary, "Resources", &resources), let resources {
+                scan.resources(resources, depth: 0)
+                guard scan.valid else { return nil }
+            }
+        }
+        return PDFDocument(data: data)
+    }
+
+    private final class PDFResources {
+        var valid = true
+        var remainingObjects = 10_000
+        var remainingPixels = 32_000_000
+        func resources(_ dictionary: CGPDFDictionaryRef, depth: Int) {
+            guard depth < 16 else { valid = false; return }
+            var objects: CGPDFDictionaryRef?
+            guard CGPDFDictionaryGetDictionary(dictionary, "XObject", &objects), let objects else { return }
+            let context = Unmanaged.passUnretained(self).toOpaque()
+            // The callback cannot capture Swift state; depth is bounded by the
+            // object budget too, with resource recursion handled below.
+            CGPDFDictionaryApplyFunction(objects, { _, object, info in
+                guard let info else { return }
+                let scan = Unmanaged<PDFResources>.fromOpaque(info).takeUnretainedValue()
+                scan.object(object)
+            }, context)
+        }
+        private func object(_ object: CGPDFObjectRef) {
+            guard valid, remainingObjects > 0 else { valid = false; return }
+            remainingObjects -= 1
+            var stream: CGPDFStreamRef?
+            guard CGPDFObjectGetValue(object, .stream, &stream), let stream else { return }
+            guard let dictionary = CGPDFStreamGetDictionary(stream) else { valid = false; return }
+            var subtype: UnsafePointer<CChar>?
+            guard CGPDFDictionaryGetName(dictionary, "Subtype", &subtype), let subtype else { valid = false; return }
+            if String(cString: subtype) == "Image" {
+                var width: CGPDFInteger = 0, height: CGPDFInteger = 0
+                guard CGPDFDictionaryGetInteger(dictionary, "Width", &width), CGPDFDictionaryGetInteger(dictionary, "Height", &height),
+                      MediaDecoder.allows(width: width, height: height), width <= remainingPixels / height else { valid = false; return }
+                remainingPixels -= width * height
+                // Soft masks are images too.
+                for name in ["SMask", "Mask"] {
+                    var mask: CGPDFObjectRef?
+                    if CGPDFDictionaryGetObject(dictionary, name, &mask), let mask { self.object(mask) }
+                }
+            } else {
+                var nested: CGPDFDictionaryRef?
+                if CGPDFDictionaryGetDictionary(dictionary, "Resources", &nested), let nested {
+                    // A separate recursion counter prevents cyclic Forms from
+                    // exhausting the stack before the object count runs out.
+                    nesting += 1
+                    resources(nested, depth: nesting)
+                    nesting -= 1
+                }
+            }
+        }
+        private var nesting = 0
+    }
+}

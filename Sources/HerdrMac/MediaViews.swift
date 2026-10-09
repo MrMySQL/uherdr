@@ -15,7 +15,7 @@ struct ImageViewerView: View {
     @State private var fitted: CGFloat = 1
 
     var body: some View {
-        if let image = NSImage(data: data) {
+        if let image = MediaDecoder.image(data) {
             let pixels = Self.pixelSize(image)
             let scale = zoom ?? fitted
             VStack(spacing: 0) {
@@ -49,7 +49,7 @@ struct ImageViewerView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Image \(name), \(Int(pixels.width)) by \(Int(pixels.height))")
         } else {
-            CantShowView(title: "Can't show this image", detail: "\(name) couldn't be read as an image (\(EditorHostView.size(data.count))).")
+            CantShowView(title: "Can't show this image", detail: MediaDecoder.failure)
         }
     }
 
@@ -101,7 +101,7 @@ struct PDFViewerView: View {
     enum PDFCommand: Equatable { case zoomIn, zoomOut, fitWidth, page(Int, UUID) }
 
     var body: some View {
-        if let document = PDFDocument(data: data) {
+        if let document = MediaDecoder.pdf(data) {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     Spacer()
@@ -120,7 +120,7 @@ struct PDFViewerView: View {
                     .onAppear { pages = document.pageCount }
             }
         } else {
-            CantShowView(title: "Can't show this PDF", detail: "\(name) couldn't be read as a PDF (\(EditorHostView.size(data.count))).")
+            CantShowView(title: "Can't show this PDF", detail: MediaDecoder.failure)
         }
     }
 }
@@ -135,6 +135,7 @@ private struct PDFKitView: NSViewRepresentable {
     func makeNSView(context: Context) -> PDFView {
         let view = PDFView()
         view.document = document
+        view.maxScaleFactor = 2
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.backgroundColor = .windowBackgroundColor
@@ -145,7 +146,7 @@ private struct PDFKitView: NSViewRepresentable {
     func updateNSView(_ view: PDFView, context: Context) {
         guard let command else { return }
         switch command {
-        case .zoomIn: view.autoScales = false; view.scaleFactor = min(8, view.scaleFactor * 1.25)
+        case .zoomIn: view.autoScales = false; view.scaleFactor = min(2, view.scaleFactor * 1.25)
         case .zoomOut: view.autoScales = false; view.scaleFactor = max(0.1, view.scaleFactor / 1.25)
         case .fitWidth: view.autoScales = true
         case let .page(number, _):
@@ -323,6 +324,9 @@ struct MarkdownPreviewView: NSViewRepresentable {
                 guard let self, self.running.removeValue(forKey: key) != nil else { return } // stopped meanwhile
                 guard case let .data(data)? = result else {
                     task.didFailWithError(URLError(.fileDoesNotExist)); return
+                }
+                guard MediaDecoder.image(data) != nil else {
+                    task.didFailWithError(URLError(.cannotDecodeContentData)); return
                 }
                 task.didReceive(URLResponse(url: url, mimeType: Self.mimeType(path), expectedContentLength: data.count, textEncodingName: nil))
                 task.didReceive(data)
