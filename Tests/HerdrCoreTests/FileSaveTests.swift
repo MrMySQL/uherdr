@@ -24,6 +24,21 @@ enum FileSaveTests {
             ((try? fm.subpathsOfDirectory(atPath: root)) ?? []).filter { ($0 as NSString).lastPathComponent.hasPrefix(".uherdr-") }
         }
 
+        // Hashing on-disk replacements must stay bounded; multi-chunk bytes still hash correctly.
+        let saverSource = try String(contentsOfFile: "Sources/HerdrCore/FileSave.swift", encoding: .utf8)
+        let hashBody = saverSource.components(separatedBy: "static func currentHash")[1].components(separatedBy: "private static func replace")[0]
+        XCTAssertTrue(!hashBody.contains("readToEnd"))
+        let chunked = root + "/chunked.txt"
+        let largeText = String(repeating: "a", count: 200_001)
+        fm.createFile(atPath: chunked, contents: Data(largeText.utf8))
+        let chunkBaseline = try read(chunked)
+        _ = try LocalFileSaver.save(largeText + "z", to: chunked, in: boundary, baseline: chunkBaseline)
+        let afterChunkSave = try read(chunked)
+        fm.createFile(atPath: chunked, contents: Data((largeText + "other").utf8))
+        XCTAssertThrowsError(try LocalFileSaver.save("short", to: chunked, in: boundary, baseline: afterChunkSave)) {
+            XCTAssertEqual($0 as? FileSaveError, .conflict)
+        }
+
         // A normal save keeps CRLF and the file's mode.
         let file = root + "/it's.swift"
         fm.createFile(atPath: file, contents: Data("one\r\ntwo\r\n".utf8))

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum FileSaveError: Error, Equatable, LocalizedError {
@@ -199,7 +200,9 @@ public enum LocalFileSaver {
     static func currentHash(_ path: String) throws -> String {
         guard let handle = FileHandle(forReadingAtPath: path) else { throw FileSaveError.failed("can't read \(path)") }
         defer { try? handle.close() }
-        return FileContents.decode(try handle.readToEnd() ?? Data(), limit: .max).sha256
+        var hash = SHA256()
+        while let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty { hash.update(data: chunk) }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private static func replace(_ real: String, with data: Data, mode: mode_t, owner: uid_t, group: gid_t, expected: String?) throws {
