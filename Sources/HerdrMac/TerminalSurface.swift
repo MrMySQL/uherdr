@@ -562,6 +562,10 @@ final class HerdrTerminalView: AppTerminalView {
     private var mouseUpWatcher: Any?
     private var pressID = UUID()
 
+    deinit {
+        if let mouseUpWatcher { NSEvent.removeMonitor(mouseUpWatcher) }
+    }
+
     override func mouseDown(with event: NSEvent) {
         // Moves cannot tell a lost mouse-up from a three-finger drag in
         // progress, but a new press can: finish the previous gesture first.

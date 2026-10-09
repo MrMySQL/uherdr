@@ -102,6 +102,12 @@ private actor NavigationClient: HerdrRequesting {
         editors.close("/p/only.swift", in: "files-only")
         precondition(session.focusOwner == .terminal, "Last editor closure returns focus to terminal")
 
+        // Native per-press event monitors must be removed when their view is destroyed.
+        let terminalSource = try String(contentsOfFile: "Sources/HerdrMac/TerminalSurface.swift", encoding: .utf8)
+        let terminalView = terminalSource.components(separatedBy: "final class HerdrTerminalView")[1]
+        precondition(terminalView.components(separatedBy: "deinit {").count - 1 == 1)
+        let destructor = terminalView.components(separatedBy: "deinit {")[1].components(separatedBy: "override func mouseDown")[0]
+        precondition(destructor.contains("NSEvent.removeMonitor(mouseUpWatcher)"))
         // Guard the menu wiring: model tests alone cannot catch a menu still using terminal-only actions.
         let app = try String(contentsOfFile: "Sources/HerdrMac/HerdrApp.swift", encoding: .utf8)
         precondition(app.contains("SessionStore.revealTerminals = { [editors] profile, space in editors.store(for: profile).showTerminals(in: space) }"))
