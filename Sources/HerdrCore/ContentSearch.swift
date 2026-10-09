@@ -423,20 +423,53 @@ public enum FileList {
     exec git --no-pager -c core.quotepath=false ls-files -z --cached --others --exclude-standard
     """#
 
-    public static func files(root: String, runner: ScriptRunner, ripgrep: String? = nil, limit: Int = 200_000) async throws -> [String] {
-        let result = try await runner.run(ContentSearch.script, [ripgrep ?? "", root, "--files", "-0", "--no-config"],
-                                          maxBytes: 64 << 20, timeout: .seconds(20))
+    public static func files(root: String, runner: ScriptRunner, ripgrep: String? = nil, limit: Int = 200_000,
+                             outputLimit: Int = 64 << 20) async throws -> [String] {
+        guard limit > 0 else { return [] }
+        let result = try await listing(ContentSearch.watchedScript, args: [ripgrep ?? "", root, "--files", "-0", "--no-config"],
+                                       runner: runner, limit: limit, outputLimit: outputLimit)
         switch result.status {
-        case 0, 2: return paths(result.stdout, limit: limit)
+        case 0, 1, 2: return result.paths
         case 21: throw SearchError.folderMissing
         case 30, 127:
-            let git = try await runner.run(gitScript, [root], maxBytes: 64 << 20, timeout: .seconds(20))
+            let git = try await listing(gitScript, args: [root], runner: runner, limit: limit, outputLimit: outputLimit)
             guard git.status == 0 else { throw SearchError.ripgrepMissing }
-            return paths(git.stdout, limit: limit)
+            return git.paths
         default:
             let reason = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw SearchError.failed(reason.isEmpty ? "ripgrep exited with status \(result.status)" : reason)
         }
+    }
+
+    private static func listing(_ script: String, args: [String], runner: ScriptRunner, limit: Int,
+                                outputLimit: Int) async throws -> (paths: [String], status: Int32, stderr: String) {
+        var paths: [String] = [], pending = Data()
+        var received = 0
+        let events = try runner.events(script, args, maxBytes: Int.max, timeout: .seconds(20))
+        for try await event in events {
+            try Task.checkCancellation()
+            switch event {
+            case let .output(chunk):
+                let count = min(chunk.count, max(0, outputLimit - received))
+                for byte in chunk.prefix(count) {
+                    if byte == 0 {
+                        var path = String(decoding: pending, as: UTF8.self)
+                        if path.hasPrefix("./") { path.removeFirst(2) }
+                        if !path.isEmpty, !path.split(separator: "/").contains(where: { $0.hasPrefix(".") }) { paths.append(path) }
+                        pending.removeAll(keepingCapacity: true)
+                        if paths.count >= limit { return (paths, 0, "") }
+                    } else {
+                        // No supported filesystem has a 16 KiB relative name.
+                        guard pending.count < 16_384 else { return (paths, 0, "") }
+                        pending.append(byte)
+                    }
+                }
+                received += count
+                if received >= outputLimit { return (paths, 0, "") }
+            case let .exit(status, stderr): return (paths, status, stderr)
+            }
+        }
+        return (paths, 0, "")
     }
 
     static func paths(_ data: Data, limit: Int) -> [String] {

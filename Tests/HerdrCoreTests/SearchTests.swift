@@ -177,6 +177,13 @@ enum SearchTests {
             XCTAssertEqual(Set(files), ["Sources/a.swift", "Sources/deep/it's $(touch PWNED).swift", "Vendor/v.swift", "notes.md"])
         }
 
+        let listingTool = root + "-listing.sh"
+        fm.createFile(atPath: listingTool, contents: Data("#!/bin/sh\nprintf 'first\\000second\\000.hidden\\000fourth\\000fifth\\000'\n".utf8), attributes: [.posixPermissions: 0o755])
+        defer { try? fm.removeItem(atPath: listingTool) }
+        let truncated = try await FileList.files(root: root, runner: .local, ripgrep: listingTool, outputLimit: 15)
+        XCTAssertEqual(truncated, ["first", "second"])
+        let first = try await FileList.files(root: root, runner: .local, ripgrep: listingTool, limit: 1)
+        XCTAssertEqual(first, ["first"])
         // Stopping a search over SSH stops ripgrep on the device: the fixture's
         // "ssh" dies with the stream, and only the script's stdin watchdog is
         // left to end the search.
@@ -232,6 +239,7 @@ enum SearchTests {
         try process.run(); process.waitUntilExit()
         let gitFiles = try await FileList.files(root: root, runner: bare)
         XCTAssertTrue(gitFiles.contains("Sources/a.swift") && gitFiles.contains("notes.md"))
+        XCTAssertTrue(!gitFiles.contains(".hidden.swift"))
         // A copy installed by uHerdr in ~/.local/share/uherdr/bin is found without PATH.
         try fm.createDirectory(atPath: root + "/.local/share/uherdr/bin", withIntermediateDirectories: true)
         try fm.createSymbolicLink(atPath: root + "/.local/share/uherdr/bin/rg", withDestinationPath: rg)
