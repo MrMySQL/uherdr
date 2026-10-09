@@ -4,6 +4,7 @@ import HerdrCore
 enum GitChangesTests {
     static func run() async throws {
         try parserCases()
+        try await unstagedRename()
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("../Fixtures/ssh-shell-fixture.py").standardized.path
         let fm = FileManager.default
@@ -201,6 +202,26 @@ enum GitChangesTests {
         }
     }
 
+    static func unstagedRename() async throws {
+  let root = NSTemporaryDirectory() + "diff-review-" + UUID().uuidString
+  let fm = FileManager.default
+  try fm.createDirectory(atPath: root, withIntermediateDirectories: true)
+  defer { try? fm.removeItem(atPath: root) }
+  func git(_ args: [String]) throws {
+   let p = Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/git");p.arguments=["-C",root]+args
+   p.environment=GitIgnoreCheck.environment();p.standardOutput=FileHandle.nullDevice;p.standardError=FileHandle.nullDevice
+   try p.run();p.waitUntilExit();precondition(p.terminationStatus==0)
+  }
+  try git(["init", "-q"])
+  fm.createFile(atPath: root+"/old", contents:Data("same\nunchanged\n".utf8))
+  try git(["add", "old"])
+  try fm.moveItem(atPath:root+"/old",toPath:root+"/new")
+  try git(["add", "-N", "new"])
+  let change = GitChange(group:.changes,path:"new",originalPath:"old",letter:"R")
+  let diff = try await GitDiffReader.read(change,repositoryRoot:root,runner:.local)
+  precondition(diff.hunks.isEmpty, "Pure unstaged rename has no full-add hunk")
+    }
+
     static func parserCases() throws {
         // Branch lines, a path with spaces, an unknown record kind, and ignored entries.
         let status = "# branch.oid (initial)\0# branch.head (detached)\0# branch.upstream origin/main\0# branch.ab +3 -2\0"
@@ -233,6 +254,8 @@ enum GitChangesTests {
         ])
         XCTAssertEqual(parsedDiff.added, 2)
         XCTAssertEqual(parsedDiff.removed, 1)
+        let blank = UnifiedDiffParser.parse(Data("@@ -1,2 +1,2 @@\n a\n\n b\n".utf8))
+        XCTAssertEqual(blank.hunks[0].lines.map(\.new), [1, 2])
         // Split rows: removed beside added, extra lines on one side alone, context on both.
         let split = UnifiedDiffParser.parse(Data("@@ -1,5 +1,4 @@\n a\n-b\n-c\n+B\n d\n+e\n-f\n-g\n".utf8)).hunks[0].splitRows
         XCTAssertEqual(split.map { "\($0.old?.text ?? "_")|\($0.new?.text ?? "_")" }, ["a|a", "b|B", "c|_", "d|d", "_|e", "f|_", "g|_"])

@@ -84,13 +84,9 @@ public enum UnifiedDiffParser {
                 if line.hasPrefix("Binary files ") || line == "GIT binary patch" { diff.isBinary = true }
                 continue
             }
-            guard let marker = line.first else {
-                // An empty line inside a hunk is a context line whose text is empty
-                // only when Git dropped the leading space; treat it as context.
-                diff.hunks[diff.hunks.count - 1].lines.append(GitDiff.Line(kind: .context, text: "", old: old, new: new))
-                old += 1; new += 1
-                continue
-            }
+            // Context lines always carry a space (enforced in our Git args).
+            // Bare separators are not hunk lines and must not advance numbers.
+            guard let marker = line.first else { continue }
             let text = String(line.dropFirst())
             switch marker {
             case " ":
@@ -138,10 +134,10 @@ public enum GitDiffReader {
     o="--no-pager"
     d="diff --no-ext-diff --no-textconv --no-color -U3"
     case $2 in
-      staged) exec git $o -c core.quotepath=false $d --cached -M -- ${4:+"$4"} "$3" ;;
-      unstaged) exec git $o -c core.quotepath=false $d -- "$3" ;;
+      staged) exec git $o -c core.quotepath=false -c diff.suppressBlankEmpty=false $d --cached -M -- ${4:+"$4"} "$3" ;;
+      unstaged) exec git $o -c core.quotepath=false -c diff.suppressBlankEmpty=false $d -M -- ${4:+"$4"} "$3" ;;
       untracked)
-        git $o -c core.quotepath=false $d --no-index -- /dev/null "$3"
+        git $o -c core.quotepath=false -c diff.suppressBlankEmpty=false $d --no-index -- /dev/null "$3"
         s=$?; [ "$s" -le 1 ] && exit 0; exit "$s" ;;
       base) exec git $o cat-file blob "$3" ;;
       *) exit 25 ;;
@@ -155,7 +151,7 @@ public enum GitDiffReader {
         switch change.group {
         case .staged: arguments += ["staged", change.path] + (change.originalPath.map { [$0] } ?? [])
         case .untracked: arguments += ["untracked", change.path]
-        case .changes, .conflicts: arguments += ["unstaged", change.path]
+        case .changes, .conflicts: arguments += ["unstaged", change.path] + (change.originalPath.map { [$0] } ?? [])
         }
         let result = try await runner.run(script, arguments, maxBytes: 8 << 20, timeout: .seconds(30))
         try check(result)
