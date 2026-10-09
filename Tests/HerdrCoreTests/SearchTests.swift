@@ -36,6 +36,14 @@ enum SearchTests {
         XCTAssertEqual(FuzzyMatcher.rank("ses", ["a/x_session.swift", "z/session.swift"]).map(\.path), ["z/session.swift", "a/x_session.swift"])
         XCTAssertEqual(FuzzyMatcher.rank("a", ["x/a.swift", "y/a.swift"], open: ["y/a.swift"]).map(\.path), ["y/a.swift", "x/a.swift"])
         XCTAssertEqual(FuzzyMatcher.rank("", (0..<100).map { "f\($0)" }, limit: 7).count, 7)
+        XCTAssertEqual(FuzzyMatcher.rank("a", ["a", "ba", "ca"], limit: 1), Array(FuzzyMatcher.rank("a", ["a", "ba", "ca"], limit: 20).prefix(1)))
+        XCTAssertEqual(FuzzyMatcher.rank("", ["a"], limit: 0), [])
+        XCTAssertEqual(FuzzyMatcher.rank("", ["a"], isCancelled: { true }), [])
+        let candidates = (0..<300).map { "folder\($0 % 7)/a\($0).swift" }
+        let reference = candidates.compactMap { FuzzyMatcher.match("as", $0) }.sorted {
+            $0.score != $1.score ? $0.score > $1.score : $0.path.localizedStandardCompare($1.path) == .orderedAscending
+        }
+        XCTAssertEqual(FuzzyMatcher.rank("as", candidates, limit: 7), Array(reference.prefix(7)))
         // Characters whose lowercase form is longer don't shift offsets.
         XCTAssertEqual(FuzzyMatcher.match("x", "İx")?.positions, [1])
     }

@@ -133,7 +133,7 @@ struct QuickOpenView: View {
                 return nil
             }
         }
-        .onDisappear { if let escape { NSEvent.removeMonitor(escape) }; escape = nil }
+        .onDisappear { model.cancel(); if let escape { NSEvent.removeMonitor(escape) }; escape = nil }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Quick Open")
     }

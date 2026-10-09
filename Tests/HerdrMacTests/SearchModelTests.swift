@@ -107,13 +107,28 @@ import HerdrCore
         precondition(quick.files == .loaded(["a.md", "src/b.swift"]) || quick.files == .loaded(["src/b.swift", "a.md"]))
         precondition(quick.matches.first?.path == "src/b.swift" && quick.total == 2, "Open files first")
         quick.query = "amd"
+        try await settle()
         precondition(quick.matches.map(\.path) == ["a.md"])
         quick.query = ""
+        try await settle()
+        let rankedRuns = quick.rankingRuns
         quick.move(1); precondition(quick.selection == 1)
         quick.move(1); precondition(quick.selection == 0, "The selection wraps")
         quick.move(-1); precondition(quick.selection == 1)
+        precondition(quick.rankingRuns == rankedRuns, "Arrow keys reuse the cached ranking")
         quick.query = ""; precondition(quick.selection == 1, "Writing the same text back (Return) keeps the selection")
         quick.query = "s"; precondition(quick.selection == 0, "Typing resets the selection")
+        let beforeTyping = quick.rankingRuns
+        quick.query = "amd"
+        quick.query = "b"
+        try await settle()
+        precondition(quick.matches.map(\.path) == ["src/b.swift"], "Only the newest query publishes")
+        precondition(quick.rankingRuns == beforeTyping + 1, "Typing quickly ranks once")
+        let beforeCancel = quick.rankingRuns
+        quick.query = "cancel"
+        quick.cancel()
+        try await settle()
+        precondition(quick.rankingRuns == beforeCancel && quick.matches.isEmpty, "Cancelled ranking never publishes")
         quick.load(root: root + "/missing", runner: .local, ripgrep: rg, key: "q2")
         try await settle()
         guard case .failed = quick.files else { preconditionFailure("Expected a failure for a missing folder") }

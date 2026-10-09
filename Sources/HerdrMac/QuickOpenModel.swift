@@ -15,13 +15,18 @@ final class PaletteState: ObservableObject {
 final class QuickOpenModel: ObservableObject {
     enum Files: Equatable { case loading, loaded([String]), failed(String) }
 
-    @Published private(set) var files: Files = .loading
-    @Published var query = "" { didSet { if query != oldValue { selection = 0 } } }
+    @Published private(set) var files: Files = .loading { didSet { scheduleRanking() } }
+    @Published var query = "" { didSet { if query != oldValue { selection = 0; scheduleRanking() } } }
     @Published var selection = 0
     /// Paths (relative) of files open in tabs, and those with unsaved edits.
-    var open: Set<String> = []
+    var open: Set<String> = [] { didSet { if open != oldValue { scheduleRanking() } } }
     var unsaved: Set<String> = []
 
+    @Published private(set) var matches: [FuzzyMatcher.Match] = []
+    var rankingDelay: Duration = .milliseconds(100)
+    private(set) var rankingRuns = 0
+    private var ranking: Task<Void, Never>?
+    private var rankingVersion = 0
     private var key = ""
     private var loading: Task<Void, Never>?
 
@@ -43,9 +48,28 @@ final class QuickOpenModel: ObservableObject {
 
     var total: Int { if case let .loaded(paths) = files { return paths.count } else { return 0 } }
 
-    var matches: [FuzzyMatcher.Match] {
-        guard case let .loaded(paths) = files else { return [] }
-        return FuzzyMatcher.rank(query, paths, open: open, limit: 50)
+    private func scheduleRanking() {
+        ranking?.cancel()
+        rankingVersion += 1
+        matches = []
+        guard case let .loaded(paths) = files else { return }
+        let query = query, open = open, version = rankingVersion, delay = rankingDelay
+        ranking = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard !Task.isCancelled else { return }
+            let worker = Task.detached {
+                FuzzyMatcher.rank(query, paths, open: open, limit: 50, isCancelled: { Task.isCancelled })
+            }
+            let result = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+            guard !Task.isCancelled, let self, version == self.rankingVersion else { return }
+            self.rankingRuns += 1
+            self.matches = result
+        }
+    }
+
+    func cancel() {
+        loading?.cancel(); ranking?.cancel()
+        rankingVersion += 1
     }
 
     func move(_ delta: Int) {

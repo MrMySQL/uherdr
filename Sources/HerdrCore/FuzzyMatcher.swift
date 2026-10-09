@@ -36,14 +36,31 @@ public enum FuzzyMatcher {
 
     /// Ranks paths for a query; `open` paths come first among equal matches
     /// (with an empty query every path scores 0, so open files lead).
-    public static func rank(_ query: String, _ paths: [String], open: Set<String> = [], limit: Int = 50) -> [Match] {
-        let matches = paths.compactMap { match(query, $0) }
-        return Array(matches.sorted { a, b in
+    public static func rank(_ query: String, _ paths: [String], open: Set<String> = [], limit: Int = 50,
+                            isCancelled: () -> Bool = { false }) -> [Match] {
+        guard limit > 0 else { return [] }
+        func better(_ a: Match, _ b: Match) -> Bool {
             let aOpen = open.contains(a.path), bOpen = open.contains(b.path)
             if a.score != b.score { return a.score > b.score }
             if aOpen != bOpen { return aOpen }
             return a.path.localizedStandardCompare(b.path) == .orderedAscending
-        }.prefix(limit))
+        }
+        // Keep only the best k. Binary insertion avoids sorting all matches;
+        // a candidate worse than the retained tail needs only one comparison.
+        var best: [Match] = []
+        for path in paths {
+            guard !isCancelled() else { return [] }
+            guard let candidate = match(query, path) else { continue }
+            if best.count == limit, let last = best.last, !better(candidate, last) { continue }
+            var low = 0, high = best.count
+            while low < high {
+                let middle = (low + high) / 2
+                if better(candidate, best[middle]) { high = middle } else { low = middle + 1 }
+            }
+            best.insert(candidate, at: low)
+            if best.count > limit { best.removeLast() }
+        }
+        return best
     }
 
     /// Greedy search for the needle, preferring word starts: each character
