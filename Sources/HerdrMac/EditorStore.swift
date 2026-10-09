@@ -568,7 +568,7 @@ final class EditorStore: ObservableObject {
 
     static let outsideNote = "Outside this space · read-only"
     /// Prefix of the id of a deleted file's last-version tab.
-    static let basePrefix = "base:"
+    nonisolated static let basePrefix = "base:"
 
     private func forget(_ id: String, in space: String) {
         let k = key(space, id)
