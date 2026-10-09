@@ -46,6 +46,9 @@ final class FileTreeModel: ObservableObject {
     /// The remote folder as typed; the device's script resolves and checks it.
     private var remoteRoot: String?
     private var generation = UUID()
+    private var requests: [String: UUID] = [:]
+    /// Injectable folder reader for deterministic ordering checks.
+    var readFolder: ((String) async throws -> [FileEntry])?
 
     /// Points the tree at a space's folder; nil clears it. Re-opening the same
     /// folder keeps what is expanded.
@@ -53,6 +56,8 @@ final class FileTreeModel: ObservableObject {
         let opened = boundary != nil || remoteRoot != nil
         guard newRoot != root || newSource != source || (newRoot != nil && !opened && rootError == nil) else { return }
         generation = UUID()
+        requests = [:]
+        listedAt = nil
         root = newRoot
         source = newSource
         remoteRoot = nil
@@ -216,8 +221,13 @@ final class FileTreeModel: ObservableObject {
     }
 
     private func loadNow(_ path: String) async {
-        let token = generation
+        let token = generation, request = UUID()
+        requests[path] = request
+        defer { if requests[path] == request { requests.removeValue(forKey: path) } }
         let result: Result<[FileEntry], Error>
+        if let readFolder {
+            do { result = .success(try await readFolder(path)) } catch { result = .failure(error) }
+        } else {
         switch source {
         case .local:
             guard let boundary else { return }
@@ -231,7 +241,8 @@ final class FileTreeModel: ObservableObject {
             do { result = .success(try await RemoteFileListing.list(path, root: remoteRoot, shell: shell)) }
             catch { result = .failure(error) }
         }
-        guard token == generation else { return }
+        }
+        guard token == generation, requests[path] == request else { return }
         switch result {
         case let .success(entries):
             folders[path] = .loaded(entries)
@@ -245,7 +256,7 @@ final class FileTreeModel: ObservableObject {
             } else {
                 ignoredNames = await GitIgnoreCheck.ignoredNames(names, in: path)
             }
-            guard token == generation else { return }
+            guard token == generation, requests[path] == request else { return }
             if ignored[path] != ignoredNames {
                 ignored[path] = ignoredNames
                 revision += 1
