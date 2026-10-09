@@ -223,6 +223,7 @@ struct CompareSheet: View {
     }
     let model: Model
     @State private var lines: [LineDiff.Line] = []
+    @State private var compared = false
     var onOverwrite: () -> Void
     var onDiscard: () -> Void
     var onCancel: () -> Void
@@ -242,6 +243,12 @@ struct CompareSheet: View {
             GeometryReader { proxy in
             ScrollView([.vertical, .horizontal]) {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    if !compared {
+                        ProgressView().padding(20)
+                    } else if lines.isEmpty && model.disk != model.mine {
+                        Text("These files exceed the comparison limit of 100,000 combined lines. Your edits and the disk version are unchanged.")
+                            .foregroundStyle(.secondary).padding(20).frame(maxWidth: 660)
+                    }
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                         HStack(spacing: 0) {
                             Text(line.old.map(String.init) ?? "").frame(width: 40, alignment: .trailing).foregroundStyle(.tertiary)
@@ -284,6 +291,7 @@ struct CompareSheet: View {
             } onCancel: { worker.cancel() }
             guard !Task.isCancelled else { return }
             lines = result
+            compared = true
         }
     }
 }

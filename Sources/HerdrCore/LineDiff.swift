@@ -33,9 +33,25 @@ public enum LineDiff {
         }
     }
 
+    /// Bounds line arrays and the complete fallback as well as the Myers trace.
+    public static let maximumLines = 100_000
+    private static func lineCount(_ text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        var count = 1, previousCR = false
+        for byte in text.utf8 {
+            if byte == 13 || (byte == 10 && !previousCR) { count += 1 }
+            previousCR = byte == 13
+            if count > maximumLines + 1 { return count }
+        }
+        if previousCR || text.utf8.last == 10 { count -= 1 }
+        return count
+    }
+
     public static func compare(_ old: String, _ new: String, maxEdits: Int = 20_000,
                                budget: Budget = Budget(), isCancelled: () -> Bool = { false }) -> [Line] {
         guard !isCancelled() else { return [] }
+        // Empty means unavailable for over-limit inputs; Compare explains it.
+        guard lineCount(old) + lineCount(new) <= maximumLines else { return [] }
         let a = lines(of: old), b = lines(of: new)
         let n = a.count, m = b.count
         let maxD = min(n + m, max(0, maxEdits))

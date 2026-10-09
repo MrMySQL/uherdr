@@ -39,6 +39,7 @@ enum LineDiffTests {
             XCTAssertEqual(result.map(\.kind), [.removed, .removed, .added, .added])
         }
         XCTAssertEqual(LineDiff.compare("x", "y", isCancelled: { true }), [])
+        XCTAssertEqual(LineDiff.compare(String(repeating: "x\n", count: LineDiff.maximumLines + 1), "y"), [])
         let large = LineDiff.compare((0..<10_000).map { "old\($0)" }.joined(separator: "\n"),
                                      (0..<10_000).map { "new\($0)" }.joined(separator: "\n"))
         XCTAssertEqual(large.count, 20_000)
