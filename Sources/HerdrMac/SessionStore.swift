@@ -291,6 +291,8 @@ final class SessionStore: ObservableObject {
         workspaces = []; tabs = []; panes = []; agents = []; layouts = [:]
         selectedSpace = nil; selectedTab = nil; selectedPane = nil
         guessedRoots = []
+        workspaceRoots = WorkspaceRoots.load(profile: value.id, from: defaults)
+        rootsRevision = 0
         reconnect()
     }
 

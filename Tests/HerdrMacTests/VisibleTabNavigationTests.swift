@@ -112,6 +112,19 @@ private actor NavigationClient: HerdrRequesting {
         precondition(app.components(separatedBy: "VisibleTabNavigation.select(at: index, session: store, editors: currentEditors)").count - 1 == 1)
         precondition(app.components(separatedBy: "VisibleTabNavigation.move(offset, session: store, editors: currentEditors)").count - 1 == 1)
         precondition(app.components(separatedBy: "{ moveTab(").count - 1 == 4, "Both primary and alternate cycling commands use the shared path")
+        // Profile edits/replacements reload roots from that profile, not the previous snapshot.
+        session.setRoot("/old", for: "old-space")
+        var nextProfile = profile
+        nextProfile.id = UUID()
+        var nextRoots = WorkspaceRoots()
+        nextRoots.remember("/new", for: "new-space")
+        nextRoots.save(profile: nextProfile.id, to: defaults)
+        session.updateProfile(nextProfile)
+        precondition(session.workspaceRoots == nextRoots, "Profile replacement reloads remembered roots")
+        session.disconnect()
+        let sessionSource = try String(contentsOfFile: "Sources/HerdrMac/SessionStore.swift", encoding: .utf8)
+        let profileBody = sessionSource.components(separatedBy: "func updateProfile")[1].components(separatedBy: "func refresh")[0]
+        precondition(profileBody.contains("rootsRevision = 0"))
         print("PASS: full-strip navigation, files/diffs, wraparound, first ten digits, invalid destinations, dirty preservation, menu updates and wiring, device/space isolation")
     }
 
