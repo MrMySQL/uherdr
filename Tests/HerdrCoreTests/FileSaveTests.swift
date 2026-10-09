@@ -40,6 +40,10 @@ enum FileSaveTests {
             XCTAssertEqual($0 as? FileSaveError, .conflict)
         }
         XCTAssertEqual(bytes(file), Data("agent edit\r\n".utf8))
+        XCTAssertThrowsError(try LocalFileSaver.save("mine\n", to: file, in: boundary, baseline: saved, mode: .inPlace)) {
+            XCTAssertEqual($0 as? FileSaveError, .conflict)
+        }
+        XCTAssertEqual(bytes(file), Data("agent edit\r\n".utf8))
         _ = try LocalFileSaver.save("mine\n", to: file, in: boundary, baseline: saved, mode: .overwrite)
         XCTAssertEqual(bytes(file), Data("mine\r\n".utf8))
 
@@ -82,6 +86,12 @@ enum FileSaveTests {
         }
         _ = try LocalFileSaver.save("2", to: first, in: boundary, baseline: linked, mode: .inPlace)
         XCTAssertEqual(bytes(root + "/b.txt"), Data("2".utf8))
+
+        XCTAssertThrowsError(try LocalFileSaver.save("3", to: first, in: boundary, baseline: linked, mode: .inPlace)) {
+            XCTAssertEqual($0 as? FileSaveError, .conflict)
+        }
+        _ = try LocalFileSaver.save("3", to: first, in: boundary, baseline: linked, mode: .overwriteInPlace)
+        XCTAssertEqual(bytes(root + "/b.txt"), Data("3".utf8))
 
         // A writable file in a folder you can't write to: refused, then in place on request.
         let lockedFile = root + "/locked/conf.yml"

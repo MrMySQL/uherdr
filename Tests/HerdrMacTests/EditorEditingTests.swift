@@ -9,6 +9,7 @@ actor FakeFile {
     var holdingReads = false
     var reads = 0
     var writes = 0
+    var lastMode: SaveMode?
     init(_ text: String) { bytes = Data(text.utf8) }
 
     func set(_ text: String) { bytes = Data(text.utf8) }
@@ -30,7 +31,8 @@ actor FakeFile {
             if case .outcomeUnknown = error { bytes = FileContents.encode(text, lineEnding: baseline.lineEnding, bom: baseline.hasBOM) }
             throw error
         }
-        if mode == .safe, FileContents.decode(bytes).sha256 != baseline.sha256 { throw FileSaveError.conflict }
+        lastMode = mode
+        if mode != .overwrite && mode != .overwriteInPlace, FileContents.decode(bytes).sha256 != baseline.sha256 { throw FileSaveError.conflict }
         bytes = FileContents.encode(text, lineEnding: baseline.lineEnding, bom: baseline.hasBOM)
         writes += 1
         return FileContents.decode(bytes)
@@ -111,6 +113,18 @@ actor FakeFile {
         guard case .needsInPlace? = store.tab("/p/a.swift", in: "w1")?.saveState else { preconditionFailure("Expected the in-place question") }
         await store.save("/p/a.swift", in: "w1", mode: .inPlace)
         diskText = await file.text(); precondition(diskText == "linked\n")
+
+        // B6: in-place consent and overwrite consent are separate decisions.
+        store.edit("/p/a.swift", in: "w1", text: "in-place replacement")
+        await file.fail(.hardLinked(count: 2))
+        await store.save("/p/a.swift", in: "w1")
+        await file.set("other writer during prompt")
+        await store.save("/p/a.swift", in: "w1", mode: .inPlace)
+        precondition(store.tab("/p/a.swift", in: "w1")?.saveState == .conflict)
+        diskText = await file.text(); precondition(diskText == "other writer during prompt")
+        await store.save("/p/a.swift", in: "w1", mode: .overwrite)
+        let consentMode = await file.lastMode
+        precondition(consentMode == .overwriteInPlace, "B6: two consents permit in-place overwrite")
 
         // SSH reply lost: if the file holds what was sent, it counts as saved; otherwise say so.
         store.edit("/p/a.swift", in: "w1", text: "maybe\n")

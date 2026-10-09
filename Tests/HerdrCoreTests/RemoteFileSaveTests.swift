@@ -40,6 +40,8 @@ enum RemoteFileSaveTests {
             fm.createFile(atPath: file, contents: Data("agent\r\n".utf8))
             await expectError(.conflict) { _ = try await RemoteFileSaver.save("mine\n", to: file, root: root, shell: shell, baseline: saved) }
             XCTAssertEqual(bytes(file), Data("agent\r\n".utf8))
+            await expectError(.conflict) { _ = try await RemoteFileSaver.save("mine\n", to: file, root: root, shell: shell, baseline: saved, mode: .inPlace) }
+            XCTAssertEqual(bytes(file), Data("agent\r\n".utf8))
             _ = try await RemoteFileSaver.save("mine\n", to: file, root: root, shell: shell, baseline: saved, mode: .overwrite)
             XCTAssertEqual(bytes(file), Data("mine\r\n".utf8))
 
@@ -71,6 +73,9 @@ enum RemoteFileSaveTests {
             await expectError(.hardLinked(count: 2)) { _ = try await RemoteFileSaver.save("2", to: root + "/a.txt", root: root, shell: shell, baseline: linked) }
             _ = try await RemoteFileSaver.save("2", to: root + "/a.txt", root: root, shell: shell, baseline: linked, mode: .inPlace)
             XCTAssertEqual(bytes(root + "/b.txt"), Data("2".utf8))
+            await expectError(.conflict) { _ = try await RemoteFileSaver.save("3", to: root + "/a.txt", root: root, shell: shell, baseline: linked, mode: .inPlace) }
+            _ = try await RemoteFileSaver.save("3", to: root + "/a.txt", root: root, shell: shell, baseline: linked, mode: .overwriteInPlace)
+            XCTAssertEqual(bytes(root + "/b.txt"), Data("3".utf8))
             fm.createFile(atPath: root + "/locked/conf.yml", contents: Data("a: 1".utf8))
             let lockedOpened = try await read(root + "/locked/conf.yml")
             chmod(root + "/locked", 0o555)

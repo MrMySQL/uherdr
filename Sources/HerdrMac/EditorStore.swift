@@ -71,6 +71,8 @@ final class EditorStore: ObservableObject {
         /// The text being edited; nil until the file has loaded as text.
         var text: String? = nil
         var saveState: SaveState = .idle
+        /// Partial-write consent alone never authorizes a stale overwrite.
+        var inPlaceConsent = false
         /// A short note in the tab header, such as "Reloaded · changed on disk".
         var note: String? = nil
         /// Unsaved text found from an earlier session, waiting for Keep or Discard.
@@ -256,14 +258,15 @@ final class EditorStore: ObservableObject {
         let k = key(space, id)
         guard let current = tab(id, in: space), current.canEdit, let text = current.text, let baseline = current.baseline,
               let write = io[k]?.write, current.saveState != .saving else { return }
-        if mode != .overwrite, let original = current.recoveredBaselineSHA, original != baseline.sha256 {
-            update(id, in: space) { $0.saveState = .conflict }
+        if mode != .overwrite && mode != .overwriteInPlace, let original = current.recoveredBaselineSHA, original != baseline.sha256 {
+            update(id, in: space) { $0.saveState = .conflict; if mode == .inPlace { $0.inPlaceConsent = true } }
             return
         }
+        let writeMode: SaveMode = mode == .overwrite && current.inPlaceConsent ? .overwriteInPlace : mode
         let revision = revisions[k, default: 0]
-        update(id, in: space) { $0.saveState = .saving }
+        update(id, in: space) { $0.saveState = .saving; if mode == .inPlace { $0.inPlaceConsent = true } }
         do {
-            let saved = try await write(text, baseline, mode)
+            let saved = try await write(text, baseline, writeMode)
             update(id, in: space) { tab in
                 // The baseline becomes what was written; later typing stays unsaved.
                 let latest = tab.text
@@ -271,6 +274,7 @@ final class EditorStore: ObservableObject {
                 tab.recoveredBaselineSHA = nil
                 tab.text = latest
                 tab.saveState = .idle
+                tab.inPlaceConsent = false
                 tab.note = nil
             }
             if revisions[k, default: 0] == revision { removeDraft(id, in: space) }
@@ -305,6 +309,7 @@ final class EditorStore: ObservableObject {
                 tab.recoveredBaselineSHA = nil
                 tab.text = latest
                 tab.saveState = .idle
+                tab.inPlaceConsent = false
                 tab.note = "Saved (checked after the connection dropped)"
             }
             if revisions[key(space, id), default: 0] == revision { removeDraft(id, in: space) }
@@ -319,6 +324,7 @@ final class EditorStore: ObservableObject {
         update(id, in: space) { tab in
             tab.text = tab.baselineText
             tab.saveState = .idle
+            tab.inPlaceConsent = false
             tab.recoveredDraft = nil
             tab.recoveredBaselineSHA = nil
         }
@@ -326,7 +332,7 @@ final class EditorStore: ObservableObject {
         startLoad(id, in: space)
     }
 
-    func dismissSaveProblem(_ id: String, in space: String) { update(id, in: space) { $0.saveState = .idle } }
+    func dismissSaveProblem(_ id: String, in space: String) { update(id, in: space) { $0.saveState = .idle; $0.inPlaceConsent = false } }
 
     /// The file changed on disk (an agent, git, another editor). A tab
     /// without edits reloads by itself; a tab with edits waits for Save.

@@ -37,6 +37,8 @@ public enum SaveMode: Equatable, Sendable {
     case overwrite
     /// The user agreed to write into the file itself (hard links, unwritable folder).
     case inPlace
+    /// Both partial-write risk and changed-on-disk overwrite were explicitly accepted.
+    case overwriteInPlace
 }
 
 extension FileContents {
@@ -77,7 +79,7 @@ public enum RemoteFileSaver {
     r=$(canon "$1"); f=$2; want=$3; mode=$4; new=$5
     [ -n "$r" ] || exit 10
     if [ ! -e "$f" ] && [ ! -L "$f" ]; then
-      [ "$mode" = safe ] && exit 6
+      [ "$mode" = overwrite ] || [ "$mode" = overwrite-inplace ] || exit 6
       d=$(canon "${f%/*}")
       case "$d/" in "$r"/*) ;; *) exit 10 ;; esac
       t="$d/${f##*/}"
@@ -92,12 +94,13 @@ public enum RemoteFileSaver {
     case "$c" in "$r"/*) ;; *) exit 10 ;; esac
     [ -f "$c" ] || exit 11
     [ -w "$c" ] || exit 12
-    if [ "$mode" = safe ] && [ "$(h "$c")" != "$want" ]; then exit 6; fi
-    if [ "$mode" = inplace ]; then
+    if [ "$mode" != overwrite ] && [ "$mode" != overwrite-inplace ] && [ "$(h "$c")" != "$want" ]; then exit 6; fi
+    if [ "$mode" = inplace ] || [ "$mode" = overwrite-inplace ]; then
       tmp=$(mktemp "${TMPDIR:-/tmp}/uherdr-inplace-XXXXXX") || exit 7
       trap 'rm -f "$tmp"' EXIT INT TERM HUP
       cat > "$tmp" || exit 7
       [ "$(h "$tmp")" = "$new" ] || exit 7
+      if [ "$mode" != overwrite-inplace ] && [ "$(h "$c")" != "$want" ]; then exit 6; fi
       cat "$tmp" > "$c" || exit 7
       h "$c"; exit 0
     fi
@@ -109,7 +112,7 @@ public enum RemoteFileSaver {
     cp -p "$c" "$tmp" 2>/dev/null || exit 7
     cat > "$tmp" || exit 7
     [ "$(h "$tmp")" = "$new" ] || exit 7
-    if [ "$mode" = safe ] && [ "$(h "$c")" != "$want" ]; then exit 6; fi
+    if [ "$mode" != overwrite ] && [ "$mode" != overwrite-inplace ] && [ "$(h "$c")" != "$want" ]; then exit 6; fi
     mv -f "$tmp" "$c" || exit 7
     trap - EXIT
     h "$c"
@@ -124,6 +127,7 @@ public enum RemoteFileSaver {
         case .safe: modeWord = "safe"
         case .overwrite: modeWord = "overwrite"
         case .inPlace: modeWord = "inplace"
+        case .overwriteInPlace: modeWord = "overwrite-inplace"
         }
         let result: StreamingProcess.Result
         do {
@@ -164,7 +168,7 @@ public enum LocalFileSaver {
                             baseline: FileContents, mode: SaveMode = .safe) throws -> FileContents {
         guard let real = PathBoundary.canonical(path) else {
             // Deleted after it was opened: a conflict unless the user overwrites.
-            guard mode != .safe else { throw FileSaveError.conflict }
+            guard mode == .overwrite || mode == .overwriteInPlace else { throw FileSaveError.conflict }
             return try create(text, at: path, in: boundary, baseline: baseline)
         }
         guard boundary.contains(real) else { throw FileSaveError.outsideSpace }
@@ -174,13 +178,13 @@ public enum LocalFileSaver {
         // A rename would replace a read-only file; refuse it, as the device does.
         guard access(real, W_OK) == 0 else { throw FileSaveError.readOnly }
         let data = FileContents.encode(text, lineEnding: baseline.lineEnding, bom: baseline.hasBOM)
-        if mode == .safe, try currentHash(real) != baseline.sha256 { throw FileSaveError.conflict }
-        if mode != .inPlace {
+        if mode != .overwrite && mode != .overwriteInPlace, try currentHash(real) != baseline.sha256 { throw FileSaveError.conflict }
+        if mode != .inPlace && mode != .overwriteInPlace {
             if info.st_nlink > 1 { throw FileSaveError.hardLinked(count: Int(info.st_nlink)) }
             let folder = (real as NSString).deletingLastPathComponent
             if access(folder, W_OK) != 0 { throw FileSaveError.folderNotWritable }
         }
-        if mode == .inPlace {
+        if mode == .inPlace || mode == .overwriteInPlace {
             try writeInPlace(data, to: real)
         } else {
             try replace(real, with: data, mode: info.st_mode & 0o7777, owner: info.st_uid, group: info.st_gid,
