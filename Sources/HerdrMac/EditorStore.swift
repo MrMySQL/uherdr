@@ -75,6 +75,8 @@ final class EditorStore: ObservableObject {
         var note: String? = nil
         /// Unsaved text found from an earlier session, waiting for Keep or Discard.
         var recoveredDraft: Draft? = nil
+        /// Original baseline of recovered edits, until saved or discarded.
+        var recoveredBaselineSHA: String? = nil
         /// Set for a read-only diff tab.
         var diff: DiffSpec? = nil
         /// Not a file on disk (a diff, a deleted file's last version): never
@@ -251,6 +253,10 @@ final class EditorStore: ObservableObject {
         let k = key(space, id)
         guard let current = tab(id, in: space), current.canEdit, let text = current.text, let baseline = current.baseline,
               let write = io[k]?.write, current.saveState != .saving else { return }
+        if mode != .overwrite, let original = current.recoveredBaselineSHA, original != baseline.sha256 {
+            update(id, in: space) { $0.saveState = .conflict }
+            return
+        }
         let revision = revisions[k, default: 0]
         update(id, in: space) { $0.saveState = .saving }
         do {
@@ -259,6 +265,7 @@ final class EditorStore: ObservableObject {
                 // The baseline becomes what was written; later typing stays unsaved.
                 let latest = tab.text
                 tab.load = .loaded(saved)
+                tab.recoveredBaselineSHA = nil
                 tab.text = latest
                 tab.saveState = .idle
                 tab.note = nil
@@ -307,6 +314,7 @@ final class EditorStore: ObservableObject {
             tab.text = tab.baselineText
             tab.saveState = .idle
             tab.recoveredDraft = nil
+            tab.recoveredBaselineSHA = nil
         }
         removeDraft(id, in: space)
         startLoad(id, in: space)
@@ -387,7 +395,7 @@ final class EditorStore: ObservableObject {
         guard let drafts, let context = draftContext?(space), let current = tab(id, in: space),
               current.isDirty, let text = current.text else { return }
         try? drafts.save(Draft(profileID: context.profile, workspaceID: space, spaceLabel: context.label, root: context.root,
-                               path: id, text: text, baselineSHA: current.baseline?.sha256 ?? ""))
+                               path: id, text: text, baselineSHA: current.recoveredBaselineSHA ?? current.baseline?.sha256 ?? ""))
     }
 
     private func removeDraft(_ id: String, in space: String) {
@@ -412,6 +420,7 @@ final class EditorStore: ObservableObject {
         guard let draft = tab(id, in: space)?.recoveredDraft else { return }
         update(id, in: space) { tab in
             tab.text = draft.text
+            tab.recoveredBaselineSHA = draft.baselineSHA
             tab.recoveredDraft = nil
             tab.isPreview = false
         }

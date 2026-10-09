@@ -171,6 +171,25 @@ actor FakeFile {
         precondition(reopened.tab("/p/two", in: "w1")?.recoveredDraft == nil, "Drafts never attach to a different space")
         reopened.discardDraft("/p/one", in: "w1")
 
+        // B1: Keep never authorizes replacing a newer disk version.
+        let recoveryFile = FakeFile("original")
+        let original = await recoveryFile.read()
+        try drafts.save(Draft(profileID: device, workspaceID: "w1", spaceLabel: "uherdr", root: "/p", path: "/p/recovery", text: "draft", baselineSHA: original.sha256))
+        await recoveryFile.set("newer on disk")
+        let recovery = makeStore()
+        recovery.open("/p/recovery", in: "w1", preview: false, io: recoveryFile.io)
+        try await settle()
+        recovery.keepDraft("/p/recovery", in: "w1")
+        await recovery.save("/p/recovery", in: "w1")
+        precondition(recovery.tab("/p/recovery", in: "w1")?.saveState == .conflict, "B1: recovery requires explicit overwrite")
+        diskText = await recoveryFile.text()
+        precondition(diskText == "newer on disk")
+        recovery.edit("/p/recovery", in: "w1", text: "draft edited again")
+        recovery.flushDrafts()
+        precondition(drafts.load(profile: device, path: "/p/recovery")?.baselineSHA == original.sha256, "B1: repeated recovery preserves the original baseline")
+        await recovery.save("/p/recovery", in: "w1", mode: .overwrite)
+        precondition(recovery.tab("/p/recovery", in: "w1")?.isDirty == false)
+
         // Closing: a clean tab closes at once; an edited one asks, and Save closes only once written.
         let closing = makeStore()
         let c1 = FakeFile("c\n")
