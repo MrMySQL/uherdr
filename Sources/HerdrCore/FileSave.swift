@@ -242,16 +242,28 @@ public enum LocalFileSaver {
     }
 
     /// The file was deleted after it was opened and the user chose to write it back.
-    private static func create(_ text: String, at path: String, in boundary: PathBoundary, baseline: FileContents) throws -> FileContents {
+    static func create(_ text: String, at path: String, in boundary: PathBoundary, baseline: FileContents,
+                       writer: (Int32, UnsafeRawPointer?, Int) -> Int = { write($0, $1, $2) },
+                       synchronize: (Int32) -> Int32 = fsync) throws -> FileContents {
         let folder = (path as NSString).deletingLastPathComponent
         guard let realFolder = PathBoundary.canonical(folder), boundary.contains(realFolder) else { throw FileSaveError.outsideSpace }
         let data = FileContents.encode(text, lineEnding: baseline.lineEnding, bom: baseline.hasBOM)
         let target = realFolder + "/" + (path as NSString).lastPathComponent
         let fd = open(target, O_WRONLY | O_CREAT | O_EXCL, 0o644)
         guard fd >= 0 else { throw errno == EEXIST ? FileSaveError.conflict : FileSaveError.failed(String(cString: strerror(errno))) }
-        defer { close(fd) }
-        let written = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-        guard written == data.count else { throw FileSaveError.failed(String(cString: strerror(errno))) }
+        var complete = false
+        defer { close(fd); if !complete { unlink(target) } }
+        try data.withUnsafeBytes { buffer in
+            var offset = 0
+            while offset < buffer.count {
+                let written = writer(fd, buffer.baseAddress! + offset, buffer.count - offset)
+                if written < 0 && errno == EINTR { continue }
+                guard written > 0 else { throw FileSaveError.failed(String(cString: strerror(errno))) }
+                offset += written
+            }
+        }
+        guard synchronize(fd) == 0 else { throw FileSaveError.failed(String(cString: strerror(errno))) }
+        complete = true
         return FileContents.decode(data)
     }
 }

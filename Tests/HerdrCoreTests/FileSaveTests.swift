@@ -1,5 +1,5 @@
 import Foundation
-import HerdrCore
+@testable import HerdrCore
 
 enum FileSaveTests {
     static func run() throws {
@@ -38,6 +38,31 @@ enum FileSaveTests {
         XCTAssertThrowsError(try LocalFileSaver.save("short", to: chunked, in: boundary, baseline: afterChunkSave)) {
             XCTAssertEqual($0 as? FileSaveError, .conflict)
         }
+
+        // Short writes are retried; failure or fsync failure leaves no truncated created file.
+        let partial = root + "/partial.txt"
+        let emptyBaseline = FileContents.decode(Data())
+        var calls = 0
+        XCTAssertThrowsError(try LocalFileSaver.create("abcdef", at: partial, in: boundary, baseline: emptyBaseline, writer: { fd, buffer, count in
+            calls += 1
+            if calls > 1 { errno = EIO; return -1 }
+            return write(fd, buffer, min(2, count))
+        }))
+        XCTAssertTrue(!fm.fileExists(atPath: partial))
+        _ = try LocalFileSaver.create("abcdef", at: partial, in: boundary, baseline: emptyBaseline, writer: { fd, buffer, count in write(fd, buffer, min(2, count)) })
+        XCTAssertEqual(bytes(partial), Data("abcdef".utf8))
+        let zeroWrite = root + "/zero-write.txt"
+        var zeroCalls = 0
+        XCTAssertThrowsError(try LocalFileSaver.create("x", at: zeroWrite, in: boundary, baseline: emptyBaseline, writer: { _, _, _ in
+            zeroCalls += 1
+            if zeroCalls == 1 { errno = EINTR; return 0 }
+            errno = EIO; return -1
+        }))
+        XCTAssertEqual(zeroCalls, 1)
+        XCTAssertTrue(!fm.fileExists(atPath: zeroWrite))
+        let unsynced = root + "/unsynced.txt"
+        XCTAssertThrowsError(try LocalFileSaver.create("x", at: unsynced, in: boundary, baseline: emptyBaseline, synchronize: { _ in errno = EIO; return -1 }))
+        XCTAssertTrue(!fm.fileExists(atPath: unsynced))
 
         // A normal save keeps CRLF and the file's mode.
         let file = root + "/it's.swift"
