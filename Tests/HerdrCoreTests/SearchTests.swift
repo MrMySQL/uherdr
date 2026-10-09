@@ -7,6 +7,7 @@ enum SearchTests {
         try decoding()
         globs()
         textSearch()
+        dirtyLimits()
         try await ripgrep()
         links()
         print("PASS: search: fuzzy ranking, rg JSON (text, bytes, UTF-16 offsets), problems, globs, in-memory search, ripgrep here and over SSH with limits, unsaved merge, file lists with Git fallback")
@@ -92,6 +93,25 @@ enum SearchTests {
         XCTAssertEqual(TextSearch.hits(in: text, path: "a", options: SearchOptions(query: "space", wholeWord: true)).map(\.ranges), [[4..<9, 12..<17], [17..<22]])
         XCTAssertEqual(TextSearch.hits(in: "🎉 aa aa", path: "a", options: SearchOptions(query: "aa")).map(\.ranges), [[3..<5, 6..<8]])
         XCTAssertEqual(TextSearch.hits(in: "x", path: "a", options: SearchOptions(query: "")), [])
+    }
+
+    static func dirtyLimits() {
+        let options = SearchOptions(query: "x")
+        let many = ["a": String(repeating: "x ", count: 10_000), "b": String(repeating: "x\n", count: 10_000)]
+        let limited = ContentSearch.merging(SearchOutcome(), unsaved: many, options: options, limits: SearchLimits(matches: 3))
+        XCTAssertEqual(limited.hits.reduce(0) { $0 + $1.ranges.count }, 3)
+        XCTAssertEqual(limited.stoppedAt, "3 matches")
+        let disk = SearchOutcome(hits: [SearchHit(path: "disk", line: 1, text: "x x", ranges: [0..<1, 2..<3])])
+        let global = ContentSearch.merging(disk, unsaved: ["a": "x x"], options: options, limits: SearchLimits(matches: 3))
+        XCTAssertEqual(global.hits.reduce(0) { $0 + $1.ranges.count }, 3)
+        let bytes = ContentSearch.merging(SearchOutcome(), unsaved: ["a": String(repeating: "none\n", count: 100)], options: options, limits: SearchLimits(bytes: 20))
+        XCTAssertTrue(bytes.stoppedAt?.contains("searched text") == true)
+        let output = ContentSearch.merging(SearchOutcome(), unsaved: [String(repeating: "p", count: 100): "x"], options: options, limits: SearchLimits(bytes: 20))
+        XCTAssertTrue(output.hits.isEmpty && output.stoppedAt?.contains("of results") == true)
+        let timed = ContentSearch.merging(SearchOutcome(), unsaved: many, options: options, limits: SearchLimits(deadline: .zero))
+        XCTAssertTrue(timed.hits.isEmpty && timed.stoppedAt?.contains("seconds") == true)
+        let cancelled = ContentSearch.merging(SearchOutcome(), unsaved: many, options: options, isCancelled: { true })
+        XCTAssertTrue(cancelled.hits.isEmpty)
     }
 
     static func ripgrep() async throws {

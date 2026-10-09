@@ -100,7 +100,14 @@ final class SearchModel: ObservableObject {
             do {
                 let outcome = try await ContentSearch.search(options, root: root, runner: runner, ripgrep: ripgrep)
                 guard !Task.isCancelled else { return }
-                result = .done(ContentSearch.merging(outcome, unsaved: self.unsavedText(), options: options), elapsed: clock.now - started)
+                let unsaved = self.unsavedText()
+                let remaining = max(.zero, SearchLimits().deadline - (clock.now - started))
+                let worker = Task.detached {
+                    ContentSearch.merging(outcome, unsaved: unsaved, options: options,
+                                          limits: SearchLimits(deadline: remaining), isCancelled: { Task.isCancelled })
+                }
+                let merged = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+                result = .done(merged, elapsed: clock.now - started)
             } catch let error as SearchError {
                 result = .failed(error)
             } catch {

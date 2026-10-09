@@ -193,22 +193,36 @@ public enum Glob {
 /// ripgrep searches files: literal, per line, case and whole-word options.
 public enum TextSearch {
     public static func hits(in text: String, path: String, options: SearchOptions) -> [SearchHit] {
+        let budget = SearchBudget(limits: SearchLimits(), isCancelled: { false })
+        return hits(in: text, path: path, options: options, budget: budget)
+    }
+
+    fileprivate static func hits(in text: String, path: String, options: SearchOptions, budget: SearchBudget) -> [SearchHit] {
         guard !options.query.isEmpty else { return [] }
         var hits: [SearchHit] = []
         var number = 0
-        text.enumerateLines { line, _ in
+        text.enumerateLines { line, stop in
+            guard budget.check() else { stop = true; return }
             number += 1
+            let bytes = line.utf8.count + 1
+            guard bytes <= budget.scanBytes else { budget.stoppedAt = budget.byteNotice + " of searched text"; stop = true; return }
+            budget.scanBytes -= bytes
             let ns = line as NSString
             var ranges: [Range<Int>] = []
             var start = 0
             while start <= ns.length {
+                guard budget.check() else { stop = true; return }
                 let found = ns.range(of: options.query, options: options.caseSensitive ? [.literal] : [.literal, .caseInsensitive],
                                      range: NSRange(location: start, length: ns.length - start))
                 guard found.location != NSNotFound, found.length > 0 else { break }
-                if !options.wholeWord || isWholeWord(ns, found) { ranges.append(found.location..<(found.location + found.length)) }
+                if !options.wholeWord || isWholeWord(ns, found) {
+                    ranges.append(found.location..<(found.location + found.length))
+                    if ranges.count >= budget.matches { break }
+                }
                 start = found.location + max(found.length, 1)
             }
-            if !ranges.isEmpty { hits.append(SearchHit(path: path, line: number, text: line, ranges: ranges)) }
+            if !ranges.isEmpty, let hit = budget.take(SearchHit(path: path, line: number, text: line, ranges: ranges)) { hits.append(hit) }
+            if !budget.check() { stop = true }
         }
         return hits
     }
@@ -349,15 +363,55 @@ public enum ContentSearch {
 
     /// Replaces disk hits of files open with unsaved edits by hits in their
     /// current text. `unsaved` maps relative paths to text.
-    public static func merging(_ outcome: SearchOutcome, unsaved: [String: String], options: SearchOptions) -> SearchOutcome {
-        guard !unsaved.isEmpty else { return outcome }
-        var merged = outcome
-        merged.hits.removeAll { unsaved[$0.path] != nil }
-        for (path, text) in unsaved.sorted(by: { $0.key < $1.key })
-        where Glob.allows(path, include: options.includeGlobs, exclude: options.excludeGlobs) {
-            merged.hits += TextSearch.hits(in: text, path: path, options: options)
+    public static func merging(_ outcome: SearchOutcome, unsaved: [String: String], options: SearchOptions,
+                               limits: SearchLimits = SearchLimits(), isCancelled: @escaping () -> Bool = { false }) -> SearchOutcome {
+        let budget = SearchBudget(limits: limits, isCancelled: isCancelled)
+        var merged = SearchOutcome(stoppedAt: outcome.stoppedAt, problems: outcome.problems)
+        for hit in outcome.hits where unsaved[hit.path] == nil {
+            guard budget.check(), let bounded = budget.take(hit) else { break }
+            merged.hits.append(bounded)
         }
+        for (path, text) in unsaved.sorted(by: { $0.key < $1.key }) {
+            guard budget.check() else { break }
+            if Glob.allows(path, include: options.includeGlobs, exclude: options.excludeGlobs) {
+                merged.hits += TextSearch.hits(in: text, path: path, options: options, budget: budget)
+            }
+        }
+        merged.stoppedAt = budget.stoppedAt ?? merged.stoppedAt
         return merged
+    }
+}
+
+/// One budget shared by disk results and all dirty buffers. The scanned-byte
+/// budget also bounds work when dirty text contains no matches.
+fileprivate final class SearchBudget {
+    let limits: SearchLimits
+    let end: ContinuousClock.Instant
+    let isCancelled: () -> Bool
+    var matches: Int
+    var bytes: Int
+    var scanBytes: Int
+    var stoppedAt: String?
+    var byteNotice: String { ByteCountFormatter.string(fromByteCount: Int64(limits.bytes), countStyle: .file) }
+    init(limits: SearchLimits, isCancelled: @escaping () -> Bool) {
+        self.limits = limits; self.isCancelled = isCancelled
+        end = ContinuousClock.now.advanced(by: limits.deadline)
+        matches = max(0, limits.matches); bytes = max(0, limits.bytes); scanBytes = max(0, limits.bytes)
+    }
+    func check() -> Bool {
+        if isCancelled() { return false }
+        if stoppedAt != nil { return false }
+        if ContinuousClock.now >= end { stoppedAt = "\(limits.deadline.components.seconds) seconds"; return false }
+        if matches == 0 { stoppedAt = "\(limits.matches.formatted()) matches"; return false }
+        return true
+    }
+    func take(_ hit: SearchHit) -> SearchHit? {
+        guard check() else { return nil }
+        let ranges = Array(hit.ranges.prefix(matches))
+        let cost = hit.text.utf8.count + hit.path.utf8.count + ranges.count * MemoryLayout<Range<Int>>.stride
+        guard cost <= bytes else { stoppedAt = byteNotice + " of results"; return nil }
+        bytes -= cost; matches -= ranges.count
+        return SearchHit(path: hit.path, line: hit.line, text: hit.text, ranges: ranges)
     }
 }
 
