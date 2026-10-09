@@ -15,8 +15,8 @@ final class ChangesModel: ObservableObject {
     @Published private(set) var state: State = .idle
     /// Collapsed groups ("g:Staged") and folders ("Staged:Sources/HerdrMac").
     @Published var collapsed: Set<String> = []
-    /// Called after a read whose result differs from the one before, so open
-    /// diff tabs can follow.
+    /// Called after each successful read with changes, including equal status:
+    /// porcelain status does not describe the contents of modified files.
     var onChange: (() -> Void)?
 
     private(set) var root: String?
@@ -55,11 +55,10 @@ final class ChangesModel: ObservableObject {
         }
         guard expected == generation else { return }
         reading = false
-        if state != result {
-            let hadContent = state != .loading
-            state = result
-            if hadContent { onChange?() }
-        }
+        let hadContent = state != .loading
+        let changed = state != result
+        if changed { state = result }
+        if hadContent, case let .loaded(status) = result, changed || status.fileCount > 0 { onChange?() }
     }
 
     /// Reads now, then every `interval` until the task is cancelled.

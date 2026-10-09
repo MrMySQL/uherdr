@@ -39,6 +39,10 @@ import HerdrCore
         precondition(model.count == 1 && changed == 1, "A new status is published and reported")
         precondition(model.changes?.changes.first?.path == "a.txt")
 
+        fm.createFile(atPath: repo + "/a.txt", contents: Data("3\n".utf8))
+        await model.refresh()
+        precondition(changed == 2, "Same-status content refresh invalidates open diffs")
+
         // The same key keeps everything; a new folder starts over.
         model.collapsed = ["g:Changes"]
         model.open(root: repo, runner: .local, key: "k1")
