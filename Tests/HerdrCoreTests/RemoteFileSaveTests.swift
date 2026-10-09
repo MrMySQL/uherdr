@@ -92,6 +92,54 @@ enum RemoteFileSaveTests {
             XCTAssertEqual(leftovers, [])
         }
 
+        // B7: plant the predictable sibling at the moment cp receives it.
+        // This controlled fixture never writes outside its own temporary directory.
+        let attackBase = PathBoundary.canonical(NSTemporaryDirectory())! + "/uherdr-rsave-links-\(UUID().uuidString)"
+        defer { try? fm.removeItem(atPath: attackBase) }
+        let attackRoot = attackBase + "/space", attackBin = attackBase + "/bin"
+        try fm.createDirectory(atPath: attackRoot, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: attackBin, withIntermediateDirectories: true)
+        let victim = attackBase + "/outside.txt", guarded = attackRoot + "/guard.txt"
+        fm.createFile(atPath: victim, contents: Data("outside original".utf8))
+        fm.createFile(atPath: guarded, contents: Data("inside original".utf8))
+        let cpAttack = #"""
+        #!/bin/sh
+        for arg do last=$arg; done
+        case "$last" in
+          */.uherdr-guard.txt-*) ln -s "$UHERDR_SAVE_VICTIM" "$last" || exit 99 ;;
+        esac
+        exec /bin/cp "$@"
+        """#
+        try cpAttack.write(toFile: attackBin + "/cp", atomically: true, encoding: .utf8)
+        chmod(attackBin + "/cp", 0o755)
+        let attackEnv = ProcessInfo.processInfo.environment.merging([
+            "PATH": attackBin + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"),
+            "UHERDR_SAVE_VICTIM": victim
+        ]) { $1 }
+        let attackShell = RemoteShell(profile: profile, ssh: fixture, environment: attackEnv)
+        let guardedBaseline = FileContents.decode(Data("inside original".utf8))
+        _ = try await RemoteFileSaver.save("inside replacement", to: guarded, root: attackRoot, shell: attackShell, baseline: guardedBaseline)
+        XCTAssertEqual(fm.contents(atPath: victim), Data("outside original".utf8))
+        XCTAssertEqual(fm.contents(atPath: guarded), Data("inside replacement".utf8))
+
+        // Refuse even a temp allocator returning an existing link, before cp/cat or cleanup.
+        let planted = attackRoot + "/planted-link"
+        try fm.createSymbolicLink(atPath: planted, withDestinationPath: victim)
+        let badAllocator = "#!/bin/sh\nprintf '%s\\n' \"$UHERDR_SAVE_LINK\"\n"
+        try badAllocator.write(toFile: attackBin + "/mktemp", atomically: true, encoding: .utf8)
+        chmod(attackBin + "/mktemp", 0o755)
+        let linkedShell = RemoteShell(profile: profile, ssh: fixture, environment: attackEnv.merging(["UHERDR_SAVE_LINK": planted]) { $1 })
+        do {
+            _ = try await RemoteFileSaver.save("never write this", to: guarded, root: attackRoot, shell: linkedShell,
+                                              baseline: FileContents.decode(Data("inside replacement".utf8)))
+            XCTFail("B7: a temporary symlink must be refused")
+        } catch {
+            guard case .failed? = error as? FileSaveError else { XCTFail("Expected failed, got \(error)"); return }
+        }
+        XCTAssertEqual(fm.contents(atPath: victim), Data("outside original".utf8))
+        XCTAssertEqual(fm.contents(atPath: guarded), Data("inside replacement".utf8))
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: planted), victim)
+
         // ssh itself failing (exit 255) means the outcome is unknown, not "failed".
         let dead = NSTemporaryDirectory() + "uherdr-dead-ssh-\(UUID().uuidString).sh"
         try "#!/bin/sh\necho 'Connection reset by peer' >&2\nexit 255\n".write(toFile: dead, atomically: true, encoding: .utf8)

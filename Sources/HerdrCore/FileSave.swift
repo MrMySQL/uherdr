@@ -83,9 +83,10 @@ public enum RemoteFileSaver {
       d=$(canon "${f%/*}")
       case "$d/" in "$r"/*) ;; *) exit 10 ;; esac
       t="$d/${f##*/}"
-      tmp="$d/.uherdr-${f##*/}-$$"
+      tmp=$(mktemp "$d/.uherdr-save-XXXXXXXX") || exit 7
+      [ -f "$tmp" ] && [ ! -L "$tmp" ] || exit 7
       trap 'rm -f "$tmp"' EXIT INT TERM HUP
-      ( set -C; cat > "$tmp" ) 2>/dev/null || exit 7
+      cat > "$tmp" || exit 7
       [ "$(h "$tmp")" = "$new" ] || exit 7
       ln "$tmp" "$t" 2>/dev/null || exit 6
       h "$t"; exit 0
@@ -97,6 +98,7 @@ public enum RemoteFileSaver {
     if [ "$mode" != overwrite ] && [ "$mode" != overwrite-inplace ] && [ "$(h "$c")" != "$want" ]; then exit 6; fi
     if [ "$mode" = inplace ] || [ "$mode" = overwrite-inplace ]; then
       tmp=$(mktemp "${TMPDIR:-/tmp}/uherdr-inplace-XXXXXX") || exit 7
+      [ -f "$tmp" ] && [ ! -L "$tmp" ] || exit 7
       trap 'rm -f "$tmp"' EXIT INT TERM HUP
       cat > "$tmp" || exit 7
       [ "$(h "$tmp")" = "$new" ] || exit 7
@@ -107,7 +109,8 @@ public enum RemoteFileSaver {
     n=$(links "$c")
     if [ "$n" -gt 1 ]; then printf '%s' "$n"; exit 8; fi
     [ -w "${c%/*}" ] || exit 9
-    tmp="${c%/*}/.uherdr-${c##*/}-$$"
+    tmp=$(mktemp "${c%/*}/.uherdr-save-XXXXXXXX") || exit 7
+    [ -f "$tmp" ] && [ ! -L "$tmp" ] || exit 7
     trap 'rm -f "$tmp"' EXIT INT TERM HUP
     cp -p "$c" "$tmp" 2>/dev/null || exit 7
     cat > "$tmp" || exit 7
