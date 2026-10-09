@@ -635,14 +635,13 @@ final class EditorStores: ObservableObject {
         return store
     }
 
-    /// A removed device takes its drafts and remembered tabs with it.
+    /// Removing a connection retains local recovery and its remembered tabs.
     func forget(profile: UUID) {
+        stores[profile]?.flushDrafts()
         stores[profile] = nil
         watchers[profile] = nil
         menuState[profile] = nil
         tabIDs[profile] = nil
-        drafts?.removeAll(profile: profile)
-        defaults?.removeObject(forKey: Self.tabsKey(profile))
     }
 
     var all: [EditorStore] { Array(stores.values) }

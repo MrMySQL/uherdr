@@ -443,8 +443,10 @@ actor FakeFile {
         pruning.prune(keeping: ["w9"])
         precondition(pruning.waitingToReopen.isEmpty)
         try drafts.save(Draft(profileID: device, workspaceID: "w1", spaceLabel: "uherdr", root: "/p", path: "/p/z", text: "z", baselineSHA: ""))
+        first.edit("/p/r1", in: "w1", text: "last keystrokes before removal")
         stores.forget(profile: device)
-        precondition(defaults.data(forKey: EditorStores.tabsKey(device)) == nil && drafts.all(profile: device).isEmpty, "Removing a device drops its tabs and drafts")
+        precondition(drafts.load(profile: device, workspace: "w1", path: "/p/r1")?.text == "last keystrokes before removal", "B3: removal flushes pending edits")
+        precondition(defaults.data(forKey: EditorStores.tabsKey(device)) != nil && drafts.load(profile: device, workspace: "w1", path: "/p/z") != nil, "B3: removal retains recovery and remembered tabs")
         print("PASS: editing: dirty and kept, drafts after typing, save, typing during save, conflict/overwrite/discard, in-place question, unknown SSH outcome both ways, reload on disk change, previews never replace edits, remembered tabs, pruning keeps drafts, recovered drafts, close prompt, quit Save All / Don't Save, remembered and reopened tabs, device removal, disk watching, reload guards, diff tabs, media and Markdown preview tabs")
     }
 }
