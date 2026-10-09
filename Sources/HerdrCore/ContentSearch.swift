@@ -33,12 +33,19 @@ public struct SearchOptions: Equatable, Sendable {
     public var excludeGlobs: [String] { Self.globs(exclude) }
 
     /// ripgrep's arguments: literal text, never a regex, and no config file.
-    /// Only excludes go to ripgrep: an include glob there would override the
-    /// ignore rules and search hidden and ignored files (".build/**/*.swift"),
-    /// so includes are applied to the results instead.
+    /// Type filters narrow the files read without overriding ignore rules, as
+    /// positive --glob would. Full path globs are still checked on results.
     public var ripgrepArguments: [String] {
         var args = ["--json", "--no-config", "--fixed-strings", caseSensitive ? "--case-sensitive" : "--ignore-case"]
         if wholeWord { args.append("--word-regexp") }
+        if !includeGlobs.isEmpty {
+            args.append("--hidden")
+            for glob in includeGlobs {
+                let name = glob.hasSuffix("/") ? "*" : (glob as NSString).lastPathComponent
+                args += ["--type-add", "uherdrinclude:" + name]
+            }
+            args += ["--type", "uherdrinclude", "--glob", "!.git"]
+        }
         for glob in excludeGlobs { args += ["--glob", "!" + glob] }
         return args + ["--", query, "."]
     }

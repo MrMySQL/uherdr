@@ -78,7 +78,7 @@ enum SearchTests {
         XCTAssertTrue(!Glob.allows("Sources/A.md", include: ["*.swift"], exclude: []))
         XCTAssertTrue(!Glob.allows("Vendor/A.swift", include: ["*.swift"], exclude: ["Vendor/**"]))
         XCTAssertEqual(SearchOptions(query: "q", include: " *.swift, ,docs/** ", exclude: "Vendor").ripgrepArguments,
-                       ["--json", "--no-config", "--fixed-strings", "--ignore-case", "--glob", "!Vendor", "--", "q", "."])
+                       ["--json", "--no-config", "--fixed-strings", "--ignore-case", "--hidden", "--type-add", "uherdrinclude:*.swift", "--type-add", "uherdrinclude:**", "--type", "uherdrinclude", "--glob", "!.git", "--glob", "!Vendor", "--", "q", "."])
         XCTAssertEqual(SearchOptions(query: "-e", caseSensitive: true, wholeWord: true).ripgrepArguments,
                        ["--json", "--no-config", "--fixed-strings", "--case-sensitive", "--word-regexp", "--", "-e", "."])
     }
@@ -124,7 +124,13 @@ enum SearchTests {
             XCTAssertTrue(!fm.fileExists(atPath: root + "/PWNED"))
             let exact = try await ContentSearch.search(SearchOptions(query: "selectedSpace", caseSensitive: true, wholeWord: true, include: "*.swift", exclude: "Vendor"),
                                                        root: root, runner: runner, ripgrep: path)
-            XCTAssertEqual(Set(exact.hits.map(\.path)), ["Sources/a.swift", "Sources/deep/it's $(touch PWNED).swift"])
+            XCTAssertEqual(Set(exact.hits.map(\.path)), ["Sources/a.swift", "Sources/deep/it's $(touch PWNED).swift", ".hidden.swift"])
+            let hidden = try await ContentSearch.search(SearchOptions(query: "selectedSpace", include: ".hidden.swift"), root: root, runner: runner, ripgrep: path)
+            XCTAssertEqual(hidden.hits.map(\.path), [".hidden.swift"])
+            write(".ignore", "Vendor/\n")
+            let ignored = try await ContentSearch.search(SearchOptions(query: "selectedSpace", include: "Vendor/**"), root: root, runner: runner, ripgrep: path)
+            XCTAssertTrue(ignored.hits.isEmpty)
+            try fm.removeItem(atPath: root + "/.ignore")
             // A query that looks like an option is still text.
             let dash = try await ContentSearch.search(SearchOptions(query: "--files"), root: root, runner: runner, ripgrep: path)
             XCTAssertEqual(dash.hits, [])
