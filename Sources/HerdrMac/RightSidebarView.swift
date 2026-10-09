@@ -51,7 +51,7 @@ struct RightSidebarView: View {
                 case .files: filesTab
                 case .changes:
                     ChangesView(model: changes, deviceName: store.displayName, isRemote: store.isRemote,
-                                activeID: activeEditorPath, onOpen: openChange)
+                                activeID: activeEditorPath, root: files.canonicalRoot, onOpen: openChange)
                 case .search:
                     SearchView(model: search, folderLabel: abbreviated(store.currentRoot ?? ""), deviceName: store.displayName, activeResult: activeResult,
                                onOpen: openHit, focusRequest: searchFocus)

@@ -11,6 +11,8 @@ struct ChangesView: View {
     let isRemote: Bool
     /// The diff (or file) tab shown in the editor, to highlight its row.
     let activeID: String?
+    /// Same canonical (local) or device spelling used when opening the row.
+    var root: String? = nil
     var onOpen: (GitChange, _ keep: Bool) -> Void
     @AppStorage("changes.layout") private var listLayout = false
 
@@ -153,7 +155,7 @@ struct ChangesView: View {
     }
 
     private func row(_ change: GitChange, name: String, depth: Int, changes: GitChanges, showFolder: Bool) -> some View {
-        let selected = activeID == RightSidebarView.changeTabID(change, changes: changes)
+        let selected = activeID == RightSidebarView.changeTabID(change, changes: changes, root: root)
         let relativeFolder = (String(change.path.dropFirst(changes.prefix.count)) as NSString).deletingLastPathComponent
         return HStack(spacing: 5) {
             Color.clear.frame(width: 12)
