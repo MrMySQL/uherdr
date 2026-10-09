@@ -40,6 +40,7 @@ cp Vendor/GhosttyTerminal/LICENSE "$APP/Contents/Resources/GhosttyTerminal-LICEN
 cp .build/checkouts/MSDisplayLink/LICENSE "$APP/Contents/Resources/MSDisplayLink-LICENSE"
 cp docs/licenses/Ghostty-LICENSE "$APP/Contents/Resources/Ghostty-LICENSE"
 cp docs/licenses/MaterialIconTheme-LICENSE "$APP/Contents/Resources/MaterialIconTheme-LICENSE"
+cp docs/licenses/swift-cmark-COPYING "$APP/Contents/Resources/swift-cmark-COPYING"
 # ripgrep for Search on this Mac, and Linux builds for "Install for uHerdr" on SSH devices.
 cp -R .build/ripgrep "$APP/Contents/Resources/ripgrep"
 for f in COPYING LICENSE-MIT UNLICENSE; do cp "docs/licenses/ripgrep-$f" "$APP/Contents/Resources/ripgrep-$f"; done
