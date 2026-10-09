@@ -274,6 +274,7 @@ final class EditorStore: ObservableObject {
                 tab.note = nil
             }
             if revisions[k, default: 0] == revision { removeDraft(id, in: space) }
+            else { writeDraft(id, in: space) }
             // The stamp after our write isn't known yet, and something else may
             // write before the next check. So the next check always compares
             // contents: our own version reloads silently (same hash), anything
@@ -285,7 +286,7 @@ final class EditorStore: ObservableObject {
             switch error {
             case .conflict: update(id, in: space) { $0.saveState = .conflict }
             case .hardLinked, .folderNotWritable: update(id, in: space) { $0.saveState = .needsInPlace(error.localizedDescription) }
-            case let .outcomeUnknown(reason): await settleUnknownOutcome(id, in: space, text: text, baseline: baseline, reason: reason)
+            case let .outcomeUnknown(reason): await settleUnknownOutcome(id, in: space, text: text, baseline: baseline, revision: revision, reason: reason)
             default: update(id, in: space) { $0.saveState = .failed(error.localizedDescription) }
             }
         } catch {
@@ -295,17 +296,19 @@ final class EditorStore: ObservableObject {
 
     /// After an SSH save whose reply was lost, read the file back to learn
     /// whether it was written; never guess.
-    private func settleUnknownOutcome(_ id: String, in space: String, text: String, baseline: FileContents, reason: String) async {
+    private func settleUnknownOutcome(_ id: String, in space: String, text: String, baseline: FileContents, revision: Int, reason: String) async {
         let expected = FileContents.decode(FileContents.encode(text, lineEnding: baseline.lineEnding, bom: baseline.hasBOM), limit: .max)
         if let read = io[key(space, id)]?.read, let disk = try? await read(), disk.sha256 == expected.sha256 {
             update(id, in: space) { tab in
                 let latest = tab.text
                 tab.load = .loaded(disk)
+                tab.recoveredBaselineSHA = nil
                 tab.text = latest
                 tab.saveState = .idle
                 tab.note = "Saved (checked after the connection dropped)"
             }
-            removeDraft(id, in: space)
+            if revisions[key(space, id), default: 0] == revision { removeDraft(id, in: space) }
+            else { writeDraft(id, in: space) }
         } else {
             update(id, in: space) { $0.saveState = .outcomeUnknown(reason) }
         }

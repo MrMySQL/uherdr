@@ -128,6 +128,29 @@ actor FakeFile {
         guard case .outcomeUnknown? = store.tab("/p/b.swift", in: "w1")?.saveState else { preconditionFailure("Expected an unknown outcome") }
         precondition(store.tab("/p/b.swift", in: "w1")?.isDirty == true, "Unconfirmed edits stay unsaved")
 
+        // B5: a confirmed lost reply must retain typing newer than the submitted version.
+        let lostReply = makeStore()
+        let lostFile = FakeFile("v1")
+        lostReply.open("/p/lost-reply", in: "w1", preview: false, io: lostFile.io)
+        try await settle()
+        lostReply.edit("/p/lost-reply", in: "w1", text: "v2")
+        await lostFile.hold(true)
+        await lostFile.fail(.outcomeUnknown("reset"))
+        let lostSave = Task { await lostReply.save("/p/lost-reply", in: "w1") }
+        try await settle(30)
+        lostReply.edit("/p/lost-reply", in: "w1", text: "v3")
+        lostReply.flushDrafts()
+        await lostFile.hold(false)
+        await lostSave.value
+        precondition(lostReply.tab("/p/lost-reply", in: "w1")?.isDirty == true)
+        precondition(drafts.load(profile: device, workspace: "w1", path: "/p/lost-reply")?.text == "v3", "B5: confirmed readback preserves newer recovery")
+        let lostReopen = makeStore()
+        lostReopen.open("/p/lost-reply", in: "w1", preview: false, io: lostFile.io)
+        try await settle()
+        lostReopen.keepDraft("/p/lost-reply", in: "w1")
+        await lostReopen.save("/p/lost-reply", in: "w1")
+        precondition(lostReopen.tab("/p/lost-reply", in: "w1")?.isDirty == false, "B5: recovery baseline advances to confirmed disk version")
+
         // Disk changes: a clean tab reloads with a note; an edited tab doesn't.
         await file.set("from agent\n")
         store.fileChangedOnDisk("/p/a.swift", in: "w1")
