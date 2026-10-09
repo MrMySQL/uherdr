@@ -60,6 +60,10 @@ enum SearchTests {
     }
 
     static func globs() {
+        XCTAssertEqual(SearchOptions(query: "x", include: "**/*.{swift,m}, docs/**").includeGlobs, ["**/*.{swift,m}", "docs/**"])
+        XCTAssertTrue(Glob.matches("**/*.{swift,m}", "Sources/a.swift"))
+        XCTAssertTrue(Glob.matches("**/*.{swift,m}", "a.m"))
+        XCTAssertTrue(!Glob.matches("**/*.{swift,m}", "a.md"))
         XCTAssertTrue(Glob.matches("*.swift", "Sources/HerdrMac/A.swift"))
         XCTAssertTrue(!Glob.matches("*.swift", "Sources/A.swiftx"))
         XCTAssertTrue(Glob.matches("Sources/**/*.swift", "Sources/A.swift"))

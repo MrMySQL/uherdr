@@ -14,7 +14,20 @@ public struct SearchOptions: Equatable, Sendable {
     }
 
     static func globs(_ text: String) -> [String] {
-        text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        var result: [String] = [], current = ""
+        var braces = 0, brackets = 0, escaped = false
+        for character in text {
+            if escaped { current.append(character); escaped = false; continue }
+            if character == "\\" { current.append(character); escaped = true; continue }
+            if character == "{" { braces += 1 }
+            if character == "}" { braces = max(0, braces - 1) }
+            if character == "[" { brackets += 1 }
+            if character == "]" { brackets = max(0, brackets - 1) }
+            if character == ",", braces == 0, brackets == 0 { result.append(current); current = "" }
+            else { current.append(character) }
+        }
+        result.append(current)
+        return result.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
     public var includeGlobs: [String] { Self.globs(include) }
     public var excludeGlobs: [String] { Self.globs(exclude) }
@@ -136,6 +149,7 @@ public enum Glob {
     private static func translate(_ glob: String) -> String {
         var out = ""
         var chars = Array(glob)[...]
+        var braces = 0
         while let c = chars.popFirst() {
             switch c {
             case "*":
@@ -146,6 +160,12 @@ public enum Glob {
                     out += "[^/]*"
                 }
             case "?": out += "[^/]"
+            case "{" where chars.contains("}"): out += "(?:"; braces += 1
+            case "}" where braces > 0: out += ")"; braces -= 1
+            case "," where braces > 0: out += "|"
+            case "\\":
+                if let next = chars.popFirst() { out += NSRegularExpression.escapedPattern(for: String(next)) }
+                else { out += "\\\\" }
             case "[":
                 if let close = chars.firstIndex(of: "]") {
                     var set = String(chars[chars.startIndex..<close])
