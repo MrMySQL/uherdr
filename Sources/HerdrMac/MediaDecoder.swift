@@ -7,7 +7,7 @@ import PDFKit
 enum MediaDecoder {
     static let maxSide = 8_192
     static let maxPixels = 16_000_000
-    static let failure = "The file is invalid or exceeds the preview limits (8,192 pixels per side, 16 million pixels per image; PDFs: 200 pages and 2,048 points per page)."
+    static let failure = "The file is invalid or exceeds the preview limits (8,192 pixels per side, 16 million pixels per image; PDFs: 200 pages and 1,024 points per page)."
 
     static func allows(width: Int, height: Int) -> Bool {
         width > 0 && height > 0 && width <= maxSide && height <= maxSide && width <= maxPixels / height
@@ -24,20 +24,45 @@ enum MediaDecoder {
         return NSImage(cgImage: bitmap, size: CGSize(width: width, height: height))
     }
 
+    static func maxScale(_ size: CGSize) -> CGFloat {
+        guard size.width > 0, size.height > 0 else { return 1 }
+        return min(32, CGFloat(maxSide) / size.width, CGFloat(maxSide) / size.height,
+                   sqrt(CGFloat(maxPixels) / (size.width * size.height)))
+    }
+
+    /// Flatten web assets to the same bounded first frame; WebKit must not
+    /// decode the original animation or a different, larger frame.
+    static func png(_ data: Data) -> Data? {
+        guard let image = image(data), let bitmap = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        return NSBitmapImageRep(cgImage: bitmap).representation(using: .png, properties: [:])
+    }
+
     static func pdf(_ data: Data) -> PDFDocument? {
         guard let provider = CGDataProvider(data: data as CFData), let pdf = CGPDFDocument(provider),
               !pdf.isEncrypted, pdf.numberOfPages > 0, pdf.numberOfPages <= 200 else { return nil }
         let scan = PDFResources()
         for number in 1...pdf.numberOfPages {
             guard let page = pdf.page(at: number), let dictionary = page.dictionary else { return nil }
-            let bounds = page.getBoxRect(.mediaBox)
-            guard bounds.width.isFinite, bounds.height.isFinite, bounds.width > 0, bounds.height > 0,
-                  bounds.width <= 2_048, bounds.height <= 2_048 else { return nil }
-            var resources: CGPDFDictionaryRef?
-            if CGPDFDictionaryGetDictionary(dictionary, "Resources", &resources), let resources {
-                scan.resources(resources, depth: 0)
-                guard scan.valid else { return nil }
+            for box in [CGPDFBox.mediaBox, .cropBox, .bleedBox, .trimBox, .artBox] {
+                let bounds = page.getBoxRect(box)
+                guard bounds.width.isFinite, bounds.height.isFinite, bounds.width > 0, bounds.height > 0,
+                      bounds.width <= 1_024, bounds.height <= 1_024 else { return nil }
             }
+            // PDF page resources may be inherited from the page tree.
+            var ancestor: CGPDFDictionaryRef? = dictionary
+            for depth in 0..<16 {
+                guard let current = ancestor else { break }
+                var resources: CGPDFDictionaryRef?
+                if CGPDFDictionaryGetDictionary(current, "Resources", &resources), let resources {
+                    scan.resources(resources, depth: 0)
+                    break
+                }
+                var parent: CGPDFDictionaryRef?
+                CGPDFDictionaryGetDictionary(current, "Parent", &parent)
+                ancestor = parent
+                if depth == 15 && parent != nil { scan.valid = false }
+            }
+            guard scan.valid else { return nil }
         }
         return PDFDocument(data: data)
     }

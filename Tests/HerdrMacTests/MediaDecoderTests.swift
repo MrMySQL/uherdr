@@ -20,6 +20,9 @@ import ImageIO
         let context = CGContext(consumer: consumer, mediaBox: &box, nil)!
         context.beginPDFPage(nil); context.endPDFPage(); context.closePDF()
         precondition(MediaDecoder.pdf(bytes as Data) == nil)
+        precondition(MediaDecoder.png(data) != nil && MediaDecoder.png(Data()) == nil)
+        precondition(MediaDecoder.maxScale(CGSize(width: 4_000, height: 4_000)) == 1)
+        precondition(MediaDecoder.maxScale(CGSize(width: 2, height: 3)) == 32)
         let pdfBytes = NSMutableData()
         var smallBox = CGRect(x: 0, y: 0, width: 100, height: 100)
         let pdfContext = CGContext(consumer: CGDataConsumer(data: pdfBytes)!, mediaBox: &smallBox, nil)!

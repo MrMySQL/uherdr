@@ -26,7 +26,7 @@ struct ImageViewerView: View {
                     Button { zoom = max(0.05, scale / 1.5) } label: { Image(systemName: "minus") }.help("Zoom out").accessibilityLabel("Zoom out")
                     Text("\(Int((scale * 100).rounded()))%").font(.system(size: 11, weight: .medium)).monospacedDigit().frame(minWidth: 44)
                         .accessibilityLabel("Zoom \(Int((scale * 100).rounded())) percent")
-                    Button { zoom = min(32, scale * 1.5) } label: { Image(systemName: "plus") }.help("Zoom in").accessibilityLabel("Zoom in")
+                    Button { zoom = min(MediaDecoder.maxScale(pixels), scale * 1.5) } label: { Image(systemName: "plus") }.help("Zoom in").accessibilityLabel("Zoom in")
                     Button("Fit") { zoom = nil }.disabled(zoom == nil).help("Fit the image to the tab")
                     Button("Actual Size") { zoom = 1 }.disabled(scale == 1)
                 }
@@ -65,7 +65,7 @@ struct ImageViewerView: View {
     /// 400% so they stay recognizable rather than a blur of pixels.
     static func fitScale(_ size: CGSize, in area: CGSize) -> CGFloat {
         guard size.width > 0, size.height > 0, area.width > 40, area.height > 40 else { return 1 }
-        return min(4, (area.width - 40) / size.width, (area.height - 40) / size.height)
+        return min(4, MediaDecoder.maxScale(size), (area.width - 40) / size.width, (area.height - 40) / size.height)
     }
 
     static func type(_ name: String) -> String {
@@ -325,11 +325,11 @@ struct MarkdownPreviewView: NSViewRepresentable {
                 guard case let .data(data)? = result else {
                     task.didFailWithError(URLError(.fileDoesNotExist)); return
                 }
-                guard MediaDecoder.image(data) != nil else {
+                guard let preview = MediaDecoder.png(data) else {
                     task.didFailWithError(URLError(.cannotDecodeContentData)); return
                 }
-                task.didReceive(URLResponse(url: url, mimeType: Self.mimeType(path), expectedContentLength: data.count, textEncodingName: nil))
-                task.didReceive(data)
+                task.didReceive(URLResponse(url: url, mimeType: "image/png", expectedContentLength: preview.count, textEncodingName: nil))
+                task.didReceive(preview)
                 task.didFinish()
             }
         }
