@@ -25,28 +25,50 @@ public enum LineDiff {
 
     /// Every line of both texts in order. Very different inputs (edit distance
     /// above `maxEdits`) fall back to "all removed, then all added".
-    public static func compare(_ old: String, _ new: String, maxEdits: Int = 20_000) -> [Line] {
+    public struct Budget: Sendable {
+        public var traceBytes: Int
+        public var steps: Int
+        public init(traceBytes: Int = 16 << 20, steps: Int = 1_000_000) {
+            self.traceBytes = traceBytes; self.steps = steps
+        }
+    }
+
+    public static func compare(_ old: String, _ new: String, maxEdits: Int = 20_000,
+                               budget: Budget = Budget(), isCancelled: () -> Bool = { false }) -> [Line] {
+        guard !isCancelled() else { return [] }
         let a = lines(of: old), b = lines(of: new)
         let n = a.count, m = b.count
-        let maxD = min(n + m, maxEdits)
+        let maxD = min(n + m, max(0, maxEdits))
+        func fallback() -> [Line] {
+            a.enumerated().map { Line(.removed, $1, old: $0 + 1, new: nil) }
+                + b.enumerated().map { Line(.added, $1, old: nil, new: $0 + 1) }
+        }
+        let vectorBytes = (2 * maxD + 3) * MemoryLayout<Int>.stride
+        guard vectorBytes <= budget.traceBytes / 2, budget.steps > 0 else { return fallback() }
+        var steps = 0
         let offset = maxD + 1
         var v = [Int](repeating: 0, count: 2 * maxD + 3)
         var trace: [[Int]] = []
         var found = false
         search: for d in 0...maxD {
+            guard !isCancelled() else { return [] }
+            guard trace.count + 2 <= budget.traceBytes / vectorBytes else { return fallback() }
             trace.append(v)
             for k in stride(from: -d, through: d, by: 2) {
+                guard steps < budget.steps else { return fallback() }
+                steps += 1
                 var x = (k == -d || (k != d && v[offset + k - 1] < v[offset + k + 1])) ? v[offset + k + 1] : v[offset + k - 1] + 1
                 var y = x - k
-                while x < n && y < m && a[x] == b[y] { x += 1; y += 1 }
+                while x < n && y < m && a[x] == b[y] {
+                    guard !isCancelled() else { return [] }
+                    guard steps < budget.steps else { return fallback() }
+                    steps += 1; x += 1; y += 1
+                }
                 v[offset + k] = x
                 if x >= n && y >= m { found = true; break search }
             }
         }
-        guard found else {
-            return a.enumerated().map { Line(.removed, $1, old: $0 + 1, new: nil) }
-                + b.enumerated().map { Line(.added, $1, old: nil, new: $0 + 1) }
-        }
+        guard found else { return fallback() }
         // Walk the trace back from the end to recover the edit script.
         var result: [Line] = []
         var x = n, y = m

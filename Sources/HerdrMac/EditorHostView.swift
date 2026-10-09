@@ -222,12 +222,12 @@ struct CompareSheet: View {
         var draftMode = false
     }
     let model: Model
+    @State private var lines: [LineDiff.Line] = []
     var onOverwrite: () -> Void
     var onDiscard: () -> Void
     var onCancel: () -> Void
 
     var body: some View {
-        let lines = LineDiff.compare(model.disk, model.mine)
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("“\(model.name)”: on disk ← → \(model.draftMode ? "draft" : "your edits")").font(.headline)
@@ -274,6 +274,17 @@ struct CompareSheet: View {
             .padding(12)
         }
         .frame(minWidth: 720, minHeight: 460)
+        .task(id: model.id) {
+            let disk = model.disk, mine = model.mine
+            let worker = Task.detached {
+                LineDiff.compare(disk, mine, isCancelled: { Task.isCancelled })
+            }
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: { worker.cancel() }
+            guard !Task.isCancelled else { return }
+            lines = result
+        }
     }
 }
 

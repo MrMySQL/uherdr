@@ -33,6 +33,16 @@ enum LineDiffTests {
         // Too different: falls back to removed-then-added, still complete.
         let fallback = LineDiff.compare("a\nb", "c\nd", maxEdits: 1)
         XCTAssertEqual(fallback.map(\.kind), [.removed, .removed, .added, .added])
+        // Budgets force the complete fallback before trace/work growth.
+        for budget in [LineDiff.Budget(traceBytes: 240), LineDiff.Budget(steps: 1)] {
+            let result = LineDiff.compare("same\nx", "same\ny", budget: budget)
+            XCTAssertEqual(result.map(\.kind), [.removed, .removed, .added, .added])
+        }
+        XCTAssertEqual(LineDiff.compare("x", "y", isCancelled: { true }), [])
+        let large = LineDiff.compare((0..<10_000).map { "old\($0)" }.joined(separator: "\n"),
+                                     (0..<10_000).map { "new\($0)" }.joined(separator: "\n"))
+        XCTAssertEqual(large.count, 20_000)
+        XCTAssertTrue(large.prefix(10_000).allSatisfy { $0.kind == .removed })
         print("PASS: line diff: equal, changed, added, empty, CRLF, 300 random cases rebuild both texts with a maximal common part, fallback")
     }
 }
