@@ -131,6 +131,8 @@ final class DeviceStore: ObservableObject {
         updateCheckTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(6 * 60 * 60))
+                // `stop()` cancels the sleep; it must not start a check.
+                guard !Task.isCancelled else { return }
                 await self?.checkForHerdrUpdates()
             }
         }

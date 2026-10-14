@@ -674,7 +674,12 @@ import HerdrCore
         session.connected = true
         await waitUntil("reconnecting to re-check herdr") { checks > before && devices.availableHerdrUpdate(for: session) == nil }
         precondition(devices.herdrRestartVersion(for: session) == "0.9.4")
-        print("PASS: connecting checks a device's herdr, and reconnecting re-checks it")
+        // Stopping cancels the periodic wait without starting a check.
+        let beforeStop = checks
+        devices.stop()
+        try? await Task.sleep(for: .milliseconds(100))
+        precondition(checks == beforeStop, "Stopping must not run an update check")
+        print("PASS: connecting checks a device's herdr, reconnecting re-checks it, and stopping checks nothing")
     }
 
     /// New session against a fake herdr whose launcher creates the session it names.
