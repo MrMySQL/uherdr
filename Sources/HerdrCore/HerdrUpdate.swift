@@ -25,7 +25,8 @@ public enum HerdrUpdate {
     }
 
     /// Whether `candidate` is a later release than `current`. Dot-separated
-    /// numbers compare in order; a prerelease (`-…`) sorts before its release.
+    /// numbers compare in order; a prerelease (`-…`) sorts before its release,
+    /// and prereleases compare by SemVer's identifier rules.
     public static func isNewer(_ candidate: String, than current: String) -> Bool {
         func parts(_ version: String) -> (numbers: [Int], prerelease: String?)? {
             let split = version.split(separator: "-", maxSplits: 1)
@@ -41,9 +42,30 @@ public enum HerdrUpdate {
         }
         switch (a.prerelease, b.prerelease) {
         case (nil, .some): return true
-        case let (.some(x), .some(y)): return x.compare(y, options: .numeric) == .orderedDescending
+        case let (.some(x), .some(y)): return isNewerPrerelease(x, than: y)
         default: return false
         }
+    }
+
+    /// SemVer 2.0 §11.4: identifiers compare left to right, numerically when
+    /// both are numeric and in ASCII order otherwise; a numeric identifier
+    /// sorts before an alphanumeric one, and a shorter list before a longer one.
+    static func isNewerPrerelease(_ candidate: String, than current: String) -> Bool {
+        let a = candidate.split(separator: ".", omittingEmptySubsequences: false)
+        let b = current.split(separator: ".", omittingEmptySubsequences: false)
+        for (x, y) in zip(a, b) where x != y {
+            let isNumber = { (s: Substring) in !s.isEmpty && s.allSatisfy { $0.isASCII && $0.isNumber } }
+            switch (isNumber(x), isNumber(y)) {
+            // Compare digit strings by length first, so long numbers can't overflow.
+            case (true, true):
+                let x = x.drop { $0 == "0" }, y = y.drop { $0 == "0" }
+                return x.count != y.count ? x.count > y.count : x > y
+            case (true, false): return false
+            case (false, true): return true
+            case (false, false): return Array(x.utf8).lexicographicallyPrecedes(Array(y.utf8)) == false
+            }
+        }
+        return a.count > b.count
     }
 
     /// The installed herdr's version and the newest release on its channel.

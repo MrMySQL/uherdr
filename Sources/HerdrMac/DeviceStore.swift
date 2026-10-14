@@ -33,6 +33,9 @@ final class DeviceStore: ObservableObject {
     private var discoveryTask: Task<Void, Never>?
     private var updateCheckTask: Task<Void, Never>?
     private var checkingUpdates = false
+    /// Bumped when `herdr update` starts, so a check begun before it can't
+    /// overwrite the version the update reads afterwards.
+    private var herdrInstallGeneration: [String: Int] = [:]
     private var discovering = false
     /// Bumped after a session action, so an older in-flight listing is discarded.
     private var listingGeneration = 0
@@ -408,9 +411,11 @@ final class DeviceStore: ObservableObject {
         checkingUpdates = true
         defer { checkingUpdates = false }
         for executable in Set(sessions.filter { !$0.isRemote }.map(\.executable)).sorted() {
-            if let found = try? await HerdrUpdate.check(sessionRunner(executable), fetch: fetchManifest) {
-                herdrVersions[executable] = HerdrVersions(installed: found.installed, latest: found.latest)
-            }
+            let generation = herdrInstallGeneration[executable, default: 0]
+            guard !updatingExecutables.contains(executable),
+                  let found = try? await HerdrUpdate.check(sessionRunner(executable), fetch: fetchManifest),
+                  herdrInstallGeneration[executable, default: 0] == generation else { continue }
+            herdrVersions[executable] = HerdrVersions(installed: found.installed, latest: found.latest)
         }
     }
 
@@ -470,6 +475,7 @@ final class DeviceStore: ObservableObject {
         let executable = session.executable
         guard !session.isRemote, updatingExecutables.insert(executable).inserted else { return }
         defer { updatingExecutables.remove(executable) }
+        herdrInstallGeneration[executable, default: 0] += 1
         do {
             try await HerdrUpdate.install(updateRunner(executable))
         } catch {

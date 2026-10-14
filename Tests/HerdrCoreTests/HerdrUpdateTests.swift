@@ -24,6 +24,16 @@ enum HerdrUpdateTests {
         XCTAssertTrue(HerdrUpdate.isNewer("1.0.0", than: "1.0.0-preview.2"))
         XCTAssertTrue(!HerdrUpdate.isNewer("1.0.0-preview.2", than: "1.0.0"))
         XCTAssertTrue(HerdrUpdate.isNewer("1.0.0-preview.10", than: "1.0.0-preview.9"))
+        // SemVer's prerelease order: alpha < alpha.1 < alpha.beta < beta < beta.2 < beta.11 < rc.1,
+        // and an alphanumeric identifier follows a numeric one, so alpha.2a follows alpha.10.
+        let order = ["1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0"]
+        for (older, newer) in zip(order, order.dropFirst()) {
+            XCTAssertTrue(HerdrUpdate.isNewer(newer, than: older))
+            XCTAssertTrue(!HerdrUpdate.isNewer(older, than: newer))
+        }
+        XCTAssertTrue(HerdrUpdate.isNewer("1.0.0-alpha.2a", than: "1.0.0-alpha.10"))
+        XCTAssertTrue(!HerdrUpdate.isNewer("1.0.0-alpha.10", than: "1.0.0-alpha.2a"))
+        XCTAssertTrue(HerdrUpdate.isNewer("1.0.0-rc.100000000000000000000", than: "1.0.0-rc.99999999999999999999"))
         // Anything unreadable, such as a server that hasn't reported yet, is never older.
         XCTAssertTrue(!HerdrUpdate.isNewer("0.9.4", than: ""))
         XCTAssertTrue(!HerdrUpdate.isNewer("next", than: "0.9.3"))

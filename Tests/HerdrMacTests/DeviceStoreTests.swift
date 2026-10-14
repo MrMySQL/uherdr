@@ -492,13 +492,17 @@ import HerdrCore
         var updateFails = false
         var updates: [String] = []
         var handoffCapable = true, handoffFails = false
+        var holdChannel = false
+        var heldChannel: CheckedContinuation<Void, Never>?
         var calls: [[String]] = []
         let socket = "/tmp/uh-update-\(UUID().uuidString)/herdr/sessions/work/herdr.sock"
         let run: SessionControl.Runner = { args in
             calls.append(args)
             switch args {
             case ["--version"]: return "herdr \(installed)\n"
-            case ["channel", "show"]: return "stable\n"
+            case ["channel", "show"]:
+                if holdChannel { holdChannel = false; await withCheckedContinuation { heldChannel = $0 } }
+                return "stable\n"
             case ["session", "list", "--json"]: return #"{"sessions":[{"default":false,"name":"work","running":true,"socket_path":"\#(socket)"}]}"#
             case ["--session", "work", "status", "--json"]:
                 return #"{"server":{"running":true,"version":"0.9.3","capabilities":{"live_handoff":\#(handoffCapable)}}}"#
@@ -550,6 +554,17 @@ import HerdrCore
         precondition(devices.isPresenting)
         // Declining leaves the restart badge until the server reports the new version.
         devices.herdrPrompt = nil
+        // A check that read the old version before an update must not undo it.
+        installed = "0.9.3"
+        devices.herdrPrompt = nil
+        holdChannel = true
+        let staleCheck = Task { await devices.checkForHerdrUpdates() }
+        await waitUntil("the update check to read herdr's version") { heldChannel != nil }
+        await devices.updateHerdr(for: session)
+        devices.herdrPrompt = nil
+        heldChannel?.resume(); heldChannel = nil
+        await staleCheck.value
+        precondition(devices.availableHerdrUpdate(for: session) == nil, "A stale check must not bring the update badge back")
         precondition(devices.herdrRestartVersion(for: session) == "0.9.4")
         session.version = "0.9.4"
         precondition(devices.herdrRestartVersion(for: session) == nil && devices.availableHerdrUpdate(for: session) == nil)
