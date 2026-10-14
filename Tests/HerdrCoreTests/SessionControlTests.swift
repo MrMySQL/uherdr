@@ -97,5 +97,47 @@ enum SessionControlTests {
             precondition(SessionControl.newSessionNameProblem(invalid, existing: sessions) != nil, invalid)
         }
         print("PASS: session stop and delete use herdr's CLI, stop before delete, and never delete default; new session names follow herdr's rule")
+        try await runRemote(sessions)
+    }
+
+    /// herdr on an SSH device's machine, through a fake SSH that runs the remote command here.
+    @MainActor static func runRemote(_ sessions: [HerdrSessionEntry]) async throws {
+        let exe = "/opt/homebrew/bin/herdr"
+        func remote(_ socket: String) -> DeviceProfile { DeviceProfile(name: "mini", host: "mini.local", socketPath: socket, executable: exe) }
+        // An empty socket is the default session; a session socket names its session; a custom one matches by path.
+        XCTAssertEqual(SessionControl.remoteSession(for: remote(""), home: nil, in: sessions)?.name, "default")
+        XCTAssertEqual(SessionControl.remoteSession(for: remote("~/.config/herdr/sessions/menqal/herdr.sock"), home: nil, in: sessions)?.name, "menqal")
+        XCTAssertTrue(SessionControl.remoteSession(for: remote("~/.config/herdr/sessions/gone/herdr.sock"), home: nil, in: sessions) == nil)
+        let custom = try SessionDiscovery.parse(#"{"sessions":[{"default":false,"name":"odd","running":true,"socket_path":"/Users/alex/sockets/odd.sock"}]}"#)
+        XCTAssertEqual(SessionControl.remoteSession(for: remote("~/sockets/./odd.sock"), home: "/Users/alex", in: custom)?.name, "odd")
+        XCTAssertTrue(SessionControl.remoteSession(for: remote("~/sockets/odd.sock"), home: nil, in: custom) == nil)
+        XCTAssertTrue(SessionControl.remoteSession(for: DeviceProfile(name: "x", kind: .local, socketPath: "/Users/alex/.config/herdr/herdr.sock", executable: exe), home: nil, in: sessions) == nil)
+
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("uh-remote-herdr-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let fake = home + "/.local/bin/herdr"
+        try FileManager.default.createDirectory(atPath: home + "/.local/bin", withIntermediateDirectories: true)
+        try "#!/bin/sh\nprintf '%s\\n' \"$@\" | tee \"$HOME/args\"\n".write(toFile: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake)
+        setenv("UHERDR_TEST_HOME", home, 1)
+        let ssh = FileManager.default.currentDirectoryPath + "/Tests/Fixtures/ssh-herdr-fixture.sh"
+        // herdr is found off PATH, gets each argument intact, and the login banner is dropped.
+        let run = SessionControl.remoteRunner(profile: remote(""), sshExecutable: ssh)
+        XCTAssertEqual(try await run(["--session", "it's $HOME", "status", "--json"]), "--session\nit's $HOME\nstatus\n--json\n")
+        // A detached server returns at once and keeps running after SSH ends.
+        try FileManager.default.removeItem(atPath: home + "/args")
+        XCTAssertEqual(try await SessionControl.remoteRunner(profile: remote(""), run: .detached, sshExecutable: ssh)(["--session", "work", "server"]), "")
+        for _ in 0..<100 where (try? String(contentsOfFile: home + "/args", encoding: .utf8)) != "--session\nwork\nserver\n" {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(try String(contentsOfFile: home + "/args", encoding: .utf8), "--session\nwork\nserver\n")
+        // Without herdr, the error says so rather than a shell's "command not found".
+        try FileManager.default.removeItem(atPath: fake)
+        if !["/home/linuxbrew/.linuxbrew/bin/herdr", "/opt/homebrew/bin/herdr", "/usr/local/bin/herdr"].contains(where: FileManager.default.isExecutableFile(atPath:)) {
+            do { _ = try await run(["--version"]); XCTFail("Expected a missing herdr to throw") }
+            catch { XCTAssertTrue(error.localizedDescription.contains("herdr wasn’t found")) }
+        }
+        unsetenv("UHERDR_TEST_HOME")
+        print("PASS: SSH devices find their herdr session, and run herdr over SSH with quoted arguments, detached servers, and a clear error when it's missing")
     }
 }

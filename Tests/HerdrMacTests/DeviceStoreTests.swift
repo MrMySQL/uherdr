@@ -512,9 +512,13 @@ import HerdrCore
             default: return ""
             }
         }
+        // The SSH machine runs its own herdr, with its own version and default session.
+        var remoteInstalled = "0.9.3", remoteRunning = true
+        var remoteCalls: [(UUID, SessionControl.RemoteRun, [String])] = []
         let local = DeviceProfile(name: "work", kind: .local, socketPath: socket, executable: "/usr/bin/true")
-        let remote = DeviceProfile(name: "mini", host: "mini.local", executable: "/usr/bin/true")
-        let devices = DeviceStore(defaults: defaults, profiles: [local, remote], sessionRunner: { _ in run }, updateRunner: { executable in
+        let remote = DeviceProfile(name: "mini", host: "mini.invalid", executable: "/usr/bin/true")
+        let remoteSide = DeviceProfile(name: "mini", host: "mini.invalid", socketPath: "~/.config/herdr/sessions/side/herdr.sock", executable: "/usr/bin/true")
+        let devices = DeviceStore(defaults: defaults, profiles: [local, remote, remoteSide], sessionRunner: { _ in run }, updateRunner: { executable in
             { args in
                 updates.append(executable)
                 precondition(args == ["update"])
@@ -522,15 +526,34 @@ import HerdrCore
                 installed = "0.9.4"
                 return ""
             }
+        }, remoteRunner: { profile, mode in
+            { args in
+                remoteCalls.append((profile.id, mode, args))
+                switch (mode, args) {
+                case (.command, ["--version"]): return "herdr \(remoteInstalled)\n"
+                case (.command, ["channel", "show"]): return "stable\n"
+                case (.update, ["update"]): remoteInstalled = "0.9.4"; return ""
+                case (.command, ["session", "list", "--json"]):
+                    return #"{"sessions":[{"default":true,"name":"default","running":\#(remoteRunning),"socket_path":"/home/alex/.config/herdr/herdr.sock"},{"default":false,"name":"side","running":true,"socket_path":"/home/alex/.config/herdr/sessions/side/herdr.sock"}]}"#
+                case (.command, ["status", "--json"]):
+                    return #"{"server":{"running":true,"version":"0.9.3","capabilities":{"live_handoff":\#(handoffCapable)}}}"#
+                case (.command, ["server", "live-handoff"]): return ""
+                case (.command, ["session", "stop", "default"]): remoteRunning = false; return ""
+                case (.detached, ["server"]): remoteRunning = true; return ""
+                default: preconditionFailure("Unexpected remote herdr call: \(mode) \(args)")
+                }
+            }
         }, fetchManifest: { _ in Data(#"{"version":"0.9.4"}"#.utf8) })
         defer { devices.stop() }
-        let session = devices.sessions[0], remoteSession = devices.sessions[1]
-        for store in [session, remoteSession] { store.connected = true; store.version = "0.9.3" }
+        let session = devices.sessions[0], remoteSession = devices.sessions[1], sideSession = devices.sessions[2]
+        for store in [session, remoteSession, sideSession] { store.connected = true; store.version = "0.9.3" }
         await devices.checkForHerdrUpdates()
         precondition(devices.availableHerdrUpdate(for: session) == "0.9.4")
         precondition(devices.herdrRestartVersion(for: session) == nil)
-        // SSH devices run their own herdr; this Mac's release says nothing about them.
-        precondition(devices.availableHerdrUpdate(for: remoteSession) == nil && devices.herdrRestartVersion(for: remoteSession) == nil)
+        // An SSH machine's herdr is checked over SSH once, for all its sessions.
+        precondition(remoteCalls.filter { $0.2 == ["--version"] }.count == 1)
+        precondition(devices.availableHerdrUpdate(for: remoteSession) == "0.9.4" && devices.availableHerdrUpdate(for: sideSession) == "0.9.4")
+        precondition(devices.herdrRestartVersion(for: remoteSession) == nil)
         // The badge belongs to the connection line: a disconnected device shows none.
         session.connected = false
         precondition(devices.availableHerdrUpdate(for: session) == nil)
@@ -590,7 +613,35 @@ import HerdrCore
         precondition(failure.contains("did not become ready"))
         precondition(!calls.contains { $0.starts(with: ["session", "stop"]) })
         devices.herdrPrompt = nil
-        print("PASS: herdr update badge, update failure, restart question, restart badge, and live handoff with a confirmed full-restart fallback")
+        handoffFails = false; handoffCapable = true
+
+        // This Mac's update left the SSH machine's herdr alone; updating it runs `herdr update` there.
+        precondition(devices.availableHerdrUpdate(for: remoteSession) == "0.9.4")
+        remoteCalls = []
+        let localUpdates = updates.count
+        await devices.updateHerdr(for: remoteSession)
+        precondition(remoteCalls.contains { $0.1 == .update && $0.2 == ["update"] } && updates.count == localUpdates, "The update must run on the SSH machine")
+        precondition(devices.availableHerdrUpdate(for: remoteSession) == nil && devices.herdrRestartVersion(for: sideSession) == "0.9.4")
+        precondition(devices.herdrPrompt == .restart(remote.id, version: "0.9.4", afterUpdate: true))
+        devices.herdrPrompt = nil
+        // Its live handoff addresses the machine's default session, without touching this Mac's list.
+        let localSessions = devices.herdrSessions
+        remoteCalls = []
+        await devices.upgradeHerdrServer(remoteSession)
+        precondition(remoteCalls.map(\.2) == [["session", "list", "--json"], ["status", "--json"], ["server", "live-handoff"]])
+        precondition(devices.herdrPrompt == nil && remoteSession.operationError == nil && devices.herdrSessions == localSessions)
+        // Without handoff, the confirmed full restart stops it there and starts a detached server.
+        handoffCapable = false
+        await devices.upgradeHerdrServer(remoteSession)
+        guard case .fullRestart(remote.id, "0.9.4", _)? = devices.herdrPrompt else { preconditionFailure("\(String(describing: devices.herdrPrompt))") }
+        devices.herdrPrompt = nil
+        remoteCalls = []
+        await devices.restartHerdrSession(remoteSession)
+        precondition(remoteSession.operationError == nil, remoteSession.operationError ?? "")
+        precondition(remoteCalls.contains { $0.2 == ["session", "stop", "default"] })
+        precondition(remoteCalls.contains { $0.1 == .detached && $0.2 == ["server"] } && remoteRunning)
+        precondition(!devices.isActing(remoteSession))
+        print("PASS: herdr update badge, update failure, restart question, restart badge, and live handoff with a confirmed full-restart fallback, on this Mac and over SSH")
     }
 
     /// New session against a fake herdr whose launcher creates the session it names.

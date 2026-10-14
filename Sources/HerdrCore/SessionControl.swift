@@ -1,6 +1,6 @@
 import Foundation
 
-/// Stops and deletes local herdr sessions through the herdr CLI, which owns
+/// Stops and deletes herdr sessions through the herdr CLI, which owns
 /// their lifecycle. A device's session is found by its socket in
 /// `herdr session list`, never guessed from the path.
 public enum SessionControl {
@@ -20,11 +20,62 @@ public enum SessionControl {
         }
     }
 
+    /// How herdr runs on an SSH device's machine: returning its output,
+    /// given ten minutes for `herdr update`, or detached so a server outlives SSH.
+    public enum RemoteRun: Sendable { case command, update, detached }
+
+    /// Runs the herdr CLI on an SSH device's machine. A non-interactive SSH
+    /// shell often lacks herdr's install directory on PATH, so this also looks
+    /// where herdr's installers put it, as herdr's own remote attach does.
+    @MainActor public static func remoteRunner(profile: DeviceProfile, run: RemoteRun = .command, sshExecutable: String = "/usr/bin/ssh") -> Runner {
+        { arguments in
+            let process = try ManagedProcess(executable: sshExecutable,
+                                             arguments: try profile.sshArguments() + ["--", profile.host, remoteCommand(arguments, detached: run == .detached)],
+                                             outputLimit: 1 << 20)
+            let output = try await process.result(timeout: run == .update ? 600 : 30)
+            // Drops what the remote shell printed before herdr ran, such as a login banner.
+            guard let marker = output.range(of: remoteOutputMarker + "\n") else {
+                throw HerdrError.message("herdr’s output over SSH wasn’t readable.")
+            }
+            return String(output[marker.upperBound...])
+        }
+    }
+
+    static let remoteOutputMarker = "UHERDR_HERDR_OUTPUT"
+
+    /// A fixed script on one line, so any login shell passes it to `sh`; only
+    /// herdr's arguments vary, and they arrive quoted as its positional parameters.
+    static func remoteCommand(_ arguments: [String], detached: Bool) -> String {
+        let candidates = [#""$(command -v herdr 2>/dev/null)""#, #""$HOME/.local/bin/herdr""#, "/home/linuxbrew/.linuxbrew/bin/herdr",
+                          "/opt/homebrew/bin/herdr", "/usr/local/bin/herdr", #""$HOME/.nix-profile/bin/herdr""#,
+                          #""/etc/profiles/per-user/$USER/bin/herdr""#, "/nix/var/nix/profiles/default/bin/herdr", "/run/current-system/sw/bin/herdr"]
+        let action = detached ? #"nohup "$h" "$@" </dev/null >/dev/null 2>&1 & exit 0"# : #"exec "$h" "$@""#
+        let script = "for h in \(candidates.joined(separator: " ")); do case \"$h\" in */mise/shims/herdr) ;; /*) if [ -x \"$h\" ]; then echo \(remoteOutputMarker); \(action); fi ;; esac; done; "
+            + "echo \"herdr wasn’t found on this machine. Install it, or add it to the SSH shell’s PATH.\" >&2; exit 127"
+        return (["sh", "-c", shellQuote(script), "herdr"] + arguments.map(shellQuote)).joined(separator: " ")
+    }
+
+    static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     /// The listed session whose socket this device uses, if any.
     public static func session(for profile: DeviceProfile, in sessions: [HerdrSessionEntry]) -> HerdrSessionEntry? {
         guard profile.kind == .local else { return nil }
         let socket = SessionDiscovery.normalized(profile.socketPath)
         return sessions.first { SessionDiscovery.normalized($0.socketPath) == socket }
+    }
+
+    /// The session an SSH device uses, in its machine's `herdr session list`.
+    /// An empty socket is the default session; a herdr session socket names
+    /// its session; a custom one is matched by path, `~/` meaning `home`.
+    public static func remoteSession(for profile: DeviceProfile, home: String?, in sessions: [HerdrSessionEntry]) -> HerdrSessionEntry? {
+        guard profile.kind == .ssh else { return nil }
+        if profile.socketPath.isEmpty { return sessions.first(where: \.isDefault) }
+        if let name = profile.pathSessionName { return sessions.first { $0.name == name } }
+        guard let home, let socket = try? profile.resolvedRemoteSocket(home: home, discoveredSocket: "") else { return nil }
+        let path = (socket as NSString).standardizingPath
+        return sessions.first { ($0.socketPath as NSString).standardizingPath == path }
     }
 
     /// How to start a local device's server. herdr serves a named session
@@ -89,7 +140,7 @@ public enum SessionControl {
     }
 
     /// herdr addresses the default session without `--session`.
-    static func sessionArguments(_ session: HerdrSessionEntry) -> [String] {
+    public static func sessionArguments(_ session: HerdrSessionEntry) -> [String] {
         session.isDefault ? [] : ["--session", session.name]
     }
 
