@@ -7,7 +7,7 @@ public enum SessionControl {
     /// Runs the herdr CLI and returns its output; throws with herdr's own error.
     public typealias Runner = @MainActor ([String]) async throws -> String
 
-    @MainActor public static func runner(executable: String, environment: [String: String]? = nil) -> Runner {
+    @MainActor public static func runner(executable: String, environment: [String: String]? = nil, timeout: TimeInterval = 20) -> Runner {
         { arguments in
             var env = environment ?? ProcessInfo.processInfo.environment
             // A session name is explicit; an inherited session must not redirect it.
@@ -16,7 +16,7 @@ public enum SessionControl {
             // `session list` can pass ManagedProcess's default 16 KB bound.
             let process = try ManagedProcess(executable: (executable as NSString).expandingTildeInPath,
                                              arguments: arguments, environment: env, outputLimit: 1 << 20)
-            return try await process.result(timeout: 20)
+            return try await process.result(timeout: timeout)
         }
     }
 
@@ -86,6 +86,35 @@ public enum SessionControl {
 
     @MainActor public static func stop(_ name: String, _ run: Runner) async throws {
         _ = try await run(["session", "stop", name])
+    }
+
+    /// herdr addresses the default session without `--session`.
+    static func sessionArguments(_ session: HerdrSessionEntry) -> [String] {
+        session.isDefault ? [] : ["--session", session.name]
+    }
+
+    /// Whether the session's running server can hand its live panes to a new
+    /// one; servers from before live handoff don't report the capability.
+    @MainActor public static func supportsLiveHandoff(_ session: HerdrSessionEntry, _ run: Runner) async throws -> Bool {
+        struct Status: Decodable {
+            struct Server: Decodable {
+                struct Capabilities: Decodable { let live_handoff: Bool? }
+                let running: Bool?
+                let capabilities: Capabilities?
+            }
+            let server: Server
+        }
+        let output = try await run(sessionArguments(session) + ["status", "--json"])
+        guard let status = try? JSONDecoder().decode(Status.self, from: Data(output.utf8)) else {
+            throw HerdrError.message("herdr’s status output wasn’t readable.")
+        }
+        return status.server.running == true && status.server.capabilities?.live_handoff == true
+    }
+
+    /// Replaces the session's server with one from the installed herdr. Its
+    /// shells and agents keep running; herdr gives their panes new terminal IDs.
+    @MainActor public static func liveHandoff(_ session: HerdrSessionEntry, _ run: Runner) async throws {
+        _ = try await run(sessionArguments(session) + ["server", "live-handoff"])
     }
 
     /// Stops a running session first: herdr deletes only stopped sessions.
