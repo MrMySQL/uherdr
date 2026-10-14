@@ -38,6 +38,26 @@ enum SessionControlTests {
         var threw = false
         do { try await SessionControl.delete(sessions[0], run) } catch { threw = true }
         XCTAssertTrue(threw && calls.isEmpty && !SessionControl.canDelete(sessions[0]))
+        // Live handoff addresses the default session bare and others by name.
+        var status = #"{"server":{"running":true,"capabilities":{"live_handoff":true}}}"#
+        let statusRun: SessionControl.Runner = { args in
+            calls.append(args)
+            return args.suffix(2) == ["status", "--json"] ? status : ""
+        }
+        calls = []
+        XCTAssertTrue(try await SessionControl.supportsLiveHandoff(sessions[0], statusRun))
+        XCTAssertTrue(try await SessionControl.supportsLiveHandoff(sessions.first { $0.name == "menqal" }!, statusRun))
+        try await SessionControl.liveHandoff(sessions.first { $0.name == "menqal" }!, statusRun)
+        XCTAssertEqual(calls, [["status", "--json"], ["--session", "menqal", "status", "--json"], ["--session", "menqal", "server", "live-handoff"]])
+        // Older servers report no capability; a stopped one can't hand off; unreadable status throws.
+        status = #"{"server":{"running":true,"capabilities":{}}}"#
+        XCTAssertTrue(!(try await SessionControl.supportsLiveHandoff(sessions[0], statusRun)))
+        status = #"{"server":{"running":false,"capabilities":{"live_handoff":true}}}"#
+        XCTAssertTrue(!(try await SessionControl.supportsLiveHandoff(sessions[0], statusRun)))
+        status = "not json"
+        threw = false
+        do { _ = try await SessionControl.supportsLiveHandoff(sessions[0], statusRun) } catch { threw = true }
+        XCTAssertTrue(threw)
         calls = []; threw = false; failOn = "stop"
         do { try await SessionControl.delete(sessions.first { $0.name == "menqal" }!, run) } catch { threw = true }
         XCTAssertTrue(threw)

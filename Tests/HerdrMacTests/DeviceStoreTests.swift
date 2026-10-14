@@ -22,6 +22,7 @@ import HerdrCore
         try await testSessionActionsSerialize()
         try await testRestartAndStartState()
         try await testCreateSession()
+        try await testHerdrUpdate()
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -480,6 +481,116 @@ import HerdrCore
         await scan.value
         precondition(devices.herdrSession(for: session)?.running == true, "The older scan must not undo it")
         print("PASS: Restart reports an old server that hasn't stopped, and Start refreshes herdr's list during a scan")
+    }
+
+    /// The update badge, `herdr update`, and the restart question that follows it.
+    @MainActor static func testHerdrUpdate() async throws {
+        let suiteName = "dev.herdr.herdr-update-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var installed = "0.9.3"
+        var updateFails = false
+        var updates: [String] = []
+        var handoffCapable = true, handoffFails = false
+        var holdChannel = false
+        var heldChannel: CheckedContinuation<Void, Never>?
+        var calls: [[String]] = []
+        let socket = "/tmp/uh-update-\(UUID().uuidString)/herdr/sessions/work/herdr.sock"
+        let run: SessionControl.Runner = { args in
+            calls.append(args)
+            switch args {
+            case ["--version"]: return "herdr \(installed)\n"
+            case ["channel", "show"]:
+                if holdChannel { holdChannel = false; await withCheckedContinuation { heldChannel = $0 } }
+                return "stable\n"
+            case ["session", "list", "--json"]: return #"{"sessions":[{"default":false,"name":"work","running":true,"socket_path":"\#(socket)"}]}"#
+            case ["--session", "work", "status", "--json"]:
+                return #"{"server":{"running":true,"version":"0.9.3","capabilities":{"live_handoff":\#(handoffCapable)}}}"#
+            case ["--session", "work", "server", "live-handoff"]:
+                if handoffFails { throw HerdrError.message("replacement server did not become ready") }
+                return "live handoff complete\n"
+            default: return ""
+            }
+        }
+        let local = DeviceProfile(name: "work", kind: .local, socketPath: socket, executable: "/usr/bin/true")
+        let remote = DeviceProfile(name: "mini", host: "mini.local", executable: "/usr/bin/true")
+        let devices = DeviceStore(defaults: defaults, profiles: [local, remote], sessionRunner: { _ in run }, updateRunner: { executable in
+            { args in
+                updates.append(executable)
+                precondition(args == ["update"])
+                if updateFails { throw HerdrError.message("download failed") }
+                installed = "0.9.4"
+                return ""
+            }
+        }, fetchManifest: { _ in Data(#"{"version":"0.9.4"}"#.utf8) })
+        defer { devices.stop() }
+        let session = devices.sessions[0], remoteSession = devices.sessions[1]
+        for store in [session, remoteSession] { store.connected = true; store.version = "0.9.3" }
+        await devices.checkForHerdrUpdates()
+        precondition(devices.availableHerdrUpdate(for: session) == "0.9.4")
+        precondition(devices.herdrRestartVersion(for: session) == nil)
+        // SSH devices run their own herdr; this Mac's release says nothing about them.
+        precondition(devices.availableHerdrUpdate(for: remoteSession) == nil && devices.herdrRestartVersion(for: remoteSession) == nil)
+        // The badge belongs to the connection line: a disconnected device shows none.
+        session.connected = false
+        precondition(devices.availableHerdrUpdate(for: session) == nil)
+        session.connected = true
+
+        // A failed update reports herdr's error and asks nothing.
+        updateFails = true
+        await devices.updateHerdr(for: session)
+        precondition(session.operationError?.contains("download failed") == true, session.operationError ?? "nil")
+        precondition(devices.herdrPrompt == nil && devices.availableHerdrUpdate(for: session) == "0.9.4")
+        precondition(!devices.isUpdatingHerdr(session))
+        session.operationError = nil
+
+        // A successful one swaps the update badge for a restart, and asks to restart now.
+        updateFails = false
+        await devices.updateHerdr(for: session)
+        precondition(updates == ["/usr/bin/true", "/usr/bin/true"])
+        precondition(devices.availableHerdrUpdate(for: session) == nil)
+        precondition(devices.herdrRestartVersion(for: session) == "0.9.4")
+        precondition(devices.herdrPrompt == .restart(local.id, version: "0.9.4", afterUpdate: true))
+        precondition(devices.isPresenting)
+        // Declining leaves the restart badge until the server reports the new version.
+        devices.herdrPrompt = nil
+        // A check that read the old version before an update must not undo it.
+        installed = "0.9.3"
+        devices.herdrPrompt = nil
+        holdChannel = true
+        let staleCheck = Task { await devices.checkForHerdrUpdates() }
+        await waitUntil("the update check to read herdr's version") { heldChannel != nil }
+        await devices.updateHerdr(for: session)
+        devices.herdrPrompt = nil
+        heldChannel?.resume(); heldChannel = nil
+        await staleCheck.value
+        precondition(devices.availableHerdrUpdate(for: session) == nil, "A stale check must not bring the update badge back")
+        precondition(devices.herdrRestartVersion(for: session) == "0.9.4")
+        session.version = "0.9.4"
+        precondition(devices.herdrRestartVersion(for: session) == nil && devices.availableHerdrUpdate(for: session) == nil)
+
+        // Restart hands the live panes to the new server: no full restart, no question.
+        session.version = "0.9.3"
+        calls = []
+        await devices.upgradeHerdrServer(session)
+        precondition(calls.contains(["--session", "work", "server", "live-handoff"]))
+        precondition(!calls.contains { $0.starts(with: ["session", "stop"]) }, "Handoff must not stop the session")
+        precondition(devices.herdrPrompt == nil && session.operationError == nil && !devices.isActing(session))
+        // A server that can't hand off, or a failed handoff, asks before a full restart.
+        handoffCapable = false
+        calls = []
+        await devices.upgradeHerdrServer(session)
+        precondition(!calls.contains(["--session", "work", "server", "live-handoff"]))
+        guard case .fullRestart(local.id, "0.9.4", let reason)? = devices.herdrPrompt else { preconditionFailure("\(String(describing: devices.herdrPrompt))") }
+        precondition(reason.contains("can’t hand"))
+        devices.herdrPrompt = nil
+        handoffCapable = true; handoffFails = true
+        await devices.upgradeHerdrServer(session)
+        guard case .fullRestart(local.id, "0.9.4", let failure)? = devices.herdrPrompt else { preconditionFailure("\(String(describing: devices.herdrPrompt))") }
+        precondition(failure.contains("did not become ready"))
+        precondition(!calls.contains { $0.starts(with: ["session", "stop"]) })
+        devices.herdrPrompt = nil
+        print("PASS: herdr update badge, update failure, restart question, restart badge, and live handoff with a confirmed full-restart fallback")
     }
 
     /// New session against a fake herdr whose launcher creates the session it names.

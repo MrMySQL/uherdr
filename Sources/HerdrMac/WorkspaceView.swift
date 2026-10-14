@@ -98,6 +98,7 @@ struct WorkspaceView: View {
             case .restart: Text("Its shells and agents end, and the session reopens from its saved state.")
             }
         }
+        .modifier(HerdrPromptAlert(devices: devices))
         .alert(machineRemovalTitle, isPresented: Binding(get: { devices.pendingMachineRemoval != nil }, set: { if !$0 { devices.pendingMachineRemoval = nil } })) {
             Button("Cancel", role: .cancel) { devices.pendingMachineRemoval = nil }
             Button("Remove Machine", role: .destructive) {
@@ -233,6 +234,7 @@ struct WorkspaceView: View {
             Circle().fill(store.connected ? herdrAccentColor : Color.orange).frame(width: 6, height: 6)
             Text(store.displayName)
             Text(store.connected ? "Connected to herdr \(store.version)" : store.connecting ? "Connecting…" : "Disconnected")
+            herdrUpdateBadge
             Spacer()
             if store.connected {
                 Text("\(store.agents.count) agents")
@@ -245,6 +247,27 @@ struct WorkspaceView: View {
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 14).padding(.vertical, 7)
+    }
+
+    /// A new herdr release to install, or a server still running the old one.
+    @ViewBuilder private var herdrUpdateBadge: some View {
+        let restartVersion = devices.herdrRestartVersion(for: store)
+        if devices.isUpdatingHerdr(store) || (restartVersion != nil && devices.isActing(store)) {
+            ProgressView().controlSize(.mini).scaleEffect(0.7).frame(width: 12, height: 12)
+                .help(devices.isUpdatingHerdr(store) ? "Updating herdr…" : "Working…")
+        } else if let version = devices.availableHerdrUpdate(for: store) {
+            Button { devices.herdrPrompt = .update(store.profile.id, version: version) } label: {
+                Image(systemName: "arrow.down.circle.fill").foregroundStyle(herdrAccentColor)
+            }
+            .buttonStyle(.plain).help("herdr \(version) is available. Click to update.")
+            .accessibilityLabel("Update herdr to \(version)")
+        } else if let version = restartVersion {
+            Button { devices.herdrPrompt = .restart(store.profile.id, version: version, afterUpdate: false) } label: {
+                Image(systemName: "arrow.clockwise.circle.fill").foregroundStyle(Color.orange)
+            }
+            .buttonStyle(.plain).help("Restart the server to use herdr \(version).")
+            .accessibilityLabel("Restart server to use herdr \(version)")
+        }
     }
 
     private var emptySpaces: some View {
@@ -279,6 +302,60 @@ struct WorkspaceView: View {
     }
 }
 
+
+/// The herdr update and restart questions; split out so the workspace body type-checks quickly.
+struct HerdrPromptAlert: ViewModifier {
+    @ObservedObject var devices: DeviceStore
+
+    func body(content: Content) -> some View {
+        content
+            .alert(title, isPresented: Binding(get: { devices.herdrPrompt != nil }, set: { if !$0 { devices.herdrPrompt = nil } }), presenting: devices.herdrPrompt) { prompt in
+                switch prompt {
+                case .update:
+                    Button("Not Now", role: .cancel) { devices.herdrPrompt = nil }
+                    Button("Update") { runHerdrPrompt(prompt) }.keyboardShortcut(.defaultAction)
+                case .restart(_, _, let afterUpdate):
+                    Button(afterUpdate ? "Later" : "Cancel", role: .cancel) { devices.herdrPrompt = nil }
+                    Button("Restart Server") { runHerdrPrompt(prompt) }.keyboardShortcut(.defaultAction)
+                case .fullRestart:
+                    Button("Cancel", role: .cancel) { devices.herdrPrompt = nil }
+                    Button("Restart Anyway", role: .destructive) { runHerdrPrompt(prompt) }
+                }
+            } message: { prompt in
+                switch prompt {
+                case .update(_, let version):
+                    Text("Installs herdr \(version) with “herdr update”. Running servers keep their current version until they restart.")
+                case .restart(_, let version, let afterUpdate):
+                    Text("\(afterUpdate ? "herdr \(version) is installed. " : "")The server restarts on herdr \(version) and hands over this session’s shells and agents, so they keep running.")
+                case .fullRestart(_, let version, let reason):
+                    Text("\(reason)\n\nA full restart ends this session’s shells and agents, and it reopens from its saved state on herdr \(version).")
+                }
+            }
+    }
+
+    private var title: String {
+        guard let prompt = devices.herdrPrompt,
+              let session = devices.sessions.first(where: { $0.profile.id == prompt.deviceID }) else { return "" }
+        switch prompt {
+        case .update(_, let version): return "Update herdr to \(version)?"
+        case .restart(_, _, true): return "Restart “\(session.profile.sessionName)” now?"
+        case .restart: return "Restart “\(session.profile.sessionName)”?"
+        case .fullRestart: return "Restart “\(session.profile.sessionName)” without handoff?"
+        }
+    }
+
+    private func runHerdrPrompt(_ prompt: HerdrPrompt) {
+        devices.herdrPrompt = nil
+        guard let session = devices.sessions.first(where: { $0.profile.id == prompt.deviceID }) else { return }
+        Task {
+            switch prompt {
+            case .update: await devices.updateHerdr(for: session)
+            case .restart: await devices.upgradeHerdrServer(session)
+            case .fullRestart: await devices.restartHerdrSession(session)
+            }
+        }
+    }
+}
 
 struct StatusDot: View {
     let status: AgentStatus
