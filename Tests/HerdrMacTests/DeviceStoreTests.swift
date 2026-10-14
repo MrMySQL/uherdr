@@ -23,6 +23,7 @@ import HerdrCore
         try await testRestartAndStartState()
         try await testCreateSession()
         try await testHerdrUpdate()
+        await testHerdrCheckOnConnect()
         let firstProfile = DeviceProfile(name: "First Mac", kind: .local, socketPath: socketA, executable: exe)
         let secondProfile = DeviceProfile(name: "Second Mac", kind: .local, socketPath: socketB, executable: exe)
         let devices = DeviceStore(defaults: defaults, profiles: [firstProfile, secondProfile])
@@ -642,6 +643,38 @@ import HerdrCore
         precondition(remoteCalls.contains { $0.1 == .detached && $0.2 == ["server"] } && remoteRunning)
         precondition(!devices.isActing(remoteSession))
         print("PASS: herdr update badge, update failure, restart question, restart badge, and live handoff with a confirmed full-restart fallback, on this Mac and over SSH")
+    }
+
+    /// Each connection re-checks its install, so a herdr updated elsewhere doesn't
+    /// keep a stale badge until the next periodic check.
+    @MainActor static func testHerdrCheckOnConnect() async {
+        let suiteName = "dev.herdr.herdr-connect-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var installed = "0.9.3", checks = 0
+        let run: SessionControl.Runner = { args in
+            if args == ["--version"] { checks += 1; return "herdr \(installed)\n" }
+            return args == ["channel", "show"] ? "stable\n" : ""
+        }
+        let local = DeviceProfile(name: "work", kind: .local, socketPath: "/tmp/uh-connect-\(UUID().uuidString)/herdr.sock", executable: "/usr/bin/true")
+        let devices = DeviceStore(defaults: defaults, profiles: [local], sessionLister: { _ in [] }, sessionRunner: { _ in run },
+                                  fetchManifest: { _ in Data(#"{"version":"0.9.4"}"#.utf8) })
+        defer { devices.stop() }
+        let session = devices.sessions[0]
+        devices.start()
+        // The fixture has no server; stop polling it, so the test sets the connection.
+        session.disconnect()
+        session.version = "0.9.3"
+        session.connected = true
+        await waitUntil("connecting to check herdr") { devices.availableHerdrUpdate(for: session) == "0.9.4" }
+        // herdr updated from a terminal: the next connection clears the badge.
+        installed = "0.9.4"
+        let before = checks
+        session.connected = false
+        session.connected = true
+        await waitUntil("reconnecting to re-check herdr") { checks > before && devices.availableHerdrUpdate(for: session) == nil }
+        precondition(devices.herdrRestartVersion(for: session) == "0.9.4")
+        print("PASS: connecting checks a device's herdr, and reconnecting re-checks it")
     }
 
     /// New session against a fake herdr whose launcher creates the session it names.

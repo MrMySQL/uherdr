@@ -20,7 +20,7 @@ final class DeviceStore: ObservableObject {
     /// The herdr update or restart question showing, if any.
     @Published var herdrPrompt: HerdrPrompt?
     /// Installed and newest published herdr versions, by herdr install:
-    /// a local executable, or an SSH machine's own herdr.
+    /// a local executable, or an SSH account's own herdr.
     @Published private(set) var herdrVersions: [String: HerdrVersions] = [:]
     /// herdr installs with `herdr update` running.
     @Published private(set) var updatingInstalls: Set<String> = []
@@ -127,10 +127,11 @@ final class DeviceStore: ObservableObject {
                 try? await Task.sleep(for: .seconds(15))
             }
         }
+        // Connecting checks each device's install; this catches new releases.
         updateCheckTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.checkForHerdrUpdates()
                 try? await Task.sleep(for: .seconds(6 * 60 * 60))
+                await self?.checkForHerdrUpdates()
             }
         }
     }
@@ -461,9 +462,9 @@ final class DeviceStore: ObservableObject {
     }
 
     /// Devices on one herdr install share its versions: a local executable,
-    /// or an SSH machine, which runs its own herdr.
+    /// or an SSH account, which runs its own herdr.
     private func herdrInstall(_ session: SessionStore) -> String {
-        session.isRemote ? session.profile.machineKey : session.executable
+        session.isRemote ? session.profile.sshAccountKey : session.executable
     }
 
     /// Runs herdr where the device's server runs: on this Mac, or over SSH on its machine.
@@ -611,13 +612,13 @@ final class DeviceStore: ObservableObject {
         subscriptions = sessions.map { session in
             session.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         }
-        // An install with no versions yet, such as an SSH machine that was
-        // unreachable at the last check, is checked once a device on it connects.
+        // A device's install is checked each time it connects: at launch, after
+        // an SSH machine was unreachable, or after herdr was updated elsewhere.
+        // A resubscription's current value is not a new connection.
         subscriptions += sessions.map { session in
-            session.$connected.removeDuplicates().filter { $0 }.sink { [weak self, weak session] _ in
+            session.$connected.dropFirst().removeDuplicates().filter { $0 }.sink { [weak self, weak session] _ in
                 MainActor.assumeIsolated {
-                    guard let self, let session, self.updateCheckTask != nil,
-                          self.herdrVersions[self.herdrInstall(session)] == nil else { return }
+                    guard let self, let session, self.updateCheckTask != nil else { return }
                     Task { await self.checkForHerdrUpdate(session) }
                 }
             }

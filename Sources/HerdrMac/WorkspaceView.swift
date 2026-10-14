@@ -260,7 +260,7 @@ struct WorkspaceView: View {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(herdrAccentColor)
             }
             .buttonStyle(.plain).help("herdr \(version) is available\(store.isRemote ? " on \(store.profile.name)" : ""). Click to update.")
-            .accessibilityLabel("Update herdr to \(version)")
+            .accessibilityLabel(store.isRemote ? "Update herdr on \(store.profile.name) to \(version)" : "Update herdr to \(version)")
         } else if let version = restartVersion {
             Button { devices.herdrPrompt = .restart(store.profile.id, version: version, afterUpdate: false) } label: {
                 Image(systemName: "arrow.clockwise.circle.fill").foregroundStyle(Color.orange)

@@ -82,11 +82,19 @@ public struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
     /// `alex@host` matches `host` with Username `alex`, and no port matches 22.
     public var machineKey: String {
         if kind == .local { return "local" }
-        let at = host.lastIndex(of: "@")
-        let machineHost = at.map { String(host[host.index(after: $0)...]) } ?? host
-        let machineUser = at.map { String(host[..<$0]) } ?? user
-        return "ssh:\(machineHost)|\(machineUser)|\(Int(port) ?? 22)".lowercased()
+        return "ssh:\(sshHost)|\(sshUser)|\(Int(port) ?? 22)".lowercased()
     }
+
+    /// The SSH account a device logs in to, which has its own herdr install.
+    /// Like `machineKey`, but the username keeps its case: `Alice` and
+    /// `alice` are different accounts on most systems.
+    public var sshAccountKey: String {
+        if kind == .local { return "local" }
+        return "ssh:\(sshHost.lowercased())|\(sshUser)|\(Int(port) ?? 22)"
+    }
+
+    private var sshHost: String { host.lastIndex(of: "@").map { String(host[host.index(after: $0)...]) } ?? host }
+    private var sshUser: String { host.lastIndex(of: "@").map { String(host[..<$0]) } ?? user }
 
     /// Herdr derives its binary terminal socket from the API filename's stem.
     public static func clientSocketPath(for apiSocket: String) -> String {

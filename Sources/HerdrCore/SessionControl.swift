@@ -45,12 +45,16 @@ public enum SessionControl {
 
     /// A fixed script on one line, so any login shell passes it to `sh`; only
     /// herdr's arguments vary, and they arrive quoted as its positional parameters.
+    /// As on this Mac, a session or socket set by the shell can't redirect the
+    /// session herdr acts on. A mise shim runs only when no herdr binary is
+    /// found: it resolves herdr per directory, so it may not be the one serving.
     static func remoteCommand(_ arguments: [String], detached: Bool) -> String {
         let candidates = [#""$(command -v herdr 2>/dev/null)""#, #""$HOME/.local/bin/herdr""#, "/home/linuxbrew/.linuxbrew/bin/herdr",
                           "/opt/homebrew/bin/herdr", "/usr/local/bin/herdr", #""$HOME/.nix-profile/bin/herdr""#,
                           #""/etc/profiles/per-user/$USER/bin/herdr""#, "/nix/var/nix/profiles/default/bin/herdr", "/run/current-system/sw/bin/herdr"]
         let action = detached ? #"nohup "$h" "$@" </dev/null >/dev/null 2>&1 & exit 0"# : #"exec "$h" "$@""#
-        let script = "for h in \(candidates.joined(separator: " ")); do case \"$h\" in */mise/shims/herdr) ;; /*) if [ -x \"$h\" ]; then echo \(remoteOutputMarker); \(action); fi ;; esac; done; "
+        let script = "unset HERDR_SESSION HERDR_SOCKET_PATH; for pass in binary shim; do for h in \(candidates.joined(separator: " ")); do "
+            + "case \"$pass:$h\" in binary:*/mise/shims/herdr) ;; *:/*) if [ -x \"$h\" ]; then echo \(remoteOutputMarker); \(action); fi ;; esac; done; done; "
             + "echo \"herdr wasn’t found on this machine. Install it, or add it to the SSH shell’s PATH.\" >&2; exit 127"
         return (["sh", "-c", shellQuote(script), "herdr"] + arguments.map(shellQuote)).joined(separator: " ")
     }
