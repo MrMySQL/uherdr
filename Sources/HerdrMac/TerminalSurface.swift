@@ -433,15 +433,16 @@ struct TerminalSurface: NSViewRepresentable {
 
         private lazy var startGate = TerminalStartGate(
             isStarted: { [weak self] in self?.started ?? true },
+            viewSize: { [weak self] in
+                let bounds = self?.view?.bounds ?? .zero
+                return (Double(bounds.width), Double(bounds.height), Double(self?.view?.window?.backingScaleFactor ?? 0))
+            },
             schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated(work) } },
             deliver: { [weak self] cols, rows in self?.resize(cols: cols, rows: rows) })
 
         private func viewportChanged(_ viewport: InMemoryTerminalViewport) {
-            let bounds = view?.bounds ?? .zero
             startGate.report(.init(columns: Int(viewport.columns), rows: Int(viewport.rows),
-                                   widthPixels: viewport.widthPixels, heightPixels: viewport.heightPixels),
-                             viewWidth: bounds.width, viewHeight: bounds.height,
-                             scale: Double(view?.window?.backingScaleFactor ?? 0))
+                                   widthPixels: viewport.widthPixels, heightPixels: viewport.heightPixels))
         }
 
         private func resize(cols: Int, rows: Int) {
@@ -603,12 +604,15 @@ final class HerdrTerminalView: AppTerminalView {
     }
 
     /// Sends the release a lost mouse-up would have sent, at the last known
-    /// position; moving first would report one more drag.
+    /// position; moving first would report one more drag. A captured link
+    /// press sent nothing yet, so it has nothing to release.
     private func releaseLostButton(_ event: NSEvent) {
+        let held = leftButtonHeld
         leftButtonHeld = false
         capturedLinkClick = nil
         capturedLinkDragged = false
         plainLinkClick = false
+        guard held else { return }
         sendMouseButton(state: GHOSTTY_MOUSE_RELEASE, button: GHOSTTY_MOUSE_LEFT,
                         modifiers: TerminalInputModifiers(from: event.modifierFlags))
     }
@@ -657,7 +661,14 @@ final class HerdrTerminalView: AppTerminalView {
         guard press == pressID, mouseUpWatcher != nil else { return }
         stopWatchingMouseUp()
         guard leftButtonHeld || capturedLinkClick != nil else { return }
-        if event.window === window { mouseUp(with: event) } else { releaseLostButton(event) }
+        // Panes share the window and hidden tabs stay attached: finish here
+        // only over this visible surface, otherwise just let go of the button.
+        if event.window === window, surfaceVisible,
+           bounds.contains(convert(event.locationInWindow, from: nil)) {
+            mouseUp(with: event)
+        } else {
+            releaseLostButton(event)
+        }
     }
 
     override func mouseUp(with event: NSEvent) {

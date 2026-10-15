@@ -29,6 +29,13 @@ for _ in {1..80}; do
 done
 test -S "$SOCKET_A"
 test -S "$SOCKET_B"
-swift build --target HerdrCore
-swiftc -parse-as-library -I .build/debug/Modules Sources/HerdrMac/SessionStore.swift Sources/HerdrMac/DeviceStore.swift Tests/HerdrMacTests/DeviceStoreTests.swift .build/debug/HerdrCore.build/*.o -o .build/DeviceStoreTests
-.build/DeviceStoreTests "$SOCKET_A" "$SOCKET_B" "$HERDR_TEST_BIN"
+# Build HerdrCore from source here: SwiftPM's output layout depends on its build system.
+TEST_BUILD="$PWD/.build/device-tests"
+mkdir -p "$TEST_BUILD"
+swiftc -emit-library -emit-module -module-name HerdrCore Sources/HerdrCore/*.swift \
+    -emit-module-path "$TEST_BUILD/HerdrCore.swiftmodule" -o "$TEST_BUILD/libHerdrCore.dylib"
+swiftc -parse-as-library -I "$TEST_BUILD" -L "$TEST_BUILD" -lHerdrCore \
+    -Xlinker -rpath -Xlinker "$TEST_BUILD" \
+    Sources/HerdrMac/SessionStore.swift Sources/HerdrMac/DeviceStore.swift Tests/HerdrMacTests/DeviceStoreTests.swift \
+    -o "$TEST_BUILD/DeviceStoreTests"
+"$TEST_BUILD/DeviceStoreTests" "$SOCKET_A" "$SOCKET_B" "$HERDR_TEST_BIN"

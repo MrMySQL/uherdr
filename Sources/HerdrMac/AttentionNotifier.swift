@@ -13,20 +13,30 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     private var subscription: AnyCancellable?
     private var center: UNUserNotificationCenter?
     private var scanQueued = false
+    /// A click that launched the app, held until its device connects.
+    private var pendingReveal: (deviceID: String, paneID: String, at: Date)?
+
+    /// Runs before launch finishes, so a click that launches the app reaches this delegate.
+    func install() {
+        // Notifications need an app bundle; `swift run` has none.
+        guard center == nil, Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        self.center = center
+    }
 
     func attach(_ devices: DeviceStore, editors: EditorStores) {
         guard self.devices == nil else { return }
         self.devices = devices
         self.editors = editors
-        // Notifications need an app bundle; `swift run` has none.
-        if Bundle.main.bundleIdentifier != nil {
-            let center = UNUserNotificationCenter.current()
-            center.delegate = self
-            center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
-            self.center = center
-        }
         // objectWillChange fires before the change lands; scan on the next turn.
         subscription = devices.objectWillChange.sink { [weak self] _ in self?.queueScan() }
+        if let pending = pendingReveal {
+            // The timeout runs from the click, not from here.
+            let delay = AttentionReveal.remaining(waited: Date().timeIntervalSince(pending.at))
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.scan() }
+        }
         scan()
     }
 
@@ -47,6 +57,15 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         }
         let count = devices.attentionCount
         NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+        revealPending()
+    }
+
+    private func revealPending() {
+        guard let pending = pendingReveal, let devices else { return }
+        guard let session = devices.sessions.first(where: { $0.profile.id.uuidString == pending.deviceID }) else { pendingReveal = nil; return }
+        guard AttentionReveal.isReady(connected: session.connected, waited: Date().timeIntervalSince(pending.at)) else { return }
+        pendingReveal = nil
+        reveal(deviceID: pending.deviceID, paneID: pending.paneID)
     }
 
     private func post(_ agent: Agent, in session: SessionStore) {
@@ -61,10 +80,12 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         content.userInfo = ["deviceID": session.profile.id.uuidString, "paneID": agent.paneID]
         let id = AttentionTracker.notificationID(device: session.profile.id, paneID: agent.paneID)
         center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+        tracker.markAlerted(device: session.profile.id, paneID: agent.paneID)
     }
 
     func reveal(deviceID: String, paneID: String) {
-        guard let devices, let session = devices.sessions.first(where: { $0.profile.id.uuidString == deviceID }) else { return }
+        guard let devices else { pendingReveal = (deviceID, paneID, Date()); return }
+        guard let session = devices.sessions.first(where: { $0.profile.id.uuidString == deviceID }) else { return }
         NSApp.activate(ignoringOtherApps: true)
         NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
         devices.select(session)

@@ -15,6 +15,12 @@ struct TabDragPayload: Codable, Equatable, Sendable {
     let tabID: String
 }
 
+struct WorkspaceDragPayload: Codable, Equatable, Sendable {
+    let deviceID: UUID
+    let connectionGeneration: UUID
+    let workspaceID: String
+}
+
 enum PaneDockEdge: CaseIterable {
     case left, right, top, bottom
 
@@ -79,6 +85,8 @@ final class SessionStore: ObservableObject {
     var displayName: String { isRemote ? "\(profile.name) · \(profile.sessionName)" : profile.sessionName }
     var defaultDirectory: String { isRemote ? remoteHome ?? "/tmp" : NSHomeDirectory() }
     @Published private var tabOrder: [String: [String]]
+    /// The sidebar's workspace order; herdr's own order is left unchanged.
+    private var workspaceOrder: [String]
     /// Each space's folder for the right sidebar; herdr keeps none.
     @Published private(set) var workspaceRoots: WorkspaceRoots
     /// Bumped when a folder is remembered, so a snapshot read before a new
@@ -109,6 +117,7 @@ final class SessionStore: ObservableObject {
         self.powerReader = powerReader
         tabOrder = defaults.dictionary(forKey: "tabOrder:\(profile.id.uuidString)") as? [String: [String]] ?? [:]
         workspaceRoots = WorkspaceRoots.load(profile: profile.id, from: defaults)
+        workspaceOrder = defaults.stringArray(forKey: "workspaceOrder:\(profile.id.uuidString)") ?? []
         self.tunnel = tunnel ?? SSHTunnel()
         self.fileTransfer = fileTransfer ?? RemoteFileTransfer()
         let socket = profile.kind == .local ? (profile.socketPath as NSString).expandingTildeInPath : ""
@@ -195,6 +204,40 @@ final class SessionStore: ObservableObject {
         }
         return true
     }
+
+    /// Saved workspaces first, in their saved order; new ones follow in herdr's order.
+    private func ordered(_ spaces: [Workspace]) -> [Workspace] {
+        guard !workspaceOrder.isEmpty else { return spaces }
+        let byID = Dictionary(spaces.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = Set<String>()
+        let saved = workspaceOrder.compactMap { id -> Workspace? in
+            guard seen.insert(id).inserted else { return nil }
+            return byID[id]
+        }
+        return saved + spaces.filter { !seen.contains($0.id) }
+    }
+
+    func workspaceDragPayload(for workspaceID: String) -> WorkspaceDragPayload? {
+        guard connected, !suspended, workspaces.contains(where: { $0.id == workspaceID }) else { return nil }
+        return WorkspaceDragPayload(deviceID: profile.id, connectionGeneration: connectionGeneration, workspaceID: workspaceID)
+    }
+
+    @discardableResult
+    func moveWorkspace(_ source: WorkspaceDragPayload, relativeTo targetID: String, after: Bool) -> Bool {
+        guard workspaceDragPayload(for: source.workspaceID) == source, source.workspaceID != targetID,
+              workspaces.contains(where: { $0.id == targetID }) else { return false }
+        var order = workspaces.filter { $0.id != source.workspaceID }
+        guard let target = order.firstIndex(where: { $0.id == targetID }),
+              let moved = workspaces.first(where: { $0.id == source.workspaceID }) else { return false }
+        order.insert(moved, at: target + (after ? 1 : 0))
+        if order != workspaces {
+            workspaces = order
+            workspaceOrder = order.map(\.id)
+            defaults.set(workspaceOrder, forKey: "workspaceOrder:\(profile.id.uuidString)")
+        }
+        return true
+    }
+
     var visiblePanes: [Pane] { panes.filter { $0.tabID == selectedTab } }
     var currentLayout: TabLayout? { selectedTab.flatMap { layouts[$0] } }
     var attentionCount: Int { agents.filter { $0.agentStatus == .blocked || $0.agentStatus == .done }.count }
@@ -288,6 +331,7 @@ final class SessionStore: ObservableObject {
         disconnect()
         profile = value
         tabOrder = defaults.dictionary(forKey: "tabOrder:\(value.id.uuidString)") as? [String: [String]] ?? [:]
+        workspaceOrder = defaults.stringArray(forKey: "workspaceOrder:\(value.id.uuidString)") ?? []
         workspaces = []; tabs = []; panes = []; agents = []; layouts = [:]
         selectedSpace = nil; selectedTab = nil; selectedPane = nil
         guessedRoots = []
@@ -327,7 +371,8 @@ final class SessionStore: ObservableObject {
             guard generation == connectionGeneration, !Task.isCancelled, expectedLayoutRevision == layoutRevision else { return }
             if version != snapshot.version { version = snapshot.version }
             if protocolVersion != snapshot.protocolVersion { protocolVersion = snapshot.protocolVersion }
-            if workspaces != snapshot.workspaces { workspaces = snapshot.workspaces }
+            let orderedWorkspaces = ordered(snapshot.workspaces)
+            if workspaces != orderedWorkspaces { workspaces = orderedWorkspaces }
             // Prune a copy: mutating the published value would notify on every
             // poll, even when nothing was dropped.
             var roots = workspaceRoots

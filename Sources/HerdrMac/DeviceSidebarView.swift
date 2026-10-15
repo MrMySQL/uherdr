@@ -1,10 +1,16 @@
 import SwiftUI
 import HerdrCore
+import UniformTypeIdentifiers
+
+private extension UTType {
+    static let herdrSidebarItem = UTType(exportedAs: "dev.herdr.native.sidebar-item", conformingTo: .data)
+}
 
 struct DeviceSidebarView: View {
     @ObservedObject var devices: DeviceStore
     @State private var search = ""
     @State private var collapsed: Set<String> = []
+    @State private var dragging: SidebarDragItem?
     @ObservedObject private var shortcuts = ShortcutSettings.shared
     let showShortcutHints: Bool
 
@@ -38,6 +44,7 @@ struct DeviceSidebarView: View {
                 Spacer()
                 Menu("Add device") {
                     Button("SSH device…") { addDevice() }
+                    Button("New session on this Mac…") { devices.newSessionPrompt = true }.disabled(devices.creatingSession)
                     Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
                 }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }.font(.system(size: 11)).buttonStyle(.plain).padding(12)
@@ -48,7 +55,7 @@ struct DeviceSidebarView: View {
         devices.editor = DeviceEditorTarget(profile: DeviceProfile(name: "", executable: devices.activeSession.executable), isNew: true)
     }
 
-    private func matches(_ text: String) -> Bool { search.isEmpty || text.localizedCaseInsensitiveContains(search) }
+    private var filter: SidebarSearch { SidebarSearch(text: search, mode: devices.sidebarMode) }
 
     private func isCollapsed(_ key: String) -> Bool { search.isEmpty && collapsed.contains(key) }
     private func toggle(_ key: String) {
@@ -60,24 +67,9 @@ struct DeviceSidebarView: View {
         }.buttonStyle(.plain).help("Expand or collapse")
     }
 
-    private func visibleSpaces(_ session: SessionStore, machineMatches: Bool) -> [Workspace] {
-        let sessionMatches = machineMatches || matches(session.profile.sessionName) || (!search.isEmpty && matches(session.profile.host))
-        return session.workspaces.filter { sessionMatches || matches($0.label) }
-    }
-    private func visibleAgents(_ session: SessionStore, machineMatches: Bool) -> [Agent] {
-        let sessionMatches = machineMatches || matches(session.profile.sessionName) || (!search.isEmpty && matches(session.profile.host))
-        return session.agents.filter { agent in
-            sessionMatches || matches(agent.displayName) || matches(session.workspaces.first(where: { $0.id == agent.workspaceID })?.label ?? "")
-        }
-    }
-    private func showsSession(_ session: SessionStore, machineMatches: Bool) -> Bool {
-        if machineMatches || matches(session.profile.sessionName) { return true }
-        return devices.sidebarMode == "spaces" ? !visibleSpaces(session, machineMatches: false).isEmpty : !visibleAgents(session, machineMatches: false).isEmpty
-    }
-
     @ViewBuilder private func machineGroup(_ machine: MachineGroup) -> some View {
-        let machineMatches = !search.isEmpty && matches(machine.name)
-        let sessions = machine.sessions.filter { showsSession($0, machineMatches: machineMatches) }
+        let machineMatches = filter.machineMatches(machine)
+        let sessions = machine.sessions.filter { filter.shows($0, machineMatches: machineMatches) }
         if !sessions.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -88,19 +80,25 @@ struct DeviceSidebarView: View {
                     Spacer(minLength: 0)
                     machineMenu(machine)
                 }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                    .modifier(SidebarReorder(
+                        item: machine.isRemote && devices.machineGroups.filter(\.isRemote).count > 1 ? .machine(machine.id) : nil,
+                        hint: "Drag to reorder devices", dragging: $dragging, alwaysAfter: !machine.isRemote,
+                        accepts: { if case .machine(let id) = $0 { id != machine.id } else { false } },
+                        move: { if case .machine(let id) = $0 { devices.moveMachine(id, relativeTo: machine.id, after: $1) } }))
                 if !isCollapsed(machine.id) {
                     ForEach(sessions, id: \.profile.id) { session in
-                        sessionSection(session, machineMatches: machineMatches)
+                        sessionSection(session, machine: machine, machineMatches: machineMatches)
                     }
                 }
             }
         }
     }
 
-    @ViewBuilder private func sessionSection(_ session: SessionStore, machineMatches: Bool) -> some View {
+    @ViewBuilder private func sessionSection(_ session: SessionStore, machine: MachineGroup, machineMatches: Bool) -> some View {
         let key = session.profile.id.uuidString
-        let spaces = visibleSpaces(session, machineMatches: machineMatches)
-        let agents = visibleAgents(session, machineMatches: machineMatches)
+        let spaces = filter.spaces(session, machineMatches: machineMatches)
+        let agents = filter.agents(session, machineMatches: machineMatches)
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 chevron(key)
@@ -118,6 +116,14 @@ struct DeviceSidebarView: View {
                 sessionMenu(session)
             }.font(.system(size: 11)).padding(8).padding(.leading, 12)
                 .background(devices.selectedDeviceID == session.profile.id ? Color.primary.opacity(0.045) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                .modifier(SidebarReorder(
+                    item: !machine.isRemote && machine.sessions.count > 1 ? .session(session.profile.id) : nil,
+                    hint: "Drag to reorder sessions", dragging: $dragging,
+                    accepts: { item in
+                        guard case .session(let id) = item else { return false }
+                        return !machine.isRemote && id != session.profile.id && machine.sessions.contains { $0.profile.id == id }
+                    },
+                    move: { if case .session(let id) = $0 { devices.moveSession(id, relativeTo: session.profile.id, after: $1) } }))
             if !isCollapsed(key) {
                 if !session.connected {
                     Button { devices.select(session) } label: {
@@ -154,12 +160,16 @@ struct DeviceSidebarView: View {
                     Button("Remove machine…", role: .destructive) { devices.pendingMachineRemoval = machine.id }
                 }
             } else {
+                Button("New session…") { devices.newSessionPrompt = true }.disabled(devices.creatingSession)
                 Button("Discover sessions on this Mac") { Task { await devices.discoverSessions(includeDismissed: true) } }
-                Menu("Start session") {
-                    ForEach(devices.stoppedHerdrSessions, id: \.socketPath) { entry in
-                        Button(entry.name) { Task { await devices.startHerdrSession(entry) } }
+                // Only when herdr lists a stopped session; an empty or disabled item reads as broken.
+                if !devices.stoppedHerdrSessions.isEmpty {
+                    Menu("Start session") {
+                        ForEach(devices.stoppedHerdrSessions, id: \.socketPath) { entry in
+                            Button(entry.name) { Task { await devices.startHerdrSession(entry) } }
+                        }
                     }
-                }.disabled(devices.stoppedHerdrSessions.isEmpty)
+                }
             }
         } label: { Image(systemName: "ellipsis") }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Machine actions")
@@ -173,15 +183,19 @@ struct DeviceSidebarView: View {
             if let herdrSession {
                 if herdrSession.running {
                     Button("Restart session…") { devices.pendingSessionAction = .restart(session.profile.id) }
+                        .disabled(devices.isActing(session))
                     Button("Stop session…") { devices.pendingSessionAction = .stop(session.profile.id) }
+                        .disabled(devices.isActing(session))
                 } else {
                     Button("Start session") { Task { await devices.startServer(for: session) } }
+                        .disabled(devices.isActing(session))
                 }
             }
-            Button("Edit socket…") { devices.editor = DeviceEditorTarget(profile: session.profile) }
+            Button("Edit socket…") { devices.editor = DeviceEditorTarget(profile: session.profile, sessionOnly: true) }
             if devices.canRemoveHerdrSession(session) {
                 Divider()
                 Button("Remove session…", role: .destructive) { devices.pendingSessionAction = .remove(session.profile.id) }
+                    .disabled(devices.isActing(session))
             } else if devices.sessions.count > 1 {
                 Divider()
                 Button("Remove from list…", role: .destructive) { devices.pendingRemoval = session.profile.id }
@@ -211,6 +225,14 @@ struct DeviceSidebarView: View {
                 .contentShape(Rectangle())
                 .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 7))
         }.buttonStyle(.plain).disabled(!session.connected)
+            .modifier(SidebarReorder(
+                item: session.workspaces.count > 1 ? session.workspaceDragPayload(for: space.id).map(SidebarDragItem.workspace) : nil,
+                hint: "Drag to reorder spaces", dragging: $dragging,
+                accepts: { item in
+                    guard case .workspace(let source) = item else { return false }
+                    return source.workspaceID != space.id && session.workspaceDragPayload(for: source.workspaceID) == source
+                },
+                move: { if case .workspace(let source) = $0 { session.moveWorkspace(source, relativeTo: space.id, after: $1) } }))
             .contextMenu {
                 Button("Rename space…") {
                     devices.select(session)
@@ -239,6 +261,92 @@ struct DeviceSidebarView: View {
             }.padding(8).padding(.leading, 28).contentShape(Rectangle())
                 .background(devices.selectedDeviceID == session.profile.id && session.selectedPane == agent.paneID ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 7))
         }.buttonStyle(.plain).disabled(!session.connected)
+    }
+}
+
+/// What the sidebar is dragging. Drag contents are only readable on drop, so
+/// targets check this while hovering to show the insertion line only where it lands.
+enum SidebarDragItem: Equatable {
+    case machine(String)
+    case session(UUID)
+    case workspace(WorkspaceDragPayload)
+}
+
+/// Makes a sidebar row draggable (when `item` is set) and a drop target that
+/// inserts the dragged item before or after it, by which half the pointer is in.
+struct SidebarReorder: ViewModifier {
+    let item: SidebarDragItem?
+    let hint: String
+    @Binding var dragging: SidebarDragItem?
+    /// Drops land after this row whichever half they hit (This Mac stays first).
+    var alwaysAfter = false
+    let accepts: (SidebarDragItem) -> Bool
+    let move: (SidebarDragItem, _ after: Bool) -> Void
+    @State private var edge: VerticalEdge?
+    @State private var height: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        source(content)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+            .overlay(alignment: edge == .bottom ? .bottom : .top) {
+                if edge != nil {
+                    Capsule().fill(Color.accentColor).frame(height: 2).allowsHitTesting(false)
+                }
+            }
+            .onDrop(of: [.herdrSidebarItem], delegate: SidebarDropDelegate(
+                dragging: $dragging, edge: $edge, height: height, alwaysAfter: alwaysAfter, accepts: accepts, move: move))
+    }
+
+    @ViewBuilder private func source(_ content: Content) -> some View {
+        if let item {
+            content.onDrag {
+                dragging = item
+                let provider = NSItemProvider()
+                provider.registerDataRepresentation(forTypeIdentifier: UTType.herdrSidebarItem.identifier, visibility: .ownProcess) { done in
+                    done(Data(), nil)
+                    return nil
+                }
+                return provider
+            }
+            .help(hint).accessibilityHint(hint)
+        } else {
+            content
+        }
+    }
+}
+
+struct SidebarDropDelegate: DropDelegate {
+    @Binding var dragging: SidebarDragItem?
+    @Binding var edge: VerticalEdge?
+    let height: CGFloat
+    let alwaysAfter: Bool
+    let accepts: (SidebarDragItem) -> Bool
+    let move: (SidebarDragItem, Bool) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.herdrSidebarItem]) && dragging.map(accepts) == true
+    }
+
+    func dropEntered(info: DropInfo) { updateEdge(info) }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        updateEdge(info)
+        return DropProposal(operation: edge == nil ? .cancel : .move)
+    }
+
+    func dropExited(info: DropInfo) { edge = nil }
+
+    func performDrop(info: DropInfo) -> Bool {
+        defer { edge = nil; dragging = nil }
+        guard validateDrop(info: info), let dragging else { return false }
+        move(dragging, isAfter(info))
+        return true
+    }
+
+    private func isAfter(_ info: DropInfo) -> Bool { alwaysAfter || info.location.y >= height / 2 }
+
+    private func updateEdge(_ info: DropInfo) {
+        edge = validateDrop(info: info) ? (isAfter(info) ? .bottom : .top) : nil
     }
 }
 

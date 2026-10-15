@@ -7,7 +7,6 @@ struct HerdrApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var devices = DeviceStore()
     @StateObject private var editors = EditorStores(drafts: DraftStore(directory: HerdrApp.draftsDirectory), defaults: .standard)
-    @State private var attention = AttentionNotifier()
     @ObservedObject private var shortcuts = ShortcutSettings.shared
     @ObservedObject private var palette = PaletteState.shared
     private var store: SessionStore { devices.activeSession }
@@ -16,7 +15,7 @@ struct HerdrApp: App {
             WorkspaceView(store: store, devices: devices, editors: editors.store(for: store.profile.id))
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in editors.all.forEach { $0.flushDrafts() }; devices.stop(); SSHMasters.shared.stopAll() }
                 .task {
-                    attention.attach(devices, editors: editors)
+                    appDelegate.attention.attach(devices, editors: editors)
                     SessionStore.revealTerminals = { [editors] profile, space in editors.store(for: profile).showTerminals(in: space) }
                     editors.spaceInfo = { [devices] profile, space in
                         guard let session = devices.sessions.first(where: { $0.profile.id == profile }),
@@ -184,7 +183,7 @@ struct HerdrApp: App {
         shortcuts.bindings.chord(for: action)?.keyboardShortcut(digit: digit)
     }
     private var canInteract: Bool {
-        store.sheet == nil && store.pendingClose == nil && store.operationError == nil && devices.editor == nil && devices.pendingRemoval == nil
+        store.sheet == nil && store.pendingClose == nil && store.operationError == nil && !devices.isPresenting
     }
     private var canUseCurrentPane: Bool {
         store.connected && store.selectedPane != nil && canInteract
@@ -234,7 +233,11 @@ struct HerdrApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let attention = AttentionNotifier()
+    func applicationWillFinishLaunching(_ notification: Notification) { attention.install() }
+
     weak var editors: EditorStores?
 
     /// Quitting with unsaved editor text asks first: Save All, Don't Save, or Cancel.

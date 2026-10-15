@@ -510,10 +510,54 @@ struct TerminalKeyboardTests {
         let swallowed = String(decoding: capture.bytes, as: UTF8.self)
         precondition(swallowed == "\u{1b}[<0;3;1M\u{1b}[<0;3;1m\r",
                      "A mouse-up taken by another view must still release the press: \(swallowed.debugDescription)")
+        // Panes share the window, so a watched mouse-up beyond this pane, or
+        // over its hidden surface, must only release: no drag to foreign
+        // coordinates and no link open.
+        capture.clear()
+        view.mouseDown(with: plainEvent(.leftMouseDown, column: 2.5))
+        view.mouseDragged(with: plainEvent(.leftMouseDragged, column: 6.5))
+        NSApp.sendEvent(plainEvent(.leftMouseUp, column: view.bounds.width / cell + 20))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        precondition(view.sendKey(.enter))
+        waitUntil { capture.bytes.last == 13 }
+        let outside = String(decoding: capture.bytes, as: UTF8.self)
+        precondition(outside == "\u{1b}[<0;3;1M\u{1b}[<32;7;1M\u{1b}[<0;7;1m\r",
+                     "A mouse-up beyond this pane must release where the drag was: \(outside.debugDescription)")
+        // AppKit sends a drag's mouse-up to the view that took the press, even
+        // beyond its bounds; the watcher sees it first and must stand aside.
+        capture.clear()
+        view.mouseDown(with: plainEvent(.leftMouseDown, column: 2.5))
+        view.mouseDragged(with: plainEvent(.leftMouseDragged, column: 6.5))
+        let ownedUp = plainEvent(.leftMouseUp, column: view.bounds.width / cell + 20)
+        NSApp.sendEvent(ownedUp)
+        view.mouseUp(with: ownedUp)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        precondition(view.sendKey(.enter))
+        waitUntil { capture.bytes.last == 13 }
+        let owned = String(decoding: capture.bytes, as: UTF8.self)
+        precondition(owned == "\u{1b}[<0;3;1M\u{1b}[<32;7;1M\u{1b}[<32;81;1M\u{1b}[<0;81;1m\r",
+                     "A drag released beyond the pane it owns must finish there, once: \(owned.debugDescription)")
+        let hiddenURL = "https://example.com/hidden"
+        bridge.receive(Data("\u{1b}[2J\u{1b}[H\(hiddenURL)".utf8))
+        bridge.session.waitForPendingOutput()
+        capture.clear()
+        lifecycle.urls = []
+        view.mouseDown(with: plainEvent(.leftMouseDown, column: 2.5))
+        view.setSurfaceVisible(false)
+        NSApp.sendEvent(plainEvent(.leftMouseUp, column: 2.5))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        view.setSurfaceVisible(true)
+        window.makeFirstResponder(view)
+        precondition(view.sendKey(.enter))
+        waitUntil { capture.bytes.last == 13 }
+        precondition(lifecycle.urls.isEmpty, "A mouse-up over a hidden surface must not open its link")
+        precondition(capture.bytes == [13],
+                     "A link press released while hidden must send no mouse input: \(capture.bytes)")
         bridge.receive(Data("\u{1b}[?1002l\u{1b}[?1006l".utf8))
         bridge.session.waitForPendingOutput()
         print("PASS: a drag without mouse-up keeps selecting and ends at the next press")
         print("PASS: a mouse-up delivered to another view still releases the terminal's press")
+        print("PASS: a watched mouse-up beyond the pane or over a hidden surface only releases")
         // A changed New line shortcut reaches a running terminal, and the old keys stop.
         var movedNewLine = ShortcutBindings()
         movedNewLine.assign(KeyChord("return", .option), to: .newLine)
@@ -540,6 +584,8 @@ struct TerminalKeyboardTests {
         precondition(pressed(30, "}", [.command, .shift]) == KeyChord("]", [.command, .shift]), "Shifted punctuation must record its unshifted key, as menus store it")
         precondition(pressed(18, "1", [.command, .control]) == KeyChord("1", [.command, .control]))
         precondition(pressed(51, "\u{7f}", [.command]) == nil, "Delete has no printable key and is not recorded")
+        precondition(pressed(49, " ", [.control]) == nil, "Space has no keycap glyph and is not recorded")
+        precondition(pressed(123, "\u{f702}", [.command, .function, .numericPad]) == nil, "Arrow keys are not recorded")
         print("PASS: key presses become the shortcuts the sheet records")
         lifecycle.surface = nil
         view.controller = nil

@@ -82,19 +82,36 @@ public struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
     /// The herdr session this device connects to, read from its socket path:
     /// `…/herdr/sessions/<name>/herdr.sock` is `<name>`, `…/herdr/herdr.sock`
     /// (or an empty remote socket) is `default`. Other paths use the device name.
-    public var sessionName: String {
+    public var sessionName: String { pathSessionName ?? name }
+
+    /// The session a herdr-shaped socket path names; nil for a custom socket.
+    /// Read after standardizing, so `..` can't hide a session socket.
+    public var pathSessionName: String? {
         if kind == .ssh && socketPath.isEmpty { return "default" }
-        let parts = socketPath.split(separator: "/").map(String.init)
-        guard parts.last == "herdr.sock", parts.count >= 2 else { return name }
+        let parts = (socketPath as NSString).standardizingPath.split(separator: "/").map(String.init)
+        guard parts.last == "herdr.sock", parts.count >= 2 else { return nil }
         if parts.count >= 3, parts[parts.count - 3] == "sessions" { return parts[parts.count - 2] }
-        return parts[parts.count - 2] == "herdr" ? "default" : name
+        return parts[parts.count - 2] == "herdr" ? "default" : nil
     }
 
     /// Devices on the same machine share a sidebar group: every local device,
-    /// or SSH devices with the same host, user and port.
+    /// or SSH devices with the same effective host, user and port, so
+    /// `alex@host` matches `host` with Username `alex`, and no port matches 22.
     public var machineKey: String {
-        kind == .local ? "local" : "ssh:\(host.lowercased())|\(user)|\(port)"
+        if kind == .local { return "local" }
+        return "ssh:\(sshHost)|\(sshUser)|\(Int(port) ?? 22)".lowercased()
     }
+
+    /// The SSH account a device logs in to, which has its own herdr install.
+    /// Like `machineKey`, but the username keeps its case: `Alice` and
+    /// `alice` are different accounts on most systems.
+    public var sshAccountKey: String {
+        if kind == .local { return "local" }
+        return "ssh:\(sshHost.lowercased())|\(sshUser)|\(Int(port) ?? 22)"
+    }
+
+    private var sshHost: String { host.lastIndex(of: "@").map { String(host[host.index(after: $0)...]) } ?? host }
+    private var sshUser: String { host.lastIndex(of: "@").map { String(host[..<$0]) } ?? user }
 
     /// Herdr derives its binary terminal socket from the API filename's stem.
     public static func clientSocketPath(for apiSocket: String) -> String {

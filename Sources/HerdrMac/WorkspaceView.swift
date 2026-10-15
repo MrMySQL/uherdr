@@ -10,6 +10,7 @@ struct WorkspaceView: View {
     @ObservedObject var editors: EditorStore
     @StateObject private var shortcutHints = ShortcutHintMonitor()
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
+    @State private var newSessionName = ""
     @StateObject private var files = FileTreeModel()
     @StateObject private var changes = ChangesModel()
     @StateObject private var search = SearchModel()
@@ -73,6 +74,114 @@ struct WorkspaceView: View {
     }
 
     private var windowContent: some View {
+        // Split from the alerts and lifecycle below: one chain of all of them
+        // is more than the type checker finishes in reasonable time.
+        splitView
+        .sheet(item: $store.sheet) { sheet in
+            if case .shortcuts = sheet { KeyboardShortcutsSheet() } else { EditorSheet(sheet: sheet, store: store) }
+        }
+        .sheet(item: $devices.editor) { target in DeviceEditorSheet(target: target, devices: devices) }
+        .alert("Remove device?", isPresented: Binding(get: { devices.pendingRemoval != nil }, set: { if !$0 { devices.pendingRemoval = nil } })) {
+            Button("Cancel", role: .cancel) { devices.pendingRemoval = nil }
+            Button("Remove", role: .destructive) {
+                if let id = devices.pendingRemoval { devices.remove(id) }
+                devices.pendingRemoval = nil
+            }
+        } message: { Text("This removes the saved connection. Workspaces and running processes on the device are kept.") }
+        .alert(sessionActionTitle, isPresented: Binding(get: { devices.pendingSessionAction != nil }, set: { if !$0 { devices.pendingSessionAction = nil } }), presenting: devices.pendingSessionAction) { action in
+            Button("Cancel", role: .cancel) { devices.pendingSessionAction = nil }
+            switch action {
+            case .stop:
+                Button("Stop Session") { runSessionAction(action) }.keyboardShortcut(.defaultAction)
+            case .remove:
+                Button("Remove Session", role: .destructive) { runSessionAction(action) }
+            case .restart:
+                Button("Restart Session") { runSessionAction(action) }.keyboardShortcut(.defaultAction)
+            }
+        } message: { action in
+            switch action {
+            case .stop: Text("Its shells and agents end. You can start it again from herdr.")
+            case .remove: Text("This stops the session if it’s running and deletes it from herdr, including its saved snapshots. This can’t be undone.")
+            case .restart: Text("Its shells and agents end, and the session reopens from its saved state.")
+            }
+        }
+        .modifier(HerdrPromptAlert(devices: devices))
+        .alert(machineRemovalTitle, isPresented: Binding(get: { devices.pendingMachineRemoval != nil }, set: { if !$0 { devices.pendingMachineRemoval = nil } })) {
+            Button("Cancel", role: .cancel) { devices.pendingMachineRemoval = nil }
+            Button("Remove Machine", role: .destructive) {
+                if let id = devices.pendingMachineRemoval { devices.removeMachine(id) }
+                devices.pendingMachineRemoval = nil
+            }
+        } message: { Text("This removes the saved SSH connection from uHerdr. The herdr sessions on \(devices.pendingMachineRemoval.flatMap { devices.machine($0)?.name } ?? "that machine") keep running.") }
+        .alert("New session", isPresented: $devices.newSessionPrompt) {
+            TextField("Name", text: $newSessionName)
+            Button("Cancel", role: .cancel) { newSessionName = "" }
+            Button("Create") {
+                let name = newSessionName.trimmingCharacters(in: .whitespaces)
+                newSessionName = ""
+                Task { await devices.createHerdrSession(named: name) }
+            }.keyboardShortcut(.defaultAction)
+        } message: { Text("Starts a new herdr session on this Mac. Use letters, numbers, “.”, “_” and “-”.") }
+        .alert("Couldn’t complete the action", isPresented: Binding(get: { store.operationError != nil }, set: { if !$0 { store.operationError = nil } })) {
+            Button("OK") { store.operationError = nil }
+        } message: { Text(store.operationError ?? "") }
+        .alert("Save changes to “\(pendingEditorCloseName)” before closing?", isPresented: Binding(get: { editors.pendingClose != nil }, set: { if !$0 { editors.pendingClose = nil } })) {
+            Button("Save") {
+                guard let pending = editors.pendingClose else { return }
+                Task { await editors.saveAndClose(pending) }
+            }.keyboardShortcut(.defaultAction)
+            Button("Don't Save", role: .destructive) {
+                if let pending = editors.pendingClose { editors.close(pending.id, in: pending.space) }
+                editors.pendingClose = nil
+            }
+            Button("Cancel", role: .cancel) { editors.pendingClose = nil }
+        } message: {
+            Text("If you don't save, your edits in this tab will be lost.")
+        }
+        .alert("Close \(store.pendingClose?.singular ?? "resource")?", isPresented: Binding(get: { store.pendingClose != nil }, set: { if !$0 { store.pendingClose = nil } })) {
+            // Return confirms (a destructive button is never the default on its own); Esc cancels.
+            // Declared first so an earlier Cancel can't take Return.
+            Button("Close \(store.pendingClose?.singular ?? "resource")", role: .destructive) {
+                if let target = store.pendingClose { store.close(target) }
+                store.pendingClose = nil
+            }.keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { store.pendingClose = nil }
+        } message: {
+            Text("Closing “\(store.pendingClose?.label ?? "")” terminates its terminals and running agents. You can quit uHerdr instead to keep them running.")
+        }
+        .background(WindowAccessor())
+        .onChange(of: store.workspaces) { _, spaces in
+            // Only a live snapshot says a space is gone; an emptied list while
+            // the device is being edited doesn't.
+            if store.connected {
+                editors.prune(keeping: Set(spaces.map(\.id)))
+                SidebarMemory.prune(keeping: Set(spaces.map(\.id)), profile: store.profile.id, in: .standard)
+            }
+            reopenEditorTabs()
+        }
+        .onChange(of: store.workspaceRoots) { _, _ in reopenEditorTabs() }
+        .onAppear { reopenEditorTabs() }
+        .task(id: store.profile.id) {
+            // Open files are checked every second here, every 5 s over SSH
+            // (one ssh call for all of them), and only while connected.
+            let session = store
+            await editors.watchDisk(every: session.isRemote ? .seconds(5) : .seconds(1)) { paths in
+                guard session.isRemote else { return await Task.detached { FileStamps.local(paths) }.value }
+                guard session.connected else { throw CancellationError() }
+                return try await FileStamps.remote(paths, shell: session.remoteShell)
+            }
+        }
+        .background(GeometryReader { proxy in
+            Color.clear
+                .onAppear { windowWidth = proxy.size.width }
+                .onChange(of: proxy.size.width) { _, width in windowWidth = width }
+        })
+        .task { devices.start() }
+        .onAppear { shortcutHints.start() }
+        .onDisappear { shortcutHints.stop() }
+    }
+
+    private var splitView: some View {
         NavigationSplitView(columnVisibility: $sidebarVisibility) {
             DeviceSidebarView(devices: devices, showShortcutHints: shortcutHints.isHeld)
                 // The column width alone is ignored on a first launch (no saved
@@ -170,97 +279,6 @@ struct WorkspaceView: View {
         .accentColor(herdrAccentColor)
         .frame(minWidth: 840, minHeight: 520)
         .preferredColorScheme(store.colorScheme)
-        .sheet(item: $store.sheet) { sheet in
-            if case .shortcuts = sheet { KeyboardShortcutsSheet() } else { EditorSheet(sheet: sheet, store: store) }
-        }
-        .sheet(item: $devices.editor) { target in DeviceEditorSheet(target: target, devices: devices) }
-        .alert("Remove device?", isPresented: Binding(get: { devices.pendingRemoval != nil }, set: { if !$0 { devices.pendingRemoval = nil } })) {
-            Button("Cancel", role: .cancel) { devices.pendingRemoval = nil }
-            Button("Remove", role: .destructive) {
-                if let id = devices.pendingRemoval { devices.remove(id) }
-                devices.pendingRemoval = nil
-            }
-        } message: { Text("This removes the saved connection. Workspaces and running processes on the device are kept.") }
-        .alert(sessionActionTitle, isPresented: Binding(get: { devices.pendingSessionAction != nil }, set: { if !$0 { devices.pendingSessionAction = nil } }), presenting: devices.pendingSessionAction) { action in
-            Button("Cancel", role: .cancel) { devices.pendingSessionAction = nil }
-            switch action {
-            case .stop:
-                Button("Stop Session") { runSessionAction(action) }.keyboardShortcut(.defaultAction)
-            case .remove:
-                Button("Remove Session", role: .destructive) { runSessionAction(action) }
-            case .restart:
-                Button("Restart Session") { runSessionAction(action) }.keyboardShortcut(.defaultAction)
-            }
-        } message: { action in
-            switch action {
-            case .stop: Text("Its shells and agents end. You can start it again from herdr.")
-            case .remove: Text("This stops the session if it’s running and deletes it from herdr, including its saved snapshots. This can’t be undone.")
-            case .restart: Text("Its shells and agents end, and the session reopens from its saved state.")
-            }
-        }
-        .alert(machineRemovalTitle, isPresented: Binding(get: { devices.pendingMachineRemoval != nil }, set: { if !$0 { devices.pendingMachineRemoval = nil } })) {
-            Button("Cancel", role: .cancel) { devices.pendingMachineRemoval = nil }
-            Button("Remove Machine", role: .destructive) {
-                if let id = devices.pendingMachineRemoval { devices.removeMachine(id) }
-                devices.pendingMachineRemoval = nil
-            }
-        } message: { Text("This removes the saved SSH connection from uHerdr. The herdr sessions on \(devices.pendingMachineRemoval.flatMap { devices.machine($0)?.name } ?? "that machine") keep running.") }
-        .alert("Couldn’t complete the action", isPresented: Binding(get: { store.operationError != nil }, set: { if !$0 { store.operationError = nil } })) {
-            Button("OK") { store.operationError = nil }
-        } message: { Text(store.operationError ?? "") }
-        .alert("Save changes to “\(pendingEditorCloseName)” before closing?", isPresented: Binding(get: { editors.pendingClose != nil }, set: { if !$0 { editors.pendingClose = nil } })) {
-            Button("Save") {
-                guard let pending = editors.pendingClose else { return }
-                Task { await editors.saveAndClose(pending) }
-            }.keyboardShortcut(.defaultAction)
-            Button("Don't Save", role: .destructive) {
-                if let pending = editors.pendingClose { editors.close(pending.id, in: pending.space) }
-                editors.pendingClose = nil
-            }
-            Button("Cancel", role: .cancel) { editors.pendingClose = nil }
-        } message: {
-            Text("If you don't save, your edits in this tab will be lost.")
-        }
-        .alert("Close \(store.pendingClose?.singular ?? "resource")?", isPresented: Binding(get: { store.pendingClose != nil }, set: { if !$0 { store.pendingClose = nil } })) {
-            Button("Cancel", role: .cancel) { store.pendingClose = nil }
-            // Return confirms (a destructive button is never the default on its own); Esc cancels.
-            Button("Close \(store.pendingClose?.singular ?? "resource")", role: .destructive) {
-                if let target = store.pendingClose { store.close(target) }
-                store.pendingClose = nil
-            }.keyboardShortcut(.defaultAction)
-        } message: {
-            Text("Closing “\(store.pendingClose?.label ?? "")” terminates its terminals and running agents. You can quit uHerdr instead to keep them running.")
-        }
-        .background(WindowAccessor())
-        .onChange(of: store.workspaces) { _, spaces in
-            // Only a live snapshot says a space is gone; an emptied list while
-            // the device is being edited doesn't.
-            if store.connected {
-                editors.prune(keeping: Set(spaces.map(\.id)))
-                SidebarMemory.prune(keeping: Set(spaces.map(\.id)), profile: store.profile.id, in: .standard)
-            }
-            reopenEditorTabs()
-        }
-        .onChange(of: store.workspaceRoots) { _, _ in reopenEditorTabs() }
-        .onAppear { reopenEditorTabs() }
-        .task(id: store.profile.id) {
-            // Open files are checked every second here, every 5 s over SSH
-            // (one ssh call for all of them), and only while connected.
-            let session = store
-            await editors.watchDisk(every: session.isRemote ? .seconds(5) : .seconds(1)) { paths in
-                guard session.isRemote else { return await Task.detached { FileStamps.local(paths) }.value }
-                guard session.connected else { throw CancellationError() }
-                return try await FileStamps.remote(paths, shell: session.remoteShell)
-            }
-        }
-        .background(GeometryReader { proxy in
-            Color.clear
-                .onAppear { windowWidth = proxy.size.width }
-                .onChange(of: proxy.size.width) { _, width in windowWidth = width }
-        })
-        .task { devices.start() }
-        .onAppear { shortcutHints.start() }
-        .onDisappear { shortcutHints.stop() }
     }
 
     private func requestClose(_ id: String, in space: String) { editors.requestClose(id, in: space) }
@@ -569,6 +587,7 @@ struct WorkspaceView: View {
             Circle().fill(store.connected ? herdrAccentColor : Color.orange).frame(width: 6, height: 6)
             Text(store.displayName)
             Text(store.connected ? "Connected to herdr \(store.version)" : store.connecting ? "Connecting…" : "Disconnected")
+            herdrUpdateBadge
             Spacer()
             if store.connected {
                 Text("\(store.agents.count) agents")
@@ -581,6 +600,27 @@ struct WorkspaceView: View {
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 14).padding(.vertical, 7)
+    }
+
+    /// A new herdr release to install, or a server still running the old one.
+    @ViewBuilder private var herdrUpdateBadge: some View {
+        let restartVersion = devices.herdrRestartVersion(for: store)
+        if devices.isUpdatingHerdr(store) || (restartVersion != nil && devices.isActing(store)) {
+            ProgressView().controlSize(.mini).scaleEffect(0.7).frame(width: 12, height: 12)
+                .help(devices.isUpdatingHerdr(store) ? "Updating herdr…" : "Working…")
+        } else if let version = devices.availableHerdrUpdate(for: store) {
+            Button { devices.herdrPrompt = .update(store.profile.id, version: version) } label: {
+                Image(systemName: "arrow.down.circle.fill").foregroundStyle(herdrAccentColor)
+            }
+            .buttonStyle(.plain).help("herdr \(version) is available\(store.isRemote ? " on \(store.profile.name)" : ""). Click to update.")
+            .accessibilityLabel(store.isRemote ? "Update herdr on \(store.profile.name) to \(version)" : "Update herdr to \(version)")
+        } else if let version = restartVersion {
+            Button { devices.herdrPrompt = .restart(store.profile.id, version: version, afterUpdate: false) } label: {
+                Image(systemName: "arrow.clockwise.circle.fill").foregroundStyle(Color.orange)
+            }
+            .buttonStyle(.plain).help("Restart the server to use herdr \(version).")
+            .accessibilityLabel("Restart server to use herdr \(version)")
+        }
     }
 
     private var emptySpaces: some View {
@@ -604,7 +644,7 @@ struct WorkspaceView: View {
                     .padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
             }
             HStack {
-                Button("Edit device…") { devices.editor = DeviceEditorTarget(profile: store.profile) }
+                Button("Edit device…") { devices.editor = DeviceEditorTarget(profile: store.profile, sessionOnly: true) }
                 Button(store.connecting ? "Connecting…" : "Connect") { store.reconnect() }.disabled(store.connecting)
                 if !store.isRemote {
                     Button("Start server") { Task { await devices.startServer(for: store) } }.buttonStyle(.borderedProminent)
@@ -615,6 +655,60 @@ struct WorkspaceView: View {
     }
 }
 
+
+/// The herdr update and restart questions; split out so the workspace body type-checks quickly.
+struct HerdrPromptAlert: ViewModifier {
+    @ObservedObject var devices: DeviceStore
+
+    func body(content: Content) -> some View {
+        content
+            .alert(title, isPresented: Binding(get: { devices.herdrPrompt != nil }, set: { if !$0 { devices.herdrPrompt = nil } }), presenting: devices.herdrPrompt) { prompt in
+                switch prompt {
+                case .update:
+                    Button("Not Now", role: .cancel) { devices.herdrPrompt = nil }
+                    Button("Update") { runHerdrPrompt(prompt) }.keyboardShortcut(.defaultAction)
+                case .restart(_, _, let afterUpdate):
+                    Button(afterUpdate ? "Later" : "Cancel", role: .cancel) { devices.herdrPrompt = nil }
+                    Button("Restart Server") { runHerdrPrompt(prompt) }.keyboardShortcut(.defaultAction)
+                case .fullRestart:
+                    Button("Cancel", role: .cancel) { devices.herdrPrompt = nil }
+                    Button("Restart Anyway", role: .destructive) { runHerdrPrompt(prompt) }
+                }
+            } message: { prompt in
+                switch prompt {
+                case .update(_, let version):
+                    Text("Installs herdr \(version) with “herdr update”. Running servers keep their current version until they restart.")
+                case .restart(_, let version, let afterUpdate):
+                    Text("\(afterUpdate ? "herdr \(version) is installed. " : "")The server restarts on herdr \(version) and hands over this session’s shells and agents, so they keep running.")
+                case .fullRestart(_, let version, let reason):
+                    Text("\(reason)\n\nA full restart ends this session’s shells and agents, and it reopens from its saved state on herdr \(version).")
+                }
+            }
+    }
+
+    private var title: String {
+        guard let prompt = devices.herdrPrompt,
+              let session = devices.sessions.first(where: { $0.profile.id == prompt.deviceID }) else { return "" }
+        switch prompt {
+        case .update(_, let version): return session.isRemote ? "Update herdr on “\(session.profile.name)” to \(version)?" : "Update herdr to \(version)?"
+        case .restart(_, _, true): return "Restart “\(session.profile.sessionName)” now?"
+        case .restart: return "Restart “\(session.profile.sessionName)”?"
+        case .fullRestart: return "Restart “\(session.profile.sessionName)” without handoff?"
+        }
+    }
+
+    private func runHerdrPrompt(_ prompt: HerdrPrompt) {
+        devices.herdrPrompt = nil
+        guard let session = devices.sessions.first(where: { $0.profile.id == prompt.deviceID }) else { return }
+        Task {
+            switch prompt {
+            case .update: await devices.updateHerdr(for: session)
+            case .restart: await devices.upgradeHerdrServer(session)
+            case .fullRestart: await devices.restartHerdrSession(session)
+            }
+        }
+    }
+}
 
 struct StatusDot: View {
     let status: AgentStatus

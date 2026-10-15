@@ -3,5 +3,4 @@ enum AppHotkeys {
         guard (0..<10).contains(index) else { return nil }
         return Character(String((index + 1) % 10))
     }
-
 }

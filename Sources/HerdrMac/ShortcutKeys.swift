@@ -7,6 +7,7 @@ extension KeyChord {
         switch key {
         case "return": return .return
         case "tab": return .tab
+        case "escape": return .escape
         default: return KeyEquivalent(Character(key))
         }
     }
@@ -28,7 +29,8 @@ extension KeyChord {
 
 extension KeyChord {
     /// The chord a key press makes, read from the unshifted key so ⇧⌘]
-    /// is "]" with ⇧ (as menus store it), not "}".
+    /// is "]" with ⇧ (as menus store it), not "}". Space has no keycap glyph
+    /// or Ghostty key name here, so it is not taken.
     init?(event: NSEvent) {
         var modifiers: Modifiers = []
         if event.modifierFlags.contains(.command) { modifiers.insert(.command) }
@@ -40,7 +42,7 @@ extension KeyChord {
         case 48: self.init("tab", modifiers)
         default:
             guard let base = event.characters(byApplyingModifiers: [])?.lowercased(), base.count == 1,
-                  let scalar = base.unicodeScalars.first, scalar.value >= 0x20, scalar.value < 0x7f else { return nil }
+                  let scalar = base.unicodeScalars.first, scalar.value > 0x20, scalar.value < 0x7f else { return nil }
             self.init(base, modifiers)
         }
     }

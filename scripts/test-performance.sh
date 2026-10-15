@@ -1,8 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-swift build --product Herdr
-PERFORMANCE_BUILD="$(swift build --show-bin-path)"
+# Reads SwiftPM's object lists, which only the native build system writes at these paths.
+swift build --build-system native --product Herdr
+PERFORMANCE_BUILD="$(swift build --build-system native --show-bin-path)"
 swiftc -parse-as-library -I "$PERFORMANCE_BUILD/Modules" \
     Sources/HerdrMac/SessionStore.swift Tests/HerdrMacTests/SessionPublicationTests.swift \
     "$PERFORMANCE_BUILD"/HerdrCore.build/*.swift.o -o "$PERFORMANCE_BUILD/SessionPublicationTests"

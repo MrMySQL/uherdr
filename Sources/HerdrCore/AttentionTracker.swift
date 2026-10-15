@@ -19,6 +19,15 @@ public enum AttentionDelivery {
     }
 }
 
+/// A click can launch uHerdr before its devices connect, so its pane is
+/// revealed once that device connects, or after `timeout` regardless.
+public enum AttentionReveal {
+    public static let timeout: TimeInterval = 15
+    public static func isReady(connected: Bool, waited: TimeInterval) -> Bool { connected || waited >= timeout }
+    /// Time left until `timeout`, counted from the click.
+    public static func remaining(waited: TimeInterval) -> TimeInterval { max(timeout - waited, 0) }
+}
+
 /// Finds agents that just finished or started waiting. Only a change from a
 /// known status counts, so agents already waiting at launch, on reconnect,
 /// or when first seen raise nothing. Pane IDs repeat across servers, so
@@ -39,6 +48,8 @@ public struct AttentionTracker {
         (!old.needsAttention && new.needsAttention) || (old == .working && new == .idle)
     }
 
+    /// Agents due an alert: a status change that alerts, outside the agent's
+    /// cooldown. Records statuses only; `markAlerted` starts the cooldown.
     public mutating func update(device: UUID, agents: [Agent], now: Date = Date()) -> [Agent] {
         lastAlert = lastAlert.filter { now.timeIntervalSince($0.value) < Self.cooldown }
         let previous = known[device]
@@ -49,11 +60,16 @@ public struct AttentionTracker {
             guard let old = previous?[agent.paneID], Self.alerts(from: old, to: agent.agentStatus) else { continue }
             let id = Self.notificationID(device: device, paneID: agent.paneID)
             guard lastAlert[id] == nil else { continue }
-            lastAlert[id] = now
             alerts.append(agent)
         }
         known[device] = current
         return alerts
+    }
+
+    /// Starts an agent's cooldown. Call it only for a banner actually shown,
+    /// so a suppressed alert does not silence the next one.
+    public mutating func markAlerted(device: UUID, paneID: String, now: Date = Date()) {
+        lastAlert[Self.notificationID(device: device, paneID: paneID)] = now
     }
 
     /// Drops a device's baseline, e.g. while it is disconnected.
