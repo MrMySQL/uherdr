@@ -259,8 +259,8 @@ struct WorkspaceView: View {
             Button { devices.herdrPrompt = .update(store.profile.id, version: version) } label: {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(herdrAccentColor)
             }
-            .buttonStyle(.plain).help("herdr \(version) is available. Click to update.")
-            .accessibilityLabel("Update herdr to \(version)")
+            .buttonStyle(.plain).help("herdr \(version) is available\(store.isRemote ? " on \(store.profile.name)" : ""). Click to update.")
+            .accessibilityLabel(store.isRemote ? "Update herdr on \(store.profile.name) to \(version)" : "Update herdr to \(version)")
         } else if let version = restartVersion {
             Button { devices.herdrPrompt = .restart(store.profile.id, version: version, afterUpdate: false) } label: {
                 Image(systemName: "arrow.clockwise.circle.fill").foregroundStyle(Color.orange)
@@ -337,7 +337,7 @@ struct HerdrPromptAlert: ViewModifier {
         guard let prompt = devices.herdrPrompt,
               let session = devices.sessions.first(where: { $0.profile.id == prompt.deviceID }) else { return "" }
         switch prompt {
-        case .update(_, let version): return "Update herdr to \(version)?"
+        case .update(_, let version): return session.isRemote ? "Update herdr on “\(session.profile.name)” to \(version)?" : "Update herdr to \(version)?"
         case .restart(_, _, true): return "Restart “\(session.profile.sessionName)” now?"
         case .restart: return "Restart “\(session.profile.sessionName)”?"
         case .fullRestart: return "Restart “\(session.profile.sessionName)” without handoff?"

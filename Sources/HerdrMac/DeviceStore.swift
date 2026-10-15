@@ -19,20 +19,22 @@ final class DeviceStore: ObservableObject {
     @Published var sidebarMode = "spaces"
     /// The herdr update or restart question showing, if any.
     @Published var herdrPrompt: HerdrPrompt?
-    /// Installed and newest published herdr versions, by local executable.
+    /// Installed and newest published herdr versions, by herdr install:
+    /// a local executable, or an SSH account's own herdr.
     @Published private(set) var herdrVersions: [String: HerdrVersions] = [:]
-    /// Local executables with `herdr update` running.
-    @Published private(set) var updatingExecutables: Set<String> = []
+    /// herdr installs with `herdr update` running.
+    @Published private(set) var updatingInstalls: Set<String> = []
     private let defaults: UserDefaults
     private var subscriptions: [AnyCancellable] = []
     private let sessionLister: @MainActor (String) async throws -> [HerdrSessionEntry]
     private let sessionRunner: @MainActor (String) -> SessionControl.Runner
     private let launchServer: @MainActor (String, SessionControl.ServerLaunch) throws -> Void
     private let updateRunner: @MainActor (String) -> SessionControl.Runner
+    private let remoteRunner: @MainActor (DeviceProfile, SessionControl.RemoteRun) -> SessionControl.Runner
     private let fetchManifest: HerdrUpdate.Fetch
     private var discoveryTask: Task<Void, Never>?
     private var updateCheckTask: Task<Void, Never>?
-    private var checkingUpdates = false
+    private var checkingInstalls: Set<String> = []
     /// Bumped when `herdr update` starts, so a check begun before it can't
     /// overwrite the version the update reads afterwards.
     private var herdrInstallGeneration: [String: Int] = [:]
@@ -47,12 +49,14 @@ final class DeviceStore: ObservableObject {
          sessionRunner: @escaping @MainActor (String) -> SessionControl.Runner = { SessionControl.runner(executable: $0) },
          launchServer: @escaping @MainActor (String, SessionControl.ServerLaunch) throws -> Void = DeviceStore.launchDetachedServer,
          updateRunner: @escaping @MainActor (String) -> SessionControl.Runner = { SessionControl.runner(executable: $0, timeout: 600) },
+         remoteRunner: @escaping @MainActor (DeviceProfile, SessionControl.RemoteRun) -> SessionControl.Runner = { SessionControl.remoteRunner(profile: $0, run: $1) },
          fetchManifest: @escaping HerdrUpdate.Fetch = HerdrUpdate.download) {
         self.defaults = defaults
         self.sessionLister = sessionLister
         self.sessionRunner = sessionRunner
         self.launchServer = launchServer
         self.updateRunner = updateRunner
+        self.remoteRunner = remoteRunner
         self.fetchManifest = fetchManifest
         let profiles = profiles ?? DeviceProfile.load(from: defaults, environment: ProcessInfo.processInfo.environment, home: NSHomeDirectory(), executable: SessionStore.findExecutable())
         precondition(!profiles.isEmpty)
@@ -123,10 +127,13 @@ final class DeviceStore: ObservableObject {
                 try? await Task.sleep(for: .seconds(15))
             }
         }
+        // Connecting checks each device's install; this catches new releases.
         updateCheckTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.checkForHerdrUpdates()
                 try? await Task.sleep(for: .seconds(6 * 60 * 60))
+                // `stop()` cancels the sleep; it must not start a check.
+                guard !Task.isCancelled else { return }
+                await self?.checkForHerdrUpdates()
             }
         }
     }
@@ -360,11 +367,42 @@ final class DeviceStore: ObservableObject {
     /// Stops whatever server answers on the session's socket (even one
     /// started with the wrong data) and starts the session's own.
     func restartHerdrSession(_ session: SessionStore) async {
-        guard !session.isRemote, begin(session) else { return }
+        guard begin(session) else { return }
         defer { end(session) }
+        if session.isRemote { return await restartRemoteServer(session) }
         guard await performSessionAction(on: session, { entry, run in try await SessionControl.stop(entry.name, run) }) else { return }
         await waitForSocket(session.profile.socketPath, present: false)
         await startOwnServer(for: session, afterStop: true)
+    }
+
+    /// An SSH device's restart, on its machine: herdr stops the session, then
+    /// a detached `herdr server` serves it again from its saved state.
+    private func restartRemoteServer(_ session: SessionStore) async {
+        let run = herdrRunner(for: session)
+        /// Polls the remote list, one SSH connection at a time, for the session's state.
+        func waitUntil(running: Bool) async throws -> Bool {
+            for _ in 0..<20 {
+                if try await listedSession(for: session, run).running == running { return true }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            return false
+        }
+        do {
+            let entry = try await listedSession(for: session, run)
+            if entry.running {
+                try await SessionControl.stop(entry.name, run)
+                guard try await waitUntil(running: false) else {
+                    throw HerdrError.message("The old server is still stopping. Try Restart again in a moment.")
+                }
+            }
+            _ = try await herdrRunner(for: session, .detached)(SessionControl.sessionArguments(entry) + ["server"])
+            guard try await waitUntil(running: true) else {
+                throw HerdrError.message("herdr didn’t start “\(entry.name)”. See herdr-server.log in herdr’s config folder on \(session.profile.name).")
+            }
+            session.reconnect()
+        } catch {
+            report(error, for: session)
+        }
     }
 
     private func waitForSocket(_ path: String, present: Bool) async {
@@ -404,52 +442,65 @@ final class DeviceStore: ObservableObject {
         }
     }
 
-    /// Reads each local executable's version and its channel's newest release.
-    /// A failed check keeps the last result: being offline shows no badge change.
+    /// Reads each herdr install's version and its channel's newest release:
+    /// this Mac's executables first, then each SSH machine's herdr.
     func checkForHerdrUpdates() async {
-        guard !checkingUpdates else { return }
-        checkingUpdates = true
-        defer { checkingUpdates = false }
-        for executable in Set(sessions.filter { !$0.isRemote }.map(\.executable)).sorted() {
-            let generation = herdrInstallGeneration[executable, default: 0]
-            guard !updatingExecutables.contains(executable),
-                  let found = try? await HerdrUpdate.check(sessionRunner(executable), fetch: fetchManifest),
-                  herdrInstallGeneration[executable, default: 0] == generation else { continue }
-            herdrVersions[executable] = HerdrVersions(installed: found.installed, latest: found.latest)
+        var checked: Set<String> = []
+        for session in machineGroups.flatMap(\.sessions) where checked.insert(herdrInstall(session)).inserted {
+            await checkForHerdrUpdate(session)
         }
     }
 
-    /// The newer herdr release a connected local device's executable can install.
+    /// A failed check keeps the last result: being offline, or an unreachable
+    /// SSH machine, shows no badge change.
+    private func checkForHerdrUpdate(_ session: SessionStore) async {
+        let install = herdrInstall(session)
+        guard !updatingInstalls.contains(install), checkingInstalls.insert(install).inserted else { return }
+        defer { checkingInstalls.remove(install) }
+        let generation = herdrInstallGeneration[install, default: 0]
+        guard let found = try? await HerdrUpdate.check(herdrRunner(for: session), fetch: fetchManifest),
+              herdrInstallGeneration[install, default: 0] == generation else { return }
+        herdrVersions[install] = HerdrVersions(installed: found.installed, latest: found.latest)
+    }
+
+    /// Devices on one herdr install share its versions: a local executable,
+    /// or an SSH account, which runs its own herdr.
+    private func herdrInstall(_ session: SessionStore) -> String {
+        session.isRemote ? session.profile.sshAccountKey : session.executable
+    }
+
+    /// Runs herdr where the device's server runs: on this Mac, or over SSH on its machine.
+    private func herdrRunner(for session: SessionStore, _ run: SessionControl.RemoteRun = .command) -> SessionControl.Runner {
+        if session.isRemote { return remoteRunner(session.profile, run) }
+        return run == .update ? updateRunner(session.executable) : sessionRunner(session.executable)
+    }
+
+    /// The newer herdr release a connected device's install can update to.
     func availableHerdrUpdate(for session: SessionStore) -> String? {
-        guard !session.isRemote, session.connected, let versions = herdrVersions[session.executable],
+        guard session.connected, let versions = herdrVersions[herdrInstall(session)],
               HerdrUpdate.isNewer(versions.latest, than: versions.installed) else { return nil }
         return versions.latest
     }
 
-    /// The installed herdr version a connected local server is older than:
+    /// The installed herdr version a connected server is older than:
     /// it keeps running its old binary until restarted.
     func herdrRestartVersion(for session: SessionStore) -> String? {
-        guard !session.isRemote, session.connected, let installed = herdrVersions[session.executable]?.installed,
+        guard session.connected, let installed = herdrVersions[herdrInstall(session)]?.installed,
               HerdrUpdate.isNewer(installed, than: session.version) else { return nil }
         return installed
     }
 
-    /// Moves a local server onto the installed herdr by live handoff, so its
+    /// Moves a server onto the installed herdr by live handoff, so its
     /// shells and agents keep running. When the server can't hand off, or the
     /// handoff fails, it asks before a full restart instead.
     func upgradeHerdrServer(_ session: SessionStore) async {
-        guard !session.isRemote, begin(session) else { return }
+        guard begin(session) else { return }
         defer { end(session) }
-        let version = herdrVersions[session.executable]?.installed ?? session.version
-        let run = sessionRunner(session.executable)
+        let version = herdrVersions[herdrInstall(session)]?.installed ?? session.version
+        let run = herdrRunner(for: session)
         let entry: HerdrSessionEntry
         do {
-            let current = try await SessionControl.list(run)
-            herdrSessions = current
-            guard let listed = SessionControl.session(for: session.profile, in: current) else {
-                throw HerdrError.message("herdr no longer lists this session.")
-            }
-            entry = listed
+            entry = try await listedSession(for: session, run)
         } catch {
             report(error, for: session)
             return
@@ -467,25 +518,40 @@ final class DeviceStore: ObservableObject {
         }
     }
 
-    func isUpdatingHerdr(_ session: SessionStore) -> Bool { updatingExecutables.contains(session.executable) }
+    /// Reads herdr's session list where the device runs and finds its session.
+    /// Only this Mac's list is kept: it is the one the sidebar menus show.
+    private func listedSession(for session: SessionStore, _ run: SessionControl.Runner) async throws -> HerdrSessionEntry {
+        let current = try await SessionControl.list(run)
+        let entry: HerdrSessionEntry?
+        if session.isRemote {
+            entry = SessionControl.remoteSession(for: session.profile, home: session.remoteHome, in: current)
+        } else {
+            herdrSessions = current
+            entry = SessionControl.session(for: session.profile, in: current)
+        }
+        guard let entry else { throw HerdrError.message("herdr no longer lists this session.") }
+        return entry
+    }
+
+    func isUpdatingHerdr(_ session: SessionStore) -> Bool { updatingInstalls.contains(herdrInstall(session)) }
 
     /// Runs `herdr update`, re-reads the version, then asks to restart the
     /// device's server when it still runs the old one.
     func updateHerdr(for session: SessionStore) async {
-        let executable = session.executable
-        guard !session.isRemote, updatingExecutables.insert(executable).inserted else { return }
-        defer { updatingExecutables.remove(executable) }
-        herdrInstallGeneration[executable, default: 0] += 1
+        let install = herdrInstall(session)
+        guard updatingInstalls.insert(install).inserted else { return }
+        defer { updatingInstalls.remove(install) }
+        herdrInstallGeneration[install, default: 0] += 1
         do {
-            try await HerdrUpdate.install(updateRunner(executable))
+            try await HerdrUpdate.install(herdrRunner(for: session, .update))
         } catch {
             report(error, for: session)
             return
         }
-        let installed = try? await sessionRunner(executable)(["--version"])
+        let installed = try? await herdrRunner(for: session)(["--version"])
         if let installed = installed.flatMap(HerdrUpdate.installedVersion(from:)) {
-            let latest = herdrVersions[executable]?.latest ?? installed
-            herdrVersions[executable] = HerdrVersions(installed: installed, latest: HerdrUpdate.isNewer(latest, than: installed) ? latest : installed)
+            let latest = herdrVersions[install]?.latest ?? installed
+            herdrVersions[install] = HerdrVersions(installed: installed, latest: HerdrUpdate.isNewer(latest, than: installed) ? latest : installed)
         }
         if let version = herdrRestartVersion(for: session), herdrPrompt == nil {
             herdrPrompt = .restart(session.profile.id, version: version, afterUpdate: true)
@@ -547,6 +613,17 @@ final class DeviceStore: ObservableObject {
     private func observeSessions() {
         subscriptions = sessions.map { session in
             session.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        }
+        // A device's install is checked each time it connects: at launch, after
+        // an SSH machine was unreachable, or after herdr was updated elsewhere.
+        // A resubscription's current value is not a new connection.
+        subscriptions += sessions.map { session in
+            session.$connected.dropFirst().removeDuplicates().filter { $0 }.sink { [weak self, weak session] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let session, self.updateCheckTask != nil else { return }
+                    Task { await self.checkForHerdrUpdate(session) }
+                }
+            }
         }
     }
 

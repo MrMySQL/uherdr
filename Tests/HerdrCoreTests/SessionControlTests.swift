@@ -97,5 +97,68 @@ enum SessionControlTests {
             precondition(SessionControl.newSessionNameProblem(invalid, existing: sessions) != nil, invalid)
         }
         print("PASS: session stop and delete use herdr's CLI, stop before delete, and never delete default; new session names follow herdr's rule")
+        try await runRemote(sessions)
+    }
+
+    /// herdr on an SSH device's machine, through a fake SSH that runs the remote command here.
+    @MainActor static func runRemote(_ sessions: [HerdrSessionEntry]) async throws {
+        let exe = "/opt/homebrew/bin/herdr"
+        func remote(_ socket: String) -> DeviceProfile { DeviceProfile(name: "mini", host: "mini.local", socketPath: socket, executable: exe) }
+        // An empty socket is the default session; a session socket names its session; a custom one matches by path.
+        XCTAssertEqual(SessionControl.remoteSession(for: remote(""), home: nil, in: sessions)?.name, "default")
+        XCTAssertEqual(SessionControl.remoteSession(for: remote("~/.config/herdr/sessions/menqal/herdr.sock"), home: nil, in: sessions)?.name, "menqal")
+        XCTAssertTrue(SessionControl.remoteSession(for: remote("~/.config/herdr/sessions/gone/herdr.sock"), home: nil, in: sessions) == nil)
+        let custom = try SessionDiscovery.parse(#"{"sessions":[{"default":false,"name":"odd","running":true,"socket_path":"/Users/alex/sockets/odd.sock"}]}"#)
+        XCTAssertEqual(SessionControl.remoteSession(for: remote("~/sockets/./odd.sock"), home: "/Users/alex", in: custom)?.name, "odd")
+        XCTAssertTrue(SessionControl.remoteSession(for: remote("~/sockets/odd.sock"), home: nil, in: custom) == nil)
+        XCTAssertTrue(SessionControl.remoteSession(for: DeviceProfile(name: "x", kind: .local, socketPath: "/Users/alex/.config/herdr/herdr.sock", executable: exe), home: nil, in: sessions) == nil)
+
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("uh-remote-herdr-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        // Each fake herdr prints its name, any herdr session variables it inherited, then its arguments.
+        func install(_ path: String, name: String) throws {
+            try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try "#!/bin/sh\nprintf '%s\\n' \(name) \"${HERDR_SESSION-}${HERDR_SOCKET_PATH-}\" \"$@\" | tee \"$HOME/args\"\n".write(toFile: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        }
+        let fake = home + "/.local/bin/herdr", shims = home + "/.local/share/mise/shims"
+        try install(fake, name: "binary")
+        try install(shims + "/herdr", name: "shim")
+        setenv("UHERDR_TEST_HOME", home, 1)
+        // The SSH shell finds the mise shim first on its PATH and sets a herdr session.
+        setenv("UHERDR_TEST_PATH", shims, 1)
+        setenv("HERDR_SESSION", "inherited", 1); setenv("HERDR_SOCKET_PATH", "/tmp/inherited.sock", 1)
+        defer { for name in ["UHERDR_TEST_HOME", "UHERDR_TEST_PATH", "HERDR_SESSION", "HERDR_SOCKET_PATH"] { unsetenv(name) } }
+        let ssh = FileManager.default.currentDirectoryPath + "/Tests/Fixtures/ssh-herdr-fixture.sh"
+        // A herdr binary off PATH wins over the shim, gets each argument intact and no
+        // inherited session, and the login banner is dropped.
+        let run = SessionControl.remoteRunner(profile: remote(""), sshExecutable: ssh)
+        XCTAssertEqual(try await run(["--session", "it's $HOME", "status", "--json"]), "binary\n\n--session\nit's $HOME\nstatus\n--json\n")
+        // A detached server returns at once and keeps running after SSH ends.
+        try FileManager.default.removeItem(atPath: home + "/args")
+        XCTAssertEqual(try await SessionControl.remoteRunner(profile: remote(""), run: .detached, sshExecutable: ssh)(["--session", "work", "server"]), "")
+        let launched = "binary\n\n--session\nwork\nserver\n"
+        for _ in 0..<100 where (try? String(contentsOfFile: home + "/args", encoding: .utf8)) != launched {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(try String(contentsOfFile: home + "/args", encoding: .utf8), launched)
+        // With no herdr binary, a mise shim on PATH runs it.
+        try FileManager.default.removeItem(atPath: fake)
+        XCTAssertEqual(try await run(["--version"]), "shim\n\n--version\n")
+        // Without herdr, the error says so rather than a shell's "command not found",
+        // unless this Mac has herdr where the script also looks.
+        try FileManager.default.removeItem(atPath: shims + "/herdr")
+        let global = ["/usr/bin/herdr", "/bin/herdr", "/home/linuxbrew/.linuxbrew/bin/herdr", "/opt/homebrew/bin/herdr", "/usr/local/bin/herdr",
+                      "/etc/profiles/per-user/\(NSUserName())/bin/herdr", "/nix/var/nix/profiles/default/bin/herdr", "/run/current-system/sw/bin/herdr"]
+        if !global.contains(where: FileManager.default.isExecutableFile(atPath:)) {
+            do { _ = try await run(["--version"]); XCTFail("Expected a missing herdr to throw") }
+            catch { XCTAssertTrue(error.localizedDescription.contains("herdr wasn’t found")) }
+        }
+        // Each SSH account has its own herdr: usernames keep their case, hosts don't.
+        XCTAssertEqual(DeviceProfile(name: "a", host: "Alice@Mini.Local", executable: exe).sshAccountKey,
+                       DeviceProfile(name: "b", host: "mini.local", user: "Alice", port: "22", executable: exe).sshAccountKey)
+        XCTAssertTrue(DeviceProfile(name: "a", host: "Alice@mini.local", executable: exe).sshAccountKey
+                      != DeviceProfile(name: "b", host: "alice@mini.local", executable: exe).sshAccountKey)
+        print("PASS: SSH devices find their herdr session and account, and run herdr over SSH with quoted arguments, no inherited session, detached servers, a mise fallback, and a clear error when it's missing")
     }
 }
