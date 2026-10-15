@@ -497,7 +497,10 @@ enum GhosttyLiveTests {
         ])["pane"].decode(Pane.self)
         store.reconnect()
         store.selectSpace(workspace)
-        let host = NSHostingView(rootView: AnyView(WorkspaceView(store: store, devices: devices)))
+        // This checks zoom against the window's full width, so the right sidebar stays hidden.
+        UserDefaults.standard.set(false, forKey: "rightSidebar.visible")
+        defer { UserDefaults.standard.removeObject(forKey: "rightSidebar.visible") }
+        let host = NSHostingView(rootView: AnyView(WorkspaceView(store: store, devices: devices, editors: EditorStore())))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.contentView = host

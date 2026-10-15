@@ -7,12 +7,15 @@ enum KeyboardShortcutTests {
         let listed = ShortcutGroup.all.flatMap(\.rows).flatMap(\.actions)
         XCTAssertEqual(listed.count, ShortcutAction.allCases.count)
         XCTAssertEqual(Set(listed), Set(ShortcutAction.allCases))
-        XCTAssertEqual(ShortcutGroup.all.map(\.title), ["Spaces", "Tabs", "Panes", "Sidebar", "Terminal", "App"])
+        XCTAssertEqual(ShortcutGroup.all.map(\.title), ["Spaces", "Tabs", "Panes", "Sidebar", "Terminal", "Editor", "Right sidebar", "App"])
         // No two defaults that can fire together share a chord, counting every digit of a range.
         // An open pane search takes keys from the terminal, so only those two may overlap.
         for live in [ShortcutAction.allCases.filter { !$0.isPaneSearchBinding }, ShortcutAction.allCases.filter { !$0.isTerminalBinding }] {
             let chords = live.flatMap { $0.chords(for: $0.defaultChord) }
-            XCTAssertEqual(chords.count, Set(chords).count)
+            let shared = Set(chords.filter { chord in chords.filter { $0 == chord }.count > 1 })
+            // While pane search is open its own ⇧⌘G wins; otherwise ⇧⌘G shows Changes.
+            XCTAssertEqual(shared, live.contains(.previousMatchAlternate) ? [KeyChord("g", [.command, .shift])] : [])
+            XCTAssertEqual(chords.count, Set(chords).count + shared.count)
         }
         // The defaults are the shortcuts the app had before this table
         // (HerdrApp.swift menus, the Ghostty key bindings and the pane search keys).
@@ -23,7 +26,7 @@ enum KeyboardShortcutTests {
             .nextPaneAlternate: "⌃`", .findInPane: "⌘F", .closePane: "⇧⌘W", .nextMatch: "↩", .previousMatch: "⇧↩",
             .nextMatchAlternate: "⌘G", .previousMatchAlternate: "⇧⌘G", .closeSearch: "⎋", .showAgents: "⇧⌘A", .showSpaces: "⇧⌘S",
             .copy: "⌘C", .paste: "⌘V", .selectAll: "⌘A", .largerText: "⌘+", .largerTextAlternate: "⌘=", .smallerText: "⌘-",
-            .newLine: "⇧↩", .settings: "⌘,", .keyboardShortcuts: "⌘/",
+            .newLine: "⇧↩", .saveFile: "⌘S", .quickOpen: "⌘P", .searchInSpace: "⇧⌘F", .markdownPreview: "⌥⌘V", .findAndReplace: "⌥⌘F", .goToLine: "⌘L", .toggleRightSidebar: "⌥⌘B", .showFiles: "⇧⌘E", .showChanges: "⇧⌘G", .settings: "⌘,", .keyboardShortcuts: "⌘/",
         ]
         XCTAssertEqual(Set(expected.keys), Set(ShortcutAction.allCases.filter { $0.range == nil }))
         for (action, display) in expected { XCTAssertEqual(action.defaultChord.display, display) }
@@ -38,12 +41,12 @@ enum KeyboardShortcutTests {
         XCTAssertEqual(ShortcutGroup.filtered("zoom", chord: defaults).flatMap(\.rows).map(\.title), ["Zoom pane"])
         XCTAssertEqual(ShortcutGroup.filtered("⇧⌘D", chord: defaults).flatMap(\.rows).map(\.title), ["Split top and bottom"])
         XCTAssertEqual(ShortcutGroup.filtered("sidebar", chord: defaults).flatMap(\.rows).map(\.title),
-                       ["Select space 1–9 (sidebar order)", "Show agents", "Show spaces"])
+                       ["Select space 1–9 (sidebar order)", "Show agents", "Show spaces", "Show or hide the right sidebar", "Files", "Changes"])
         XCTAssertEqual(ShortcutGroup.filtered("  ", chord: defaults).count, ShortcutGroup.all.count)
         XCTAssertTrue(ShortcutGroup.filtered("no such shortcut", chord: defaults).isEmpty)
         // The sheet splits into two columns, or one when a search leaves a side empty.
         let columns = { (query: String) in ShortcutGroup.columns(ShortcutGroup.filtered(query, chord: defaults)).map { $0.map(\.title) } }
-        XCTAssertEqual(columns(""), [["Spaces", "Tabs", "Panes"], ["Sidebar", "Terminal", "App"]])
+        XCTAssertEqual(columns(""), [["Spaces", "Tabs", "Panes"], ["Sidebar", "Terminal", "Editor", "Right sidebar", "App"]])
         XCTAssertEqual(columns("zoom"), [["Panes"]])
         XCTAssertEqual(columns("settings"), [["App"]])
         XCTAssertEqual(columns("no such shortcut"), [])
@@ -64,7 +67,7 @@ enum KeyboardShortcutTests {
         // Reset of Split is assigning its default, which now clashes with Find.
         XCTAssertEqual(bindings.clashes(for: ShortcutAction.splitSideBySide.defaultChord, assigningTo: .splitSideBySide), [.findInPane])
         // Moving Find elsewhere does not hand Split its keys back on its own.
-        bindings.assign(KeyChord("f", [.command, .shift]), to: .findInPane)
+        bindings.assign(KeyChord("k", [.command, .shift]), to: .findInPane)
         XCTAssertTrue(bindings.chord(for: .splitSideBySide) == nil)
         XCTAssertEqual(bindings.clashes(for: ShortcutAction.splitSideBySide.defaultChord, assigningTo: .splitSideBySide), [])
         bindings.assign(ShortcutAction.splitSideBySide.defaultChord, to: .splitSideBySide)
@@ -86,6 +89,20 @@ enum KeyboardShortcutTests {
         XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("w", [.command, .shift]), for: .closePane))
         XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("x", .control), for: .selectTab))
         XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("tab", .control), for: .nextTab))
+        // Option is Meta in the terminal; warn before a menu consumes these letters.
+        for key in ["c", "d", "r"] {
+            for modifiers: KeyChord.Modifiers in [.option, [.option, .shift], [.option, .control]] {
+                let chord = KeyChord(key, modifiers)
+                XCTAssertTrue(ShortcutBindings.isTerminalReserved(chord, for: .closePane))
+                XCTAssertEqual(ShortcutChangeStep.next(for: chord, action: .closePane, in: ShortcutBindings()), .terminalReserved)
+                XCTAssertEqual(ShortcutChangeStep.next(for: chord, action: .closePane, in: ShortcutBindings(), terminalAccepted: true), .apply)
+            }
+        }
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("c", [.option, .command]), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("1", .option), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("é", .option), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("tab", .option), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("x", .option), for: .selectTab))
         // A shortcut needs ⌘, ⌃ or ⌥; ⇧ alone only with Return or Tab.
         XCTAssertTrue(ShortcutBindings.isValid(KeyChord("return", .shift)) && ShortcutBindings.isValid(KeyChord("k", .option)))
         XCTAssertTrue(!ShortcutBindings.isValid(KeyChord("k", .shift)) && !ShortcutBindings.isValid(KeyChord("k", [])))
@@ -102,20 +119,22 @@ enum KeyboardShortcutTests {
         bindings.resetAll()
         XCTAssertEqual(bindings, ShortcutBindings())
         // The terminal's own keys become Ghostty bindings.
-        XCTAssertEqual(ShortcutBindings().ghosttyKeybinds, ["super+a=select_all", "super+c=copy_to_clipboard", "super+v=paste_from_clipboard",
+        XCTAssertEqual(ShortcutBindings().ghosttyKeybinds, ["super+a=select_all", "super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05",
+                                                            "alt+arrow_left=esc:b", "alt+arrow_right=esc:f", "super+c=copy_to_clipboard", "super+v=paste_from_clipboard",
                                                             "shift+enter=text:\\x1b[13;2u", "shift+numpad_enter=text:\\x1b[13;2u"])
         var terminal = ShortcutBindings()
         terminal.assign(KeyChord("return", .option), to: .newLine)
         terminal.assign(KeyChord("c", [.control, .shift]), to: .copy)
         terminal.assign(KeyChord("v", .command), to: .closePane)
-        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=select_all", "ctrl+shift+c=copy_to_clipboard",
+        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=select_all", "super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05",
+                                                  "alt+arrow_left=esc:b", "alt+arrow_right=esc:f", "ctrl+shift+c=copy_to_clipboard",
                                                   "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
         // Giving ⌘A to an action is a clash with Select All, which Replace clears from the terminal.
         XCTAssertEqual(terminal.clashes(for: KeyChord("a", .command), assigningTo: .showAgents), [.selectAll])
         terminal.assign(KeyChord("a", .command), to: .showAgents)
-        XCTAssertEqual(terminal.ghosttyKeybinds, ["ctrl+shift+c=copy_to_clipboard", "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
+        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05", "alt+arrow_left=esc:b", "alt+arrow_right=esc:f", "ctrl+shift+c=copy_to_clipboard", "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
         terminal.assign(KeyChord("a", .command), to: .copy)
-        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=copy_to_clipboard", "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
+        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05", "alt+arrow_left=esc:b", "alt+arrow_right=esc:f", "super+a=copy_to_clipboard", "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
         // Select All follows its own shortcut, and Reset gives ⌘A back.
         terminal.assign(KeyChord("c", .command), to: .copy)
         terminal.assign(KeyChord("a", [.command, .control]), to: .selectAll)

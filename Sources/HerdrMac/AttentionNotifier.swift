@@ -8,6 +8,7 @@ import HerdrCore
 @MainActor
 final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     private weak var devices: DeviceStore?
+    private weak var editors: EditorStores?
     private var tracker = AttentionTracker()
     private var subscription: AnyCancellable?
     private var center: UNUserNotificationCenter?
@@ -25,9 +26,10 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         self.center = center
     }
 
-    func attach(_ devices: DeviceStore) {
+    func attach(_ devices: DeviceStore, editors: EditorStores) {
         guard self.devices == nil else { return }
         self.devices = devices
+        self.editors = editors
         // objectWillChange fires before the change lands; scan on the next turn.
         subscription = devices.objectWillChange.sink { [weak self] _ in self?.queueScan() }
         if let pending = pendingReveal {
@@ -69,7 +71,7 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     private func post(_ agent: Agent, in session: SessionStore) {
         guard let center, AttentionDelivery.shouldNotify(
             enabled: AgentNotificationPreference.isEnabled(in: .standard), appActive: NSApp.isActive,
-            showingPane: devices?.activeSession === session && session.selectedPane == agent.paneID) else { return }
+            showingPane: devices?.activeSession === session && session.isAgentPaneVisible(agent, editorShown: editors?.store(for: session.profile.id).activeTab(in: agent.workspaceID) != nil)) else { return }
         let content = UNMutableNotificationContent()
         content.title = agent.agentStatus == .blocked ? "\(agent.displayName) needs you" : "\(agent.displayName) finished"
         let space = session.workspaces.first { $0.id == agent.workspaceID }?.label

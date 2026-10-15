@@ -58,6 +58,8 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     case nextMatch, previousMatch, nextMatchAlternate, previousMatchAlternate, closeSearch
     case showAgents, showSpaces
     case copy, paste, selectAll, largerText, largerTextAlternate, smallerText, newLine
+    case saveFile, quickOpen, searchInSpace, markdownPreview, findAndReplace, goToLine
+    case toggleRightSidebar, showFiles, showChanges
     case settings, keyboardShortcuts
 
     public var defaultChord: KeyChord {
@@ -95,6 +97,16 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .largerTextAlternate: return KeyChord("=", .command)
         case .smallerText: return KeyChord("-", .command)
         case .newLine: return KeyChord("return", .shift)
+        case .saveFile: return KeyChord("s", .command)
+        case .quickOpen: return KeyChord("p", .command)
+        case .searchInSpace: return KeyChord("f", [.command, .shift])
+        // Not ⇧⌘V: clipboard managers (Flycut, among others) take it system-wide.
+        case .markdownPreview: return KeyChord("v", [.command, .option])
+        case .findAndReplace: return KeyChord("f", [.command, .option])
+        case .goToLine: return KeyChord("l", .command)
+        case .toggleRightSidebar: return KeyChord("b", [.command, .option])
+        case .showFiles: return KeyChord("e", [.command, .shift])
+        case .showChanges: return KeyChord("g", [.command, .shift])
         case .settings: return KeyChord(",", .command)
         case .keyboardShortcuts: return KeyChord("/", .command)
         }
@@ -130,6 +142,15 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .largerText, .largerTextAlternate: return "Larger text"
         case .smallerText: return "Smaller text"
         case .newLine: return "New line"
+        case .saveFile: return "Save file"
+        case .quickOpen: return "Quick Open"
+        case .searchInSpace: return "Search in space"
+        case .markdownPreview: return "Markdown edit or preview"
+        case .findAndReplace: return "Find and replace in file"
+        case .goToLine: return "Go to line"
+        case .toggleRightSidebar: return "Show or hide the right sidebar"
+        case .showFiles: return "Files"
+        case .showChanges: return "Changes"
         case .settings: return "Settings"
         case .keyboardShortcuts: return "Keyboard shortcuts"
         }
@@ -222,6 +243,19 @@ public struct ShortcutGroup: Identifiable, Sendable {
             ShortcutRow(title: "Smaller text", actions: [.smallerText]),
             ShortcutRow(title: "New line in Claude Code and Codex", actions: [.newLine]),
         ]),
+        ShortcutGroup(title: "Editor", rows: [
+            ShortcutRow(title: "Save file", actions: [.saveFile]),
+            ShortcutRow(title: "Quick Open", actions: [.quickOpen]),
+            ShortcutRow(title: "Search in space", actions: [.searchInSpace]),
+            ShortcutRow(title: "Markdown edit or preview", actions: [.markdownPreview]),
+            ShortcutRow(title: "Find and replace in file", actions: [.findAndReplace]),
+            ShortcutRow(title: "Go to line", actions: [.goToLine]),
+        ]),
+        ShortcutGroup(title: "Right sidebar", rows: [
+            ShortcutRow(title: "Show or hide the right sidebar", actions: [.toggleRightSidebar]),
+            ShortcutRow(title: "Files", actions: [.showFiles]),
+            ShortcutRow(title: "Changes", actions: [.showChanges]),
+        ]),
         ShortcutGroup(title: "App", rows: [
             ShortcutRow(title: "Settings", actions: [.settings]),
             ShortcutRow(title: "Keyboard shortcuts", actions: [.keyboardShortcuts]),
@@ -276,11 +310,12 @@ public struct ShortcutBindings: Codable, Equatable, Sendable {
         return chord.modifiers == .shift && (chord.key == "return" || chord.key == "tab")
     }
 
-    /// ⌃ with a letter (⌃C, ⌃D, ⌃R…) means something to terminal programs;
+    /// ⌃ or ⌥ with a letter means something to terminal programs;
+    /// macos-option-as-alt sends Option as Meta.
     /// ⌘ shortcuts never reach the terminal.
     public static func isTerminalReserved(_ chord: KeyChord, for action: ShortcutAction) -> Bool {
         action.chords(for: chord).contains { candidate in
-            candidate.modifiers.contains(.control) && !candidate.modifiers.contains(.command)
+            !candidate.modifiers.isDisjoint(with: [.control, .option]) && !candidate.modifiers.contains(.command)
                 && candidate.key.count == 1 && candidate.key.first!.isASCII && candidate.key.first!.isLetter
         }
     }
@@ -326,8 +361,13 @@ public struct ShortcutBindings: Codable, Equatable, Sendable {
     /// Ghostty key bindings for the terminal's own shortcuts. An action given
     /// Select All's keys clears it, so the terminal no longer keeps them.
     public var ghosttyKeybinds: [String] {
+        // Line editing as in Terminal and Ghostty, whose own defaults
+        // "keybind = clear" drops: Command-Backspace deletes to the start of the
+        // line (Control-U), Command-Left/Right go to its start and end
+        // (Control-A/E), Option-Left/Right move by word (Esc-b/f).
         var binds: [String] = []
         if let selectAll = chord(for: .selectAll) { binds.append(Self.ghostty(selectAll) + "=select_all") }
+        binds += Self.lineEditingKeybinds
         if let copy = chord(for: .copy) { binds.append(Self.ghostty(copy) + "=copy_to_clipboard") }
         if let paste = chord(for: .paste) { binds.append(Self.ghostty(paste) + "=paste_from_clipboard") }
         if let newLine = chord(for: .newLine) {
@@ -337,6 +377,11 @@ public struct ShortcutBindings: Codable, Equatable, Sendable {
         }
         return binds
     }
+
+    public static let lineEditingKeybinds = [
+        "super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05",
+        "alt+arrow_left=esc:b", "alt+arrow_right=esc:f",
+    ]
 
     static func ghostty(_ chord: KeyChord, key: String? = nil) -> String {
         var parts: [String] = []

@@ -9,6 +9,6 @@ struct AppHotkeyTests {
         }
         precondition(AppHotkeys.tabSelectionKey(at: -1) == nil, "Negative tab indices must not have shortcuts")
         precondition(AppHotkeys.tabSelectionKey(at: 10) == nil, "Tabs after the tenth must not reuse a shortcut")
-        print("PASS: tab shortcuts map 1–9 then 0")
+        print("PASS: tab shortcuts map 1–9 then 0, with invalid indices rejected")
     }
 }

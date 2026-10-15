@@ -51,13 +51,17 @@ struct TerminalTabSnapshot: Equatable {
 
 struct TerminalTabDeck: NSViewRepresentable {
     @ObservedObject var store: SessionStore
+    /// False while an editor tab is shown: every terminal tab is hidden the
+    /// same way an unselected tab is, so terminals keep running but can't take
+    /// the keyboard or the layout.
+    var showsTerminals = true
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var displayScale
 
     func makeNSView(context: Context) -> TerminalTabDeckView { TerminalTabDeckView() }
 
     func updateNSView(_ view: TerminalTabDeckView, context: Context) {
-        view.update(store: store, colorScheme: colorScheme, displayScale: displayScale)
+        view.update(store: store, colorScheme: colorScheme, displayScale: displayScale, showsTerminals: showsTerminals)
     }
 
     static func dismantleNSView(_ view: TerminalTabDeckView, coordinator: ()) {
@@ -80,7 +84,7 @@ struct TerminalTabDeck: NSViewRepresentable {
 
     override var isFlipped: Bool { true }
 
-    func update(store: SessionStore, colorScheme: ColorScheme, displayScale: CGFloat) {
+    func update(store: SessionStore, colorScheme: ColorScheme, displayScale: CGFloat, showsTerminals: Bool = true) {
         if session !== store || generation != store.connectionGeneration {
             removeAllTabs()
             session = store
@@ -89,7 +93,8 @@ struct TerminalTabDeck: NSViewRepresentable {
         let retainedIDs = Set(store.tabs.map(\.id)).intersection(store.layouts.keys)
         for id in Array(entries.keys) where !retainedIDs.contains(id) { removeTab(id) }
 
-        if selectedTabID != store.selectedTab, let oldID = selectedTabID, var old = entries[oldID] {
+        let shownTab = showsTerminals ? store.selectedTab : nil
+        if selectedTabID != shownTab, let oldID = selectedTabID, var old = entries[oldID] {
             // Stop native input/display immediately, before SwiftUI processes
             // the outgoing root's visibility change on its next update.
             PaneDropState.endDrag()
@@ -98,7 +103,7 @@ struct TerminalTabDeck: NSViewRepresentable {
             apply(old.snapshot.hidden(), to: &old, store: store)
             entries[oldID] = old
         }
-        selectedTabID = store.selectedTab
+        selectedTabID = shownTab
         let panesByTab = Dictionary(grouping: store.panes, by: \.tabID)
         for tab in store.tabs {
             guard let layout = store.layouts[tab.id] else { continue }

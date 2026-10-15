@@ -95,7 +95,7 @@ import HerdrCore
         let otherPane = try other["root_pane"].decode(Pane.self)
         await store.refresh()
         store.selectSpace(space)
-        let host = NSHostingView(rootView: AnyView(WorkspaceView(store: store, devices: devices)))
+        let host = NSHostingView(rootView: AnyView(WorkspaceView(store: store, devices: devices, editors: EditorStore())))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.contentView = host
         window.orderBack(nil)

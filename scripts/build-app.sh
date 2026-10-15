@@ -8,6 +8,7 @@
 #                  identity also gets a secure timestamp for notarization.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+bash scripts/fetch-ripgrep.sh
 
 VERSION="${VERSION:-$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo 0.0.0)}"
 VERSION="${VERSION#v}"
@@ -92,11 +93,18 @@ PLIST
 cp Vendor/GhosttyTerminal/LICENSE "$APP/Contents/Resources/GhosttyTerminal-LICENSE"
 cp .build/checkouts/MSDisplayLink/LICENSE "$APP/Contents/Resources/MSDisplayLink-LICENSE"
 cp docs/licenses/Ghostty-LICENSE "$APP/Contents/Resources/Ghostty-LICENSE"
+cp docs/licenses/MaterialIconTheme-LICENSE "$APP/Contents/Resources/MaterialIconTheme-LICENSE"
+cp docs/licenses/swift-cmark-COPYING "$APP/Contents/Resources/swift-cmark-COPYING"
+# ripgrep for Search on this Mac, and Linux builds for "Install for uHerdr" on SSH devices.
+cp -R .build/ripgrep "$APP/Contents/Resources/ripgrep"
+for f in COPYING LICENSE-MIT UNLICENSE; do cp "docs/licenses/ripgrep-$f" "$APP/Contents/Resources/ripgrep-$f"; done
 cp LICENSE "$APP/Contents/Resources/LICENSE"
 swift scripts/make-icon.swift .build/uHerdr.iconset
 iconutil -c icns .build/uHerdr.iconset -o "$APP/Contents/Resources/uHerdr.icns"
 
 SIGN_FLAGS=(--force --options runtime --sign "$SIGN_IDENTITY")
 [[ "$SIGN_IDENTITY" != - ]] && SIGN_FLAGS+=(--timestamp)
+# The bundled rg is a nested executable; notarization needs it signed too.
+codesign "${SIGN_FLAGS[@]}" "$APP/Contents/Resources/ripgrep/rg"
 codesign "${SIGN_FLAGS[@]}" "$APP"
 printf 'Built %s %s (%s)\n' "$APP" "$VERSION" "$BUILD_NUMBER"

@@ -38,7 +38,7 @@ struct PanePerformanceTests {
         ])
         let workspace = try created["workspace"].decode(Workspace.self)
         await store.refresh()
-        let host = NSHostingView(rootView: AnyView(WorkspaceView(store: store, devices: devices)))
+        let host = NSHostingView(rootView: AnyView(WorkspaceView(store: store, devices: devices, editors: EditorStore())))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.contentView = host
