@@ -39,12 +39,29 @@ public struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
         return nil
     }
 
-    public func sshArguments() throws -> [String] {
+    /// How an ssh command uses a shared connection. ssh keeps the first value
+    /// it sees for an option, so the mode is chosen here, never appended.
+    public enum ControlMode: Equatable, Sendable {
+        /// Its own connection (the herdr tunnel, power checks, transfers).
+        case none
+        /// The shared connection itself (`ssh -N`), listening at the path.
+        case master(String)
+        /// A command riding the shared connection; ssh connects directly
+        /// when no master is listening.
+        case client(String)
+    }
+
+    public func sshArguments(control: ControlMode = .none) throws -> [String] {
         if let error = validationError { throw HerdrError.message(error) }
+        let controlOptions: [String]
+        switch control {
+        case .none: controlOptions = ["-o", "ControlMaster=no", "-o", "ControlPath=none"]
+        case let .master(path): controlOptions = ["-o", "ControlMaster=yes", "-o", "ControlPath=\(path)", "-o", "ControlPersist=no"]
+        case let .client(path): controlOptions = ["-o", "ControlMaster=no", "-o", "ControlPath=\(path)"]
+        }
         var args = ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
                     "-o", "ConnectTimeout=8", "-o", "ConnectionAttempts=1",
-                    "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2",
-                    "-o", "ControlMaster=no", "-o", "ControlPath=none",
+                    "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"] + controlOptions + [
                     "-o", "ForkAfterAuthentication=no", "-o", "PermitLocalCommand=no",
                     "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "RemoteCommand=none"]
         if !user.isEmpty { args += ["-l", user] }
