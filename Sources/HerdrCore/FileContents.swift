@@ -102,8 +102,8 @@ public enum FileReader {
         // The checked path must still resolve to itself and name the very file
         // opened (device and inode: a hard-linked file has several names).
         var named = stat()
-        guard PathBoundary.canonical(canonical) == canonical, stat(canonical, &named) == 0,
-              named.st_dev == opened.st_dev, named.st_ino == opened.st_ino else {
+        guard stat(canonical, &named) == 0 else { throw FileListingError.missing(path) } // removed since it was opened
+        guard PathBoundary.canonical(canonical) == canonical, named.st_dev == opened.st_dev, named.st_ino == opened.st_ino else {
             throw FileListingError.outsideSpace(path)
         }
         let data = try handle.read(upToCount: limit + 1) ?? Data()
