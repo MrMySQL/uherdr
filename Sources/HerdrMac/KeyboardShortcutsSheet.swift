@@ -23,9 +23,9 @@ struct KeyboardShortcutsSheet: View {
     /// Why the last key press was not taken, shown while recording.
     @State private var rejection: String?
     @State private var pending: Pending?
-    @State private var keyMonitor: Any?
 
     private var bindings: ShortcutBindings { settings.bindings }
+    private var editing: Bool { recording != nil || pending != nil }
     private var groups: [ShortcutGroup] { ShortcutGroup.filtered(search) { bindings.chord(for: $0) } }
 
     var body: some View {
@@ -63,8 +63,13 @@ struct KeyboardShortcutsSheet: View {
             .padding(.horizontal, 24).padding(.vertical, 14)
         }
         .frame(width: 860, height: 680)
-        .onAppear { installKeyMonitor(); searchFocused = true }
-        .onDisappear(perform: removeKeyMonitor)
+        .background(ShortcutRecordingMonitor(handler: record).frame(width: 0, height: 0))
+        .onAppear { searchFocused = true }
+        // Recording takes the keys from Search; give them back however it ends.
+        .onChange(of: editing) { _, editing in if !editing { searchFocused = true } }
+        // Clicking Search while recording ends it, so Esc there can't close the sheet mid-change.
+        .onChange(of: searchFocused) { _, focused in if focused && recording != nil { cancelEditing() } }
+        .onDisappear(perform: cancelEditing)
     }
 
     private var footer: String {
@@ -168,7 +173,7 @@ struct KeyboardShortcutsSheet: View {
             case .terminalReserved:
                 Label("\(keys) won’t reach the terminal any more.", systemImage: "apple.terminal")
                     .font(.system(size: 12, weight: .semibold))
-                Text("Terminal programs rely on ⌃ with a letter: ⌃C interrupts, ⌃D ends input. If \(pending.action.title) takes \(keys), uHerdr handles it first in every pane.")
+                Text("Terminal programs use ⌃ and ⌥ with letters. ⌃C interrupts and ⌃D ends input; ⌥ sends Meta commands. If \(pending.action.title) takes \(keys), uHerdr handles it first in every pane.")
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack { Spacer(); Button("Cancel") { self.pending = nil }; Button("Use Anyway") { advance(terminalAccepted: true) }.buttonStyle(.borderedProminent) }
             default:
@@ -184,6 +189,7 @@ struct KeyboardShortcutsSheet: View {
     // MARK: Editing
 
     private func startRecording(_ action: ShortcutAction) {
+        searchFocused = false
         pending = nil
         rejection = nil
         recording = action
@@ -237,28 +243,21 @@ struct KeyboardShortcutsSheet: View {
         }
     }
 
-    /// While recording, the next key press is the new shortcut; menus never see it.
-    private func installKeyMonitor() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard let action = recording else { return event }
-            if event.keyCode == 53 {
-                cancelEditing()
-                return nil
-            }
-            guard let chord = KeyChord(event: event) else {
-                rejection = "That key can’t be a shortcut. Use a letter, digit, symbol, Return or Tab."
-                return nil
-            }
-            recording = nil
-            rejection = nil
-            propose(chord, for: action)
+    /// The sheet monitor passes text-field and other-window events through.
+    private func record(_ event: NSEvent) -> NSEvent? {
+        guard let action = recording else { return event }
+        if event.keyCode == 53 {
+            cancelEditing()
             return nil
         }
-    }
-
-    private func removeKeyMonitor() {
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        keyMonitor = nil
+        guard let chord = KeyChord(event: event) else {
+            rejection = "That key can’t be a shortcut. Use a letter, digit, symbol, Return or Tab."
+            return nil
+        }
+        recording = nil
+        rejection = nil
+        propose(chord, for: action)
+        return nil
     }
 }
 

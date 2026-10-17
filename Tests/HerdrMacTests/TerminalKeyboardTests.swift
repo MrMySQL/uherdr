@@ -166,7 +166,7 @@ struct TerminalKeyboardTests {
         func check(_ label: String, keyCode: UInt16 = 36, modifiers: NSEvent.ModifierFlags,
                    repeatPress: Bool = false, type: NSEvent.EventType = .keyDown, expected: String) {
             capture.clear()
-            let characters = keyCode == 76 ? "\u{3}" : "\r"
+            let characters = [76: "\u{3}", 51: "\u{7f}", 123: "\u{F702}", 124: "\u{F703}"][Int(keyCode)] ?? "\r"
             let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers,
                                         timestamp: ProcessInfo.processInfo.systemUptime,
                                         windowNumber: window.windowNumber, context: nil,
@@ -187,6 +187,14 @@ struct TerminalKeyboardTests {
         check("plain keypad Enter still submits", keyCode: 76, modifiers: .numericPad, expected: "\r")
         check("Option-Return retains its encoding", modifiers: .option, expected: "\u{1b}\r")
         check("legacy Shift-Return release sends nothing", modifiers: .shift, type: .keyUp, expected: "")
+        check("Command-Backspace deletes to the start of the line (Control-U)", keyCode: 51, modifiers: .command, expected: "\u{15}")
+        check("Option-Backspace still deletes a word", keyCode: 51, modifiers: .option, expected: "\u{1b}\u{7f}")
+        check("plain Backspace still deletes a character", keyCode: 51, modifiers: [], expected: "\u{7f}")
+        check("Command-Left goes to the start of the line (Control-A)", keyCode: 123, modifiers: [.command, .numericPad, .function], expected: "\u{1}")
+        check("Command-Right goes to the end of the line (Control-E)", keyCode: 124, modifiers: [.command, .numericPad, .function], expected: "\u{5}")
+        check("Option-Left moves back a word (Esc-b)", keyCode: 123, modifiers: [.option, .numericPad, .function], expected: "\u{1b}b")
+        check("Option-Right moves forward a word (Esc-f)", keyCode: 124, modifiers: [.option, .numericPad, .function], expected: "\u{1b}f")
+        check("plain Left still moves a character", keyCode: 123, modifiers: [.numericPad, .function], expected: "\u{1b}[D")
 
         capture.clear()
         bridge.receive(Data("\u{1b}[6n\u{1b}[c".utf8))

@@ -560,6 +560,10 @@ final class HerdrTerminalView: AppTerminalView {
     private var mouseUpWatcher: Any?
     private var pressID = UUID()
 
+    deinit {
+        if let mouseUpWatcher { NSEvent.removeMonitor(mouseUpWatcher) }
+    }
+
     override func mouseDown(with event: NSEvent) {
         // Moves cannot tell a lost mouse-up from a three-finger drag in
         // progress, but a new press can: finish the previous gesture first.
@@ -870,7 +874,7 @@ final class HerdrTerminalView: AppTerminalView {
     }
 
     static var baseConfiguration: TerminalConfiguration {
-        TerminalConfiguration.default
+        var configuration = TerminalConfiguration.default
             .fontFamily("Menlo")
             // Ghostty replaces low-contrast colors with black or white. Limit
             // correction to nearly invisible text so agent accent colors survive,
@@ -889,6 +893,8 @@ final class HerdrTerminalView: AppTerminalView {
             .custom("keybind", "super+a=select_all")
             .custom("keybind", "shift+enter=text:\\x1b[13;2u")
             .custom("keybind", "shift+numpad_enter=text:\\x1b[13;2u")
+        for bind in ShortcutBindings.lineEditingKeybinds { configuration = configuration.custom("keybind", bind) }
+        return configuration
     }
 
     override func viewDidMoveToWindow() {
