@@ -25,7 +25,7 @@ final class SSHMasters {
         if let existing = masters[profile.id], existing.profile == profile {
             master = existing
         } else {
-            masters[profile.id]?.stop()
+            masters[profile.id]?.close()
             master = SSHMaster(profile: profile)
             masters[profile.id] = master
         }
@@ -42,12 +42,12 @@ final class SSHMasters {
     }
 
     func stop(_ profile: UUID) {
-        masters.removeValue(forKey: profile)?.stop()
+        masters.removeValue(forKey: profile)?.close()
         lastAttempt[profile] = nil
     }
 
     func stopAll() {
-        for master in masters.values { master.stop() }
+        for master in masters.values { master.close() }
         masters = [:]
         lastAttempt = [:]
     }

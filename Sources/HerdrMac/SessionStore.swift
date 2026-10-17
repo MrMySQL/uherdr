@@ -147,7 +147,7 @@ final class SessionStore: ObservableObject {
                   let pane = panes.first(where: { $0.tabID == tab.id }),
                   let folder = pane.cwd ?? pane.foregroundCwd, folder.hasPrefix("/") else { continue }
             guessedRoots.insert(space.id)
-            let runner: ScriptRunner = isRemote ? .remote(RemoteShell(profile: profile)) : .local
+            let runner: ScriptRunner = isRemote ? .remote(Self.sharedShell?(profile) ?? RemoteShell(profile: profile)) : .local
             let id = space.id, generation = connectionGeneration
             Task { [weak self] in
                 guard let guess = await FolderGuess.folder(for: folder, home: home, runner: runner), let self else { return }
@@ -306,6 +306,9 @@ final class SessionStore: ObservableObject {
     /// Called when an SSH device disconnects (the app closes its shared
     /// connection). A hook, so this file still compiles on its own in tests.
     static var remoteDisconnected: ((UUID) -> Void)?
+    /// The device's shell over its shared SSH connection (`SSHMasters`); the
+    /// same kind of hook. Without it, commands connect on their own.
+    static var sharedShell: (@MainActor (DeviceProfile) -> RemoteShell)?
 
     func disconnect() {
         pollTask?.cancel(); pollTask = nil

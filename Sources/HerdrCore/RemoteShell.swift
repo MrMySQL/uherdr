@@ -73,7 +73,7 @@ public enum RemoteFileListing {
     [ -e "$d" ] || exit 3
     [ -d "$d" ] || exit 5
     c=$(canon "$d"); c=${c%?.}
-    case "$c/" in "$r"/*) ;; *) exit 6 ;; esac
+    case "$c/" in "${r%/}"/*) ;; *) exit 6 ;; esac
     { [ -r "$d" ] && [ -x "$d" ]; } || exit 4
     for f in "$d"/* "$d"/.*; do
       n=${f##*/}
@@ -82,7 +82,7 @@ public enum RemoteFileListing {
       if [ -L "$f" ]; then
         t=$(readlink "$f" && echo .); t=${t%?.}; rc=$(canon "$f"); rc=${rc%?.}; i=0; k=0
         if [ -n "$rc" ]; then
-          case "$rc/" in "$r"/*) i=1 ;; esac
+          case "$rc/" in "${r%/}"/*) i=1 ;; esac
           [ -d "$rc" ] && k=1
         fi
         printf 'l\0%s\0%s\0%s%s\0' "$n" "$t" "$i" "$k"
@@ -109,13 +109,17 @@ public enum RemoteFileListing {
     }
 
     static func parse(_ data: Data, in directory: String) -> [FileEntry] {
-        let fields = data.split(separator: 0, omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
+        let fields = data.split(separator: 0, omittingEmptySubsequences: false)
         var entries: [FileEntry] = []
         var index = 0
         while index + 3 < fields.count {
-            let kind = fields[index], name = fields[index + 1], target = fields[index + 2], flags = fields[index + 3]
+            let kind = String(decoding: fields[index], as: UTF8.self), target = String(decoding: fields[index + 2], as: UTF8.self)
+            let flags = String(decoding: fields[index + 3], as: UTF8.self)
             index += 4
-            guard !name.isEmpty, !LocalFileListing.isAlwaysHidden(name) else { continue }
+            // A name that isn't UTF-8 can't round-trip into a path that opens
+            // the same file, so it isn't listed.
+            guard let name = String(data: Data(fields[index - 3]), encoding: .utf8),
+                  !name.isEmpty, !LocalFileListing.isAlwaysHidden(name) else { continue }
             let path = directory == "/" ? "/" + name : directory + "/" + name
             switch kind {
             case "d": entries.append(FileEntry(name: name, path: path, kind: .directory))

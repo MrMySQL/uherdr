@@ -18,6 +18,8 @@ public final class SSHMaster: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
     private var keepAlive: Pipe?
+    /// Set by `close()`: a start still in flight then gives up.
+    private var closed = false
 
     public init(profile: DeviceProfile, ssh: String = "/usr/bin/ssh") {
         self.profile = profile
@@ -45,6 +47,7 @@ public final class SSHMaster: @unchecked Sendable {
     public func start(timeout: Duration = .seconds(10)) async -> Bool {
         if isRunning, await check() { return true }
         stop()
+        guard !lock.withLock({ closed }) else { return false }
         do {
             guard Self.makePrivateFolder(folder) else { return false }
             let process = Process()
@@ -56,8 +59,19 @@ public final class SSHMaster: @unchecked Sendable {
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             try process.run()
-            lock.withLock { self.process = process; keepAlive = pipe }
+            let open = lock.withLock { () -> Bool in
+                guard !closed else { return false }
+                self.process = process; keepAlive = pipe
+                return true
+            }
+            guard open else {
+                try? pipe.fileHandleForWriting.close()
+                process.terminate()
+                try? FileManager.default.removeItem(atPath: folder)
+                return false
+            }
         } catch {
+            stop()
             return false
         }
         let clock = ContinuousClock()
@@ -66,6 +80,8 @@ public final class SSHMaster: @unchecked Sendable {
             if await check() { return true }
             try? await Task.sleep(for: .milliseconds(100))
         }
+        // Not up in time: end it, so the next use starts a fresh one.
+        stop()
         return false
     }
 
@@ -106,6 +122,12 @@ public final class SSHMaster: @unchecked Sendable {
             if (try? fm.removeItem(atPath: folder)) != nil { removed.append(folder) }
         }
         return removed
+    }
+
+    /// Stops the master for good: a start in flight won't bring it back.
+    public func close() {
+        lock.withLock { closed = true }
+        stop()
     }
 
     /// Ends the connection and removes its socket folder.

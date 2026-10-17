@@ -55,14 +55,29 @@ enum RemoteFileListingTests {
                 } catch { XCTAssertEqual(error as? FileListingError, expected) }
             }
         }
+        // A space whose folder is "/" lists like any other.
+        let shell = RemoteShell(profile: profile, ssh: fixture)
+        XCTAssertEqual(try await RemoteFileListing.list(root, root: "/", shell: shell), try LocalFileListing.list(root, in: PathBoundary(root: "/")))
+
         // ssh's own failure (exit 255) is reported with its message.
-        let broken = RemoteShell(profile: profile, ssh: "/usr/bin/false")
+        let tools = base + "/tools"
+        try fm.createDirectory(atPath: tools, withIntermediateDirectories: true)
+        func tool(_ name: String, _ body: String) throws -> String {
+            let path = tools + "/" + name
+            try Data(("#!/bin/sh\n" + body + "\n").utf8).write(to: URL(fileURLWithPath: path))
+            chmod(path, 0o755)
+            return path
+        }
+        let refused = RemoteShell(profile: profile, ssh: try tool("refused", "echo 'ssh: connect to host dev-box port 22: Connection refused' >&2; exit 255"))
         do {
-            _ = try await RemoteFileListing.list(root, root: root, shell: broken)
+            _ = try await RemoteFileListing.list(root, root: root, shell: refused)
             XCTFail("Expected an ssh failure")
         } catch {
-            guard case .failed? = error as? FileListingError else { XCTFail("Expected .failed, got \(error)"); return }
+            XCTAssertEqual(error as? FileListingError, .failed(root, "ssh: connect to host dev-box port 22: Connection refused"))
         }
+        // A name that isn't UTF-8 (possible on Linux) can't become a usable path, so it isn't listed.
+        let raw = RemoteShell(profile: profile, ssh: try tool("raw", #"printf 'f\0\377bad\0\0\0f\0good\0\0\0'"#))
+        XCTAssertEqual(try await RemoteFileListing.list("/r", root: "/r", shell: raw), [FileEntry(name: "good", path: "/r/good", kind: .file)])
         // What the login shell parses: plain words and single-quoted words with
         // no quote, backslash or newline inside, which fish, csh and POSIX
         // shells all read the same way, whatever the arguments hold.

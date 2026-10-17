@@ -17,7 +17,8 @@ public struct FileContents: Equatable, Sendable {
     public let byteCount: Int
     public let hasBOM: Bool
     public let lineEnding: LineEnding
-    /// SHA-256 of the bytes on disk, the save baseline.
+    /// SHA-256 of the bytes on disk, the save baseline. Empty when the bytes
+    /// weren't read (a file over the read limit), so it matches no file.
     public let sha256: String
 
     /// Editable text files up to this size (decided in M0 to start at 5 MB).
@@ -77,7 +78,7 @@ public enum FileReader {
     /// The same checks, returning the bytes themselves (images, PDFs).
     public static func readLocalData(_ path: String, in boundary: PathBoundary, allowingLinkOutside: Bool = false,
                                      limit: Int = mediaLimit) throws -> Raw {
-        guard let canonical = PathBoundary.canonical(path) else { throw FileListingError.missing(path) }
+        let canonical = try PathBoundary.resolve(path)
         if !boundary.contains(canonical) {
             var link = stat()
             let parent = (path as NSString).deletingLastPathComponent
@@ -123,11 +124,11 @@ public enum FileReader {
     [ -e "$f" ] || exit 3
     c=$(canon "$f"); c=${c%?.}
     case "$c" in
-      "$r"/*) ;;
+      "${r%/}"/*) ;;
       *)
         [ "$linkok" = 1 ] && [ -L "$f" ] || exit 6
         p=$(canon "${f%/*}"); p=${p%?.}
-        case "$p/" in "$r"/*) ;; *) exit 6 ;; esac
+        case "$p/" in "${r%/}"/*) ;; *) exit 6 ;; esac
         ;;
     esac
     [ -f "$c" ] || exit 5

@@ -24,11 +24,16 @@ import HerdrCore
         await client.setWorkspaces(["w1"])
         await store.refresh()
         precondition(store.workspaceRoots.root(for: "w5") == nil, "A closed space must not keep its folder")
+        precondition(store.connectionError == nil && !store.layouts.isEmpty, "The refresh must complete, layouts included")
 
         // A snapshot taken before a folder was remembered must not prune it.
         await client.setWorkspaces(["w1"], delay: .milliseconds(200))
+        let started = await client.snapshotsStarted
         let slow = Task { await store.refresh() }
-        try await Task.sleep(for: .milliseconds(50))
+        // Remember the folder only once that snapshot is really in flight.
+        for _ in 0..<200 where await client.snapshotsStarted == started { try await Task.sleep(for: .milliseconds(5)) }
+        let inFlight = await client.snapshotsStarted > started
+        precondition(inFlight, "The slow snapshot never started")
         store.setRoot("/tmp/late", for: "w7")
         await slow.value
         precondition(store.workspaceRoots.root(for: "w7") == "/tmp/late", "A stale snapshot pruned a newly remembered folder")
@@ -111,6 +116,7 @@ import HerdrCore
 private actor RootsClient: HerdrRequesting {
     var workspaceIDs = ["w1", "w5"]
     var snapshotDelay: Duration = .zero
+    private(set) var snapshotsStarted = 0
     /// The starting folder of each space's first terminal (no entry: no terminals listed).
     var terminalFolders: [String: String] = [:]
     /// The folder herdr reports for a new space's first pane.
@@ -135,6 +141,7 @@ private actor RootsClient: HerdrRequesting {
             return .object(["workspace": Self.workspace("w5"), "tab": .object(["tab_id": .string("w5:t1")]),
                             "root_pane": .object(["pane_id": .string("w5:p1")].merging(createdPaneFolder.map { ["cwd": .string($0)] } ?? [:]) { $1 })])
         case "session.snapshot":
+            snapshotsStarted += 1
             let ids = workspaceIDs
             if snapshotDelay > .zero { try await Task.sleep(for: snapshotDelay) }
             return .object(["snapshot": .object([
@@ -149,6 +156,14 @@ private actor RootsClient: HerdrRequesting {
                              "tab_id": .string("\(id):t1"), "cwd": .string(folder), "agent_status": .string("unknown")])
                 } }),
                 "agents": .array([])
+            ])])
+        case "layout.export":
+            // Each tab holds its space's one pane, so a refresh completes as with a real server.
+            guard let tab = params["tab_id"]?.string else { throw HerdrError.message("layout.export without a tab") }
+            let pane = String(tab.dropLast(3)) + ":p1"
+            return .object(["layout": .object([
+                "tab_id": .string(tab), "zoomed": .bool(false), "focused_pane_id": .string(pane),
+                "root": .object(["type": .string("pane"), "pane_id": .string(pane)])
             ])])
         default: throw HerdrError.message("Unexpected request: \(method)")
         }

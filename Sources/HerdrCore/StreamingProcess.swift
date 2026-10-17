@@ -117,7 +117,8 @@ public enum StreamingProcess {
                 let writer = stdin.fileHandleForWriting
                 DispatchQueue.global().async {
                     try? writer.write(contentsOf: input)
-                    try? writer.close()
+                    // A held stdin stays open after its input; ending the run closes it.
+                    if !keepInputOpen { try? writer.close() }
                 }
             }
             let item = DispatchWorkItem { [weak self] in self?.fail(Failure.timedOut) }

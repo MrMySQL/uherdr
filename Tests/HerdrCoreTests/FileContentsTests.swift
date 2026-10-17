@@ -27,9 +27,12 @@ enum FileContentsTests {
         let root = base + "/space"
         defer {
             chmod(root + "/secret.txt", 0o644)
+            chmod(root + "/closed", 0o755)
             try? fm.removeItem(atPath: base)
         }
         try fm.createDirectory(atPath: root + "/dir", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: root + "/closed/sub", withIntermediateDirectories: true)
+        fm.createFile(atPath: root + "/closed/file.txt", contents: Data("x".utf8))
         try fm.createDirectory(atPath: base + "/outside", withIntermediateDirectories: true)
         let swift = Data("struct A {}\r\n".utf8)
         fm.createFile(atPath: root + "/it's ünï.swift", contents: swift)
@@ -65,6 +68,13 @@ enum FileContentsTests {
         expectLocal(root + "/dir", .notFile(root + "/dir"))
         expectLocal(root + "/gone", .missing(root + "/gone"))
         expectLocal(root + "/secret.txt", .denied(root + "/secret.txt"))
+        // Behind a folder that can't be entered: denied, not "no longer exists".
+        chmod(root + "/closed", 0o000)
+        expectLocal(root + "/closed/file.txt", .denied(root + "/closed/file.txt"))
+        XCTAssertThrowsError(try LocalFileListing.list(root + "/closed/sub", in: boundary)) {
+            XCTAssertEqual($0 as? FileListingError, .denied(root + "/closed/sub"))
+        }
+        chmod(root + "/closed", 0o755)
 
         for shellPath in RemoteFileListingTests.loginShells where fm.isExecutableFile(atPath: shellPath) {
             let shell = RemoteShell(profile: profile, ssh: fixture,
@@ -88,6 +98,9 @@ enum FileContentsTests {
                 } catch { XCTAssertEqual(error as? FileListingError, expected) }
             }
         }
+        // A space whose folder is "/" reads like any other.
+        let rootShell = RemoteShell(profile: profile, ssh: fixture)
+        XCTAssertEqual(try await FileReader.readRemote(root + "/it's ünï.swift", root: "/", shell: rootShell), local)
         print("PASS: file contents: UTF-8, BOM, line endings, binary, non-UTF-8, size cap, fingerprint; local and SSH reads agree, links, and errors")
     }
 }

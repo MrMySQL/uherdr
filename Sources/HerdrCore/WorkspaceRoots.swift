@@ -12,10 +12,10 @@ public struct WorkspaceRoots: Codable, Equatable, Sendable {
 
     public func root(for workspaceID: String) -> String? { paths[workspaceID] }
 
+    /// Stored exactly as given: a folder's name may end in a space.
     public mutating func remember(_ path: String, for workspaceID: String) {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        paths[workspaceID] = trimmed
+        guard !path.isEmpty else { return }
+        paths[workspaceID] = path
     }
 
     public mutating func forget(_ workspaceID: String) { paths[workspaceID] = nil }
@@ -53,15 +53,17 @@ public struct WorkspaceRoots: Codable, Equatable, Sendable {
 /// would ask for access to Documents and Desktop.
 public enum FolderGuess {
     /// Args: the terminal's folder. Prints the repository's top folder (empty
-    /// outside a repository) and the folder itself, NUL-separated.
+    /// outside a repository), the folder itself and the home folder with
+    /// links resolved, NUL-separated.
     static let script = #"""
     for v in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
     export GIT_OPTIONAL_LOCKS=0 LC_ALL=C
     cd "$1" 2>/dev/null || exit 21
     t=""
-    command -v git >/dev/null 2>&1 && t=$(git rev-parse --show-toplevel 2>/dev/null && echo .) && t=${t%?.}
+    command -v git >/dev/null 2>&1 && t=$(git -c core.fsmonitor=false rev-parse --show-toplevel 2>/dev/null && echo .) && t=${t%?.}
     p=$(pwd -P && echo .); p=${p%?.}
-    printf '%s\0%s' "$t" "$p"
+    h=$(cd "$HOME" 2>/dev/null && pwd -P && echo .); h=${h%?.}
+    printf '%s\0%s\0%s' "$t" "$p" "$h"
     """#
 
     public static func folder(for directory: String, home: String, runner: ScriptRunner) async -> String? {
@@ -69,13 +71,27 @@ public enum FolderGuess {
               let result = try? await runner.run(script, [directory], maxBytes: 64 << 10, timeout: .seconds(15)),
               result.status == 0 else { return nil }
         let parts = result.stdout.split(separator: 0, omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
-        guard parts.count == 2 else { return nil }
-        return [parts[0], parts[1]].first { !$0.isEmpty && !isTooBroad($0, home: home) }
+        guard parts.count == 3 else { return nil }
+        // The guesses have links resolved; so must home, or a linked home
+        // (/home → /usr/home) would pass as an ordinary folder.
+        let homes = [home, parts[2]].filter { !$0.isEmpty }
+        return [parts[0], parts[1]].first { guess in !guess.isEmpty && !homes.contains { isTooBroad(guess, home: $0) } }
     }
 
     /// "/", the home folder, or any folder that contains home.
     public static func isTooBroad(_ path: String, home: String) -> Bool {
-        let path = MarkdownLink.normalize(path), home = MarkdownLink.normalize(home)
+        let path = normalize(path), home = normalize(home)
         return path == "/" || path == home || home.hasPrefix(path + "/")
+    }
+
+    /// Removes "." and resolves ".." lexically.
+    static func normalize(_ path: String) -> String {
+        var parts: [Substring] = []
+        for part in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if part == "." { continue }
+            if part == ".." { if !parts.isEmpty { parts.removeLast() }; continue }
+            parts.append(part)
+        }
+        return "/" + parts.joined(separator: "/")
     }
 }

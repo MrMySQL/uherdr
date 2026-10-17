@@ -15,6 +15,7 @@ struct HerdrApp: App {
                 .task {
                     appDelegate.attention.attach(devices)
                     SessionStore.remoteDisconnected = { SSHMasters.shared.stop($0) }
+                    SessionStore.sharedShell = { SSHMasters.shared.shell(for: $0) }
                 }
         }
         .defaultSize(width: 1280, height: 820)

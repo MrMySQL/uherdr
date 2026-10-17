@@ -61,6 +61,17 @@ enum DeviceProfileTests {
         try fm.createSymbolicLink(atPath: tmp + "/uh-00000002", withDestinationPath: owned)
         chmod(owned, 0o700)
         XCTAssertTrue(!SSHMaster.makePrivateFolder(tmp + "/uh-00000002"))
+        // A master that never comes up is ended, so the next use starts a fresh
+        // one; a closed master never starts again.
+        let hang = tmp + "/hanging-ssh"
+        try Data("#!/bin/sh\nexec sleep 30\n".utf8).write(to: URL(fileURLWithPath: hang))
+        chmod(hang, 0o755)
+        let hanging = SSHMaster(profile: configured, ssh: hang)
+        XCTAssertTrue(!(await hanging.start(timeout: .milliseconds(300))))
+        XCTAssertTrue(!hanging.isRunning && !fm.fileExists(atPath: (hanging.controlPath as NSString).deletingLastPathComponent))
+        hanging.close()
+        XCTAssertTrue(!(await hanging.start(timeout: .milliseconds(300))))
+        XCTAssertTrue(!hanging.isRunning && !fm.fileExists(atPath: (hanging.controlPath as NSString).deletingLastPathComponent))
         configured.port = "65536"; XCTAssertTrue(configured.validationError != nil)
         configured.port = "0"; XCTAssertTrue(configured.validationError != nil)
         let suiteName = "dev.herdr.profile-tests.\(UUID().uuidString)"

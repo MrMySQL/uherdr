@@ -6,10 +6,11 @@ enum WorkspaceRootsTests {
         var roots = WorkspaceRoots()
         XCTAssertTrue(roots.root(for: "w1") == nil)
         roots.remember("/Users/me/project", for: "w1")
-        roots.remember("  /srv/school-next \n", for: "w2")
-        roots.remember("   ", for: "w3")
+        // Stored exactly: the sheet trims what the user types, and a folder's name may end in a space.
+        roots.remember("/srv/school-next ", for: "w2")
+        roots.remember("", for: "w3")
         XCTAssertEqual(roots.root(for: "w1"), "/Users/me/project")
-        XCTAssertEqual(roots.root(for: "w2"), "/srv/school-next")
+        XCTAssertEqual(roots.root(for: "w2"), "/srv/school-next ")
         XCTAssertTrue(roots.root(for: "w3") == nil)
         roots.remember("/Users/me/other", for: "w1")
         XCTAssertEqual(roots.root(for: "w1"), "/Users/me/other")
@@ -17,7 +18,7 @@ enum WorkspaceRootsTests {
         // Spaces the server no longer lists are dropped; listed ones stay.
         XCTAssertTrue(roots.prune(keeping: ["w2", "w9"]))
         XCTAssertTrue(roots.root(for: "w1") == nil)
-        XCTAssertEqual(roots.root(for: "w2"), "/srv/school-next")
+        XCTAssertEqual(roots.root(for: "w2"), "/srv/school-next ")
         XCTAssertTrue(!roots.prune(keeping: ["w2"]))
         roots.forget("w2")
         XCTAssertTrue(roots.root(for: "w2") == nil)
@@ -85,9 +86,17 @@ enum FolderGuessTests {
             let fromMissing = await FolderGuess.folder(for: base + "/missing", home: home, runner: runner)
             XCTAssertTrue(fromMissing == nil)
         }
+        // A home reached through a link (/home → /usr/home): the resolved home is still home.
+        let realHome = base + "/real-home", linkedHome = base + "/linked-home"
+        try fm.createDirectory(atPath: realHome, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: linkedHome, withDestinationPath: realHome)
+        let linked = ScriptRunner.remote(RemoteShell(profile: profile, ssh: fixture,
+            environment: ProcessInfo.processInfo.environment.merging(["HOME": linkedHome]) { $1 }))
+        let fromLinkedHome = await FolderGuess.folder(for: linkedHome, home: linkedHome, runner: linked)
+        XCTAssertTrue(fromLinkedHome == nil)
         XCTAssertTrue(await FolderGuess.folder(for: "relative/path", home: home, runner: .local) == nil)
         XCTAssertTrue(FolderGuess.isTooBroad("/Users", home: "/Users/me") && FolderGuess.isTooBroad("/Users/me/", home: "/Users/me")
                       && !FolderGuess.isTooBroad("/Users/me2", home: "/Users/me"))
-        print("PASS: folder guess: repository top folder, plain folder, never home, / or above, dotfiles home, missing folder, here and over SSH")
+        print("PASS: folder guess: repository top folder, plain folder, never home (linked or not), / or above, dotfiles home, missing folder, here and over SSH")
     }
 }

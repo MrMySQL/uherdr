@@ -74,6 +74,17 @@ public struct PathBoundary: Equatable, Sendable {
         return String(cString: resolved)
     }
 
+    /// `canonical`, or why not: a folder on the way that can't be entered
+    /// makes the path denied, not missing.
+    public static func resolve(_ path: String) throws -> String {
+        guard !path.isEmpty, !path.contains("\0") else { throw FileListingError.missing(path) }
+        guard let resolved = realpath(path, nil) else {
+            throw errno == EACCES ? FileListingError.denied(path) : FileListingError.missing(path)
+        }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     public func contains(_ path: String) -> Bool {
         guard let canonical = Self.canonical(path) else { return false }
         return Self.isWithin(canonical, root)
@@ -98,7 +109,7 @@ public enum LocalFileListing {
     public static func isAlwaysHidden(_ name: String) -> Bool { name == ".git" || name.hasPrefix(".uherdr-") }
 
     public static func list(_ directory: String, in boundary: PathBoundary) throws -> [FileEntry] {
-        guard let canonical = PathBoundary.canonical(directory) else { throw FileListingError.missing(directory) }
+        let canonical = try PathBoundary.resolve(directory)
         guard PathBoundary.isWithin(canonical, boundary.root) else { throw FileListingError.outsideSpace(directory) }
         let names: [String]
         do {
