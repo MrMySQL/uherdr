@@ -68,7 +68,7 @@ struct KeyboardShortcutsSheet: View {
         // Recording takes the keys from Search; give them back however it ends.
         .onChange(of: editing) { _, editing in if !editing { searchFocused = true } }
         // Clicking Search while recording ends it, so Esc there can't close the sheet mid-change.
-        .onChange(of: searchFocused) { _, focused in if focused && editing { cancelEditing() } }
+        .onChange(of: searchFocused) { _, focused in if focused && recording != nil { cancelEditing() } }
         .onDisappear(perform: cancelEditing)
     }
 
