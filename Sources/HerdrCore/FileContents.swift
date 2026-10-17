@@ -99,10 +99,11 @@ public enum FileReader {
         defer { try? handle.close() }
         var opened = stat()
         guard fstat(fd, &opened) == 0, opened.st_mode & S_IFMT == S_IFREG else { throw FileListingError.notFile(path) }
-        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        guard fcntl(fd, F_GETPATH, &buffer) == 0 else { throw FileListingError.notFile(path) }
-        let openedPath = String(cString: buffer)
-        guard openedPath.caseInsensitiveCompare(canonical) == .orderedSame || boundary.contains(openedPath) else {
+        // The checked path must still resolve to itself and name the very file
+        // opened (device and inode: a hard-linked file has several names).
+        var named = stat()
+        guard PathBoundary.canonical(canonical) == canonical, stat(canonical, &named) == 0,
+              named.st_dev == opened.st_dev, named.st_ino == opened.st_ino else {
             throw FileListingError.outsideSpace(path)
         }
         let data = try handle.read(upToCount: limit + 1) ?? Data()

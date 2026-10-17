@@ -81,6 +81,9 @@ public enum StreamingProcess {
         private var status: Int32?
         private var finished = false
         private var deadline: DispatchWorkItem?
+        /// The child's pid when it leads its own process group (Foundation
+        /// starts it that way); jobs it starts in the background share it.
+        private var group: pid_t?
 
         init(continuation: AsyncThrowingStream<Event, Error>.Continuation, maxBytes: Int) {
             self.continuation = continuation
@@ -107,6 +110,8 @@ public enum StreamingProcess {
             }
             do {
                 try process.run()
+                let pid = process.processIdentifier
+                if getpgid(pid) == pid { lock.lock(); group = pid; lock.unlock() }
             } catch {
                 out.fileHandleForReading.readabilityHandler = nil
                 err.fileHandleForReading.readabilityHandler = nil
@@ -193,15 +198,21 @@ public enum StreamingProcess {
             try? held?.close()
             (process.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
             (process.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+            // Signal the whole group, even after the child itself exited: a job
+            // it left in the background (still holding the output pipe) stops
+            // too, and SIGKILL reaches any that ignore SIGTERM. A group's id
+            // isn't reused while any member is alive.
+            lock.lock(); let group = group; lock.unlock()
+            if let group {
+                Darwin.kill(-group, SIGTERM)
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { Darwin.kill(-group, SIGKILL) }
+                return
+            }
             guard process.isRunning else { return }
             let pid = process.processIdentifier
-            // Foundation starts the child as its process group's leader. Signal
-            // the group, so what a script started (git, cat…) stops with it,
-            // and SIGKILL reaches any of them that ignore SIGTERM.
-            let group = getpgid(pid) == pid
-            if group { Darwin.kill(-pid, SIGTERM) } else { process.terminate() }
+            process.terminate()
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { [process] in
-                if group { Darwin.kill(-pid, SIGKILL) } else if process.isRunning { Darwin.kill(pid, SIGKILL) }
+                if process.isRunning { Darwin.kill(pid, SIGKILL) }
             }
         }
     }

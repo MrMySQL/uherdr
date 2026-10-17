@@ -77,6 +77,21 @@ enum StreamingProcessTests {
             grandchildGone = kill(grandchild, 0) != 0
         }
         XCTAssertTrue(grandchildGone)
+        // Also once the script itself has exited, leaving a job that holds its output open.
+        let leftFile = NSTemporaryDirectory() + "uherdr-stream-\(UUID().uuidString).pid"
+        defer { try? FileManager.default.removeItem(atPath: leftFile) }
+        do {
+            _ = try await StreamingProcess.run(executable: "/bin/sh", arguments: ["-c", "sleep 30 & echo $! > '\(leftFile)'; exit 0"],
+                                               timeout: .milliseconds(300))
+            XCTFail("Expected the deadline")
+        } catch { XCTAssertEqual(error as? StreamingProcess.Failure, .timedOut) }
+        let left = pid_t((try? String(contentsOfFile: leftFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+        var leftGone = false
+        for _ in 0..<100 where left > 0 && !leftGone {
+            try await Task.sleep(for: .milliseconds(20))
+            leftGone = kill(left, 0) != 0
+        }
+        XCTAssertTrue(left > 0 && leftGone)
         // Input then a held stdin: the script gets the input, and end-of-file
         // only when the run ends.
         let held = StreamingProcess.events(executable: "/bin/sh", arguments: ["-c", "cat; echo eof"], input: Data("hi".utf8), keepInputOpen: true)

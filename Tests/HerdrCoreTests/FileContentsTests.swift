@@ -40,6 +40,9 @@ enum FileContentsTests {
         fm.createFile(atPath: root + "/secret.txt", contents: Data("x".utf8))
         chmod(root + "/secret.txt", 0o000)
         fm.createFile(atPath: base + "/outside/env", contents: Data("TOKEN".utf8))
+        // A hard link in the space to a file whose first name is outside: one file, read through its name in the space.
+        fm.createFile(atPath: base + "/outside/shared.txt", contents: Data("shared".utf8))
+        XCTAssertEqual(link(base + "/outside/shared.txt", root + "/shared.txt"), 0)
         try fm.createSymbolicLink(atPath: root + "/link-out", withDestinationPath: "../outside/env")
         try fm.createSymbolicLink(atPath: root + "/link-in", withDestinationPath: "it's ünï.swift")
         // "evil\n" is a plain file; "evil" leads outside. Reading the first must never serve the second.
@@ -54,6 +57,10 @@ enum FileContentsTests {
         XCTAssertEqual(local.kind, .text("struct A {}\r\n"))
         XCTAssertEqual(local.lineEnding, .crlf)
         XCTAssertEqual(try FileReader.readLocal(root + "/link-in", in: boundary), local)
+        XCTAssertEqual(try FileReader.readLocal(root + "/shared.txt", in: boundary).kind, .text("shared"))
+        // Even right after its outside name was used: the kernel may then report that name for the file.
+        _ = try Data(contentsOf: URL(fileURLWithPath: base + "/outside/shared.txt"))
+        XCTAssertEqual(try FileReader.readLocal(root + "/shared.txt", in: boundary).kind, .text("shared"))
         XCTAssertEqual(try FileReader.readLocal(root + "/big.log", in: boundary, limit: 10).kind, .tooLarge(bytes: 64, limit: 10))
         func expectLocal(_ path: String, _ expected: FileListingError) {
             XCTAssertThrowsError(try FileReader.readLocal(path, in: boundary)) { XCTAssertEqual($0 as? FileListingError, expected) }
