@@ -88,8 +88,22 @@ public enum FileReader {
         var info = stat()
         guard stat(canonical, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw FileListingError.notFile(path) }
         if Int(info.st_size) > limit { return .tooLarge(Int(info.st_size)) }
-        guard let handle = FileHandle(forReadingAtPath: canonical) else { throw FileListingError.denied(path) }
+        // The checks above were on a path; what gets read is the file actually
+        // opened. A link or FIFO swapped in meanwhile can't redirect or block it.
+        let fd = open(canonical, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else {
+            throw errno == EACCES ? FileListingError.denied(path) : errno == ENOENT ? .missing(path) : .notFile(path)
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         defer { try? handle.close() }
+        var opened = stat()
+        guard fstat(fd, &opened) == 0, opened.st_mode & S_IFMT == S_IFREG else { throw FileListingError.notFile(path) }
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(fd, F_GETPATH, &buffer) == 0 else { throw FileListingError.notFile(path) }
+        let openedPath = String(cString: buffer)
+        guard openedPath.caseInsensitiveCompare(canonical) == .orderedSame || boundary.contains(openedPath) else {
+            throw FileListingError.outsideSpace(path)
+        }
         let data = try handle.read(upToCount: limit + 1) ?? Data()
         return data.count > limit ? .tooLarge(data.count) : .data(data)
     }
@@ -97,20 +111,22 @@ public enum FileReader {
     /// Args: space folder, file, limit, link-ok (1 lets a symlink in the space
     /// point outside it). Exit 3 missing, 4 unreadable, 5 not a regular file,
     /// 6 outside the space, 7 larger than the limit (size on stdout).
+    /// `canon` ends its output with "." so `$(…)` keeps a name's own trailing
+    /// newlines; `${c%?.}` drops the "." and realpath's newline.
     static let readScript = #"""
     canon() {
       if command -v realpath >/dev/null 2>&1; then realpath "$1" 2>/dev/null
-      else readlink -f "$1" 2>/dev/null; fi
+      else readlink -f "$1" 2>/dev/null; fi && echo .
     }
-    r=$(canon "$1"); f=$2; limit=$3; linkok=$4
+    r=$(canon "$1"); r=${r%?.}; f=$2; limit=$3; linkok=$4
     [ -n "$r" ] || exit 3
     [ -e "$f" ] || exit 3
-    c=$(canon "$f")
+    c=$(canon "$f"); c=${c%?.}
     case "$c" in
       "$r"/*) ;;
       *)
         [ "$linkok" = 1 ] && [ -L "$f" ] || exit 6
-        p=$(canon "${f%/*}")
+        p=$(canon "${f%/*}"); p=${p%?.}
         case "$p/" in "$r"/*) ;; *) exit 6 ;; esac
         ;;
     esac

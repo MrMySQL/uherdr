@@ -44,6 +44,33 @@ import HerdrCore
         b.setRoot("/b", for: "w1")
         precondition(SessionStore(profile: profile, defaults: defaults, client: client).workspaceRoots.root(for: "w1") == "/a")
         precondition(SessionStore(profile: other, defaults: defaults, client: client).workspaceRoots.root(for: "w1") == "/b")
+        // Renaming a device keeps its folders; pointing it at another session drops
+        // them, because that session reuses the same space ids for other spaces.
+        var renamed = profile
+        renamed.name = "Renamed"
+        a.updateProfile(renamed)
+        precondition(a.workspaceRoots.root(for: "w1") == "/a", "A rename must keep the device's folders")
+        var moved = renamed
+        moved.socketPath = "/tmp/uherdr-roots-elsewhere.sock"
+        a.updateProfile(moved)
+        precondition(a.workspaceRoots.root(for: "w1") == nil, "Another session must not inherit the old one's folders")
+        precondition(SessionStore(profile: moved, defaults: defaults, client: client).workspaceRoots.root(for: "w1") == nil)
+        a.disconnect()
+
+        // A typed `~/…` folder is remembered as herdr resolved it, or not at all.
+        let typed = RootsClient()
+        let typedStore = SessionStore(profile: DeviceProfile(name: "Typed", kind: .local, socketPath: "/tmp/uherdr-typed.sock", executable: "/tmp/herdr"),
+                                      defaults: defaults, client: typed)
+        typedStore.connected = true
+        await typed.setCreatedPaneFolder("/Users/me/project")
+        typedStore.createSpace(label: "project", cwd: "~/project")
+        try await settle(typedStore)
+        precondition(typedStore.workspaceRoots.root(for: "w5") == "/Users/me/project", "The new pane's folder is the space's folder")
+        await typed.setCreatedPaneFolder(nil)
+        typedStore.setRoot("/tmp/reset", for: "w5")
+        typedStore.createSpace(label: "project", cwd: "project")
+        try await settle(typedStore)
+        precondition(typedStore.workspaceRoots.root(for: "w5") == "/tmp/reset", "A relative folder herdr didn't resolve is not remembered")
         // Spaces with no folder take one from their first terminal: the Git repository
         // around it, never the home folder; a chosen folder always wins.
         let fm = FileManager.default
@@ -68,7 +95,7 @@ import HerdrCore
         try await Task.sleep(for: .milliseconds(200))
         precondition(guessed.workspaceRoots.root(for: "w2") == nil, "A terminal in the home folder gives no folder; the sidebar asks")
         precondition(guessed.workspaceRoots.root(for: "w3") == "/chosen", "A chosen folder is never replaced")
-        print("PASS: space folders: remembered on create, kept across launches, pruned when closed, safe from stale snapshots, per device, guessed from the first terminal (never home, never over a choice)")
+        print("PASS: space folders: remembered on create (as herdr resolved it), kept across launches, forgotten when the device points elsewhere, pruned when closed, safe from stale snapshots, per device, guessed from the first terminal (never home, never over a choice)")
     }
 
     @MainActor static func settle(_ store: SessionStore) async throws {
@@ -86,6 +113,8 @@ private actor RootsClient: HerdrRequesting {
     var snapshotDelay: Duration = .zero
     /// The starting folder of each space's first terminal (no entry: no terminals listed).
     var terminalFolders: [String: String] = [:]
+    /// The folder herdr reports for a new space's first pane.
+    var createdPaneFolder: String?
 
     func setWorkspaces(_ ids: [String], delay: Duration = .zero) {
         workspaceIDs = ids
@@ -93,6 +122,7 @@ private actor RootsClient: HerdrRequesting {
     }
 
     func setTerminalFolders(_ folders: [String: String]) { terminalFolders = folders }
+    func setCreatedPaneFolder(_ folder: String?) { createdPaneFolder = folder }
 
     static func workspace(_ id: String) -> JSONValue {
         .object(["workspace_id": .string(id), "label": .string(id), "active_tab_id": .string("\(id):t1"),
@@ -103,7 +133,7 @@ private actor RootsClient: HerdrRequesting {
         switch method {
         case "workspace.create":
             return .object(["workspace": Self.workspace("w5"), "tab": .object(["tab_id": .string("w5:t1")]),
-                            "root_pane": .object(["pane_id": .string("w5:p1")])])
+                            "root_pane": .object(["pane_id": .string("w5:p1")].merging(createdPaneFolder.map { ["cwd": .string($0)] } ?? [:]) { $1 })])
         case "session.snapshot":
             let ids = workspaceIDs
             if snapshotDelay > .zero { try await Task.sleep(for: snapshotDelay) }

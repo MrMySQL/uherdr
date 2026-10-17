@@ -46,7 +46,7 @@ public final class SSHMaster: @unchecked Sendable {
         if isRunning, await check() { return true }
         stop()
         do {
-            try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            guard Self.makePrivateFolder(folder) else { return false }
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
             process.arguments = ["-c", Self.watchdog, "uherdr-ssh-master", ssh]
@@ -78,11 +78,22 @@ public final class SSHMaster: @unchecked Sendable {
         return result?.status == 0
     }
 
+    /// Creates the socket folder, or accepts one already there only if it is a
+    /// real folder (not a link) of this user that nobody else can enter: /tmp
+    /// is shared, so another user could have made it first.
+    public static func makePrivateFolder(_ path: String) -> Bool {
+        guard mkdir(path, 0o700) == 0 || errno == EEXIST else { return false }
+        var info = stat()
+        return lstat(path, &info) == 0 && info.st_mode & S_IFMT == S_IFDIR && info.st_uid == getuid() && info.st_mode & 0o077 == 0
+    }
+
     /// Removes socket folders a crashed or killed uHerdr left behind: only
     /// `uh-` plus eight hex digits, owned by this user, with no socket inside
-    /// (a live master always has one). Returns the folders removed.
+    /// (a live master always has one), and older than a starting master needs
+    /// to bind its socket, so another running uHerdr's new folder stays.
+    /// Returns the folders removed.
     @discardableResult
-    public static func removeStaleFolders(in directory: String = "/tmp") -> [String] {
+    public static func removeStaleFolders(in directory: String = "/tmp", olderThan age: TimeInterval = 60) -> [String] {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: directory) else { return [] }
         var removed: [String] = []
@@ -90,6 +101,7 @@ public final class SSHMaster: @unchecked Sendable {
             let folder = directory + "/" + name
             var info = stat()
             guard lstat(folder, &info) == 0, info.st_mode & S_IFMT == S_IFDIR, info.st_uid == getuid(),
+                  Date().timeIntervalSince1970 - Double(info.st_mtimespec.tv_sec) >= age,
                   !fm.fileExists(atPath: folder + "/c") else { continue }
             if (try? fm.removeItem(atPath: folder)) != nil { removed.append(folder) }
         }

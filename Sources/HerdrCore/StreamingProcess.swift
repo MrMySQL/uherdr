@@ -193,10 +193,14 @@ public enum StreamingProcess {
             (process.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
             (process.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
             guard process.isRunning else { return }
-            process.terminate()
             let pid = process.processIdentifier
+            // Foundation starts the child as its process group's leader. Signal
+            // the group, so what a script started (git, cat…) stops with it,
+            // and SIGKILL reaches any of them that ignore SIGTERM.
+            let group = getpgid(pid) == pid
+            if group { Darwin.kill(-pid, SIGTERM) } else { process.terminate() }
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { [process] in
-                if process.isRunning { Darwin.kill(pid, SIGKILL) }
+                if group { Darwin.kill(-pid, SIGKILL) } else if process.isRunning { Darwin.kill(pid, SIGKILL) }
             }
         }
     }

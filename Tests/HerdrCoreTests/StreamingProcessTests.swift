@@ -60,6 +60,23 @@ enum StreamingProcessTests {
         }
         XCTAssertTrue(gone)
         _ = try? await reader.value
-        print("PASS: streaming process: exact bytes past 16 KiB, stdin, exit status with stderr, size cap, deadline, launch failure, cancel kills the child")
+
+        // Stopping a script stops what it started, too, even a command that ignores SIGTERM.
+        let grandchildFile = NSTemporaryDirectory() + "uherdr-stream-\(UUID().uuidString).pid"
+        defer { try? FileManager.default.removeItem(atPath: grandchildFile) }
+        do {
+            _ = try await StreamingProcess.run(executable: "/bin/sh", arguments: ["-c", "(trap '' TERM; exec sleep 30) >/dev/null & echo $! > '\(grandchildFile)'; wait"],
+                                               timeout: .milliseconds(300))
+            XCTFail("Expected the deadline")
+        } catch { XCTAssertEqual(error as? StreamingProcess.Failure, .timedOut) }
+        let grandchild = pid_t((try? String(contentsOfFile: grandchildFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+        XCTAssertTrue(grandchild > 0)
+        var grandchildGone = false
+        for _ in 0..<100 where !grandchildGone {
+            try await Task.sleep(for: .milliseconds(20))
+            grandchildGone = kill(grandchild, 0) != 0
+        }
+        XCTAssertTrue(grandchildGone)
+        print("PASS: streaming process: exact bytes past 16 KiB, stdin, exit status with stderr, size cap, deadline, launch failure, cancel kills the child, and stopping reaches what the child started")
     }
 }

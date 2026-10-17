@@ -148,11 +148,13 @@ final class SessionStore: ObservableObject {
                   let folder = pane.cwd ?? pane.foregroundCwd, folder.hasPrefix("/") else { continue }
             guessedRoots.insert(space.id)
             let runner: ScriptRunner = isRemote ? .remote(RemoteShell(profile: profile)) : .local
-            let id = space.id
+            let id = space.id, generation = connectionGeneration
             Task { [weak self] in
                 guard let guess = await FolderGuess.folder(for: folder, home: home, runner: runner), let self else { return }
-                // Only if nobody chose a folder meanwhile, and the space still exists.
-                guard self.workspaceRoots.root(for: id) == nil, self.workspaces.contains(where: { $0.id == id }) else { return }
+                // Only for the same connection (herdr reuses space ids across sessions),
+                // if nobody chose a folder meanwhile, and the space still exists.
+                guard generation == self.connectionGeneration, self.workspaceRoots.root(for: id) == nil,
+                      self.workspaces.contains(where: { $0.id == id }) else { return }
                 self.setRoot(guess, for: id)
             }
         }
@@ -316,6 +318,8 @@ final class SessionStore: ObservableObject {
         pendingSplitResizes = 0
         tunnel.stop()
         suspended = true; connected = false; connecting = false; busy = false
+        // The session may come back re-created; its spaces get guessed again.
+        guessedRoots = []
         if isRemote {
             effectiveSocketPath = ""
             Self.remoteDisconnected?(profile.id)
@@ -324,15 +328,23 @@ final class SessionStore: ObservableObject {
 
     func updateProfile(_ value: DeviceProfile) {
         disconnect()
+        // Another machine or session reuses herdr's space ids (w1, w2…), so
+        // folders remembered for the old one would land on unrelated spaces.
+        if Self.connectionTarget(value) != Self.connectionTarget(profile) {
+            defaults.removeObject(forKey: WorkspaceRoots.preferencesKey(profile: value.id))
+        }
         profile = value
         tabOrder = defaults.dictionary(forKey: "tabOrder:\(value.id.uuidString)") as? [String: [String]] ?? [:]
         workspaceOrder = defaults.stringArray(forKey: "workspaceOrder:\(value.id.uuidString)") ?? []
         workspaces = []; tabs = []; panes = []; agents = []; layouts = [:]
         selectedSpace = nil; selectedTab = nil; selectedPane = nil
-        guessedRoots = []
         workspaceRoots = WorkspaceRoots.load(profile: value.id, from: defaults)
         rootsRevision = 0
         reconnect()
+    }
+
+    private static func connectionTarget(_ profile: DeviceProfile) -> [String] {
+        [profile.kind.rawValue, profile.host, profile.user, profile.port, profile.socketPath]
     }
 
     func refresh() async {
@@ -507,7 +519,12 @@ final class SessionStore: ObservableObject {
         perform("workspace.create", params: ["label": .string(label), "cwd": .string(cwd), "focus": .bool(true)]) { [weak self] result in
             self?.selectionRevision += 1
             self?.selectedSpace = result["workspace"]["workspace_id"].string
-            if let space = result["workspace"]["workspace_id"].string { self?.setRoot(cwd, for: space) }
+            // The new pane's folder is the one herdr resolved (`~/…` included);
+            // the typed one only if herdr didn't report it.
+            if let space = result["workspace"]["workspace_id"].string,
+               let folder = [result["root_pane"]["cwd"].string, cwd].compactMap({ $0 }).first(where: { $0.hasPrefix("/") }) {
+                self?.setRoot(folder, for: space)
+            }
             self?.selectedTab = result["tab"]["tab_id"].string
             self?.selectedPane = result["root_pane"]["pane_id"].string
         }

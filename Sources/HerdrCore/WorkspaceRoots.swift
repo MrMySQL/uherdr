@@ -59,8 +59,9 @@ public enum FolderGuess {
     export GIT_OPTIONAL_LOCKS=0 LC_ALL=C
     cd "$1" 2>/dev/null || exit 21
     t=""
-    command -v git >/dev/null 2>&1 && t=$(git rev-parse --show-toplevel 2>/dev/null)
-    printf '%s\0%s' "$t" "$(pwd -P)"
+    command -v git >/dev/null 2>&1 && t=$(git rev-parse --show-toplevel 2>/dev/null && echo .) && t=${t%?.}
+    p=$(pwd -P && echo .); p=${p%?.}
+    printf '%s\0%s' "$t" "$p"
     """#
 
     public static func folder(for directory: String, home: String, runner: ScriptRunner) async -> String? {

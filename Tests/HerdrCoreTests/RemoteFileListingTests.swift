@@ -2,6 +2,10 @@ import Foundation
 import HerdrCore
 
 enum RemoteFileListingTests {
+    /// Login shells the ssh fixture parses commands with, where installed.
+    /// fish isn't among them; `RemoteShell`'s own words are checked instead.
+    static let loginShells = ["/bin/sh", "/bin/dash", "/bin/bash", "/bin/zsh", "/bin/csh", "/bin/tcsh"]
+
     static func run() async throws {
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("../Fixtures/ssh-shell-fixture.py").standardized.path
@@ -16,7 +20,8 @@ enum RemoteFileListingTests {
             try fm.createDirectory(atPath: base + "/" + dir, withIntermediateDirectories: true)
         }
         let names = ["file10.txt", "file2.txt", "it's.md", "new\nline.txt", "$(touch PWNED)", "`touch PWNED2`", "-dash",
-                     "ünï cødé.swift", ".gitignore", "a\\b", "semi;colon", ".uherdr-x-1"]
+                     "ünï cødé.swift", ".gitignore", "a\\b", "semi;colon", ".uherdr-x-1",
+                     "\\';touch PWNED3;#", "ends in \\", "two\n\n", "!history"]
         for name in names { fm.createFile(atPath: root + "/" + name, contents: Data("x".utf8)) }
         fm.createFile(atPath: base + "/outside/secret.env", contents: Data("x".utf8))
         try fm.createSymbolicLink(atPath: root + "/link-in", withDestinationPath: "Sources")
@@ -29,13 +34,13 @@ enum RemoteFileListingTests {
         let boundary = try PathBoundary(root: root)
         let local = try LocalFileListing.list(root, in: boundary)
 
-        for shellPath in ["/bin/sh", "/bin/dash"] where fm.isExecutableFile(atPath: shellPath) {
+        for shellPath in RemoteFileListingTests.loginShells where fm.isExecutableFile(atPath: shellPath) {
             let shell = RemoteShell(profile: profile, ssh: fixture,
                                     environment: ProcessInfo.processInfo.environment.merging(["UHERDR_FIXTURE_SHELL": shellPath]) { $1 })
             // Same answer as listing the folder on this Mac, entry for entry.
             let remote = try await RemoteFileListing.list(root, root: root, shell: shell)
             XCTAssertEqual(remote, local)
-            XCTAssertTrue(!fm.fileExists(atPath: root + "/PWNED") && !fm.fileExists(atPath: "PWNED") && !fm.fileExists(atPath: root + "/PWNED2"))
+            XCTAssertTrue(["PWNED", "PWNED2", "PWNED3"].allSatisfy { !fm.fileExists(atPath: root + "/" + $0) && !fm.fileExists(atPath: $0) })
             XCTAssertEqual(try await RemoteFileListing.list(root + "/empty", root: root, shell: shell), [])
             XCTAssertEqual(try await RemoteFileListing.list(root + "/link-in", root: root, shell: shell), [])
             // The same distinct errors as on this Mac.
@@ -58,7 +63,15 @@ enum RemoteFileListingTests {
         } catch {
             guard case .failed? = error as? FileListingError else { XCTFail("Expected .failed, got \(error)"); return }
         }
-        XCTAssertEqual(RemoteShell.quote("it's"), "'it'\\''s'")
-        print("PASS: SSH listing through a login-shell fixture (sh, dash) matches local listing, survives hostile names, and maps every error")
+        // What the login shell parses: plain words and single-quoted words with
+        // no quote, backslash or newline inside, which fish, csh and POSIX
+        // shells all read the same way, whatever the arguments hold.
+        for word in RemoteShell.remoteWords("printf '%s\\n' \"$1\"", names + ["", "\\", "'", "\n"]) {
+            let safe = ["sh", "-c", "uherdr"].contains(word)
+                || (word.count >= 2 && word.hasPrefix("'") && word.hasSuffix("'")
+                    && !word.dropFirst().dropLast().contains { "'\\\n".contains($0) })
+            if !safe { XCTFail("Unsafe login-shell word: \(word)") }
+        }
+        print("PASS: SSH listing through a login-shell fixture (sh, dash, bash, zsh, csh, tcsh) matches local listing, survives hostile names, and maps every error")
     }
 }

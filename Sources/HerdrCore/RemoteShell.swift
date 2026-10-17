@@ -1,10 +1,12 @@
 import Foundation
 
 /// Runs fixed POSIX `sh` scripts on an SSH device, beside its files. ssh joins
-/// the words after the host with spaces and the remote login shell parses that
-/// line again, so the script and every argument travel as single-quoted words:
-/// a path or query can never become shell syntax. Nothing is ever typed into a
-/// terminal pane.
+/// the words after the host with spaces and the user's login shell parses that
+/// line again, and login shells disagree about quoting (fish reads `\'` inside
+/// single quotes; csh rejects newlines there). So the line holds only a fixed
+/// bootstrap and base64 words, which every shell passes through unchanged, and
+/// `sh` decodes the script and its arguments: a path or query can never become
+/// shell syntax. Nothing is ever typed into a terminal pane.
 public struct RemoteShell: Sendable {
     public let profile: DeviceProfile
     public let ssh: String
@@ -19,9 +21,19 @@ public struct RemoteShell: Sendable {
         self.controlPath = controlPath
     }
 
-    /// One shell word: 'it'\''s' for it's.
-    public static func quote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    /// Decodes its first argument as the script and the rest as that
+    /// script's positional parameters, then runs it. The "." keeps decoded
+    /// values' trailing newlines through `$(…)`. One line, with no quote or
+    /// backslash, so it survives any login shell's single quotes.
+    static let bootstrap = #"uherdr_decode() { printf %s "$1" | base64 -d 2>/dev/null || printf %s "$1" | base64 -D; }; "#
+        + #"uherdr_script=$(uherdr_decode "$1"; echo .); shift; "#
+        + #"for uherdr_arg do uherdr_value=$(uherdr_decode "$uherdr_arg"; echo .); set -- "$@" "${uherdr_value%.}"; shift; done; "#
+        + #"eval "${uherdr_script%.}""#
+
+    /// The words after the host: the login shell sees nothing but these.
+    public static func remoteWords(_ script: String, _ arguments: [String]) -> [String] {
+        let encoded = ([script] + arguments).map { "'" + Data($0.utf8).base64EncodedString() + "'" }
+        return ["sh", "-c", "'" + bootstrap + "'", "uherdr"] + encoded
     }
 
     public func run(_ script: String, _ arguments: [String], input: Data? = nil,
@@ -39,8 +51,7 @@ public struct RemoteShell: Sendable {
 
     private func command(_ script: String, _ arguments: [String]) throws -> [String] {
         guard !arguments.contains(where: { $0.contains("\0") }) else { throw HerdrError.message("A path contains a NUL character.") }
-        let words = ["sh", "-c", Self.quote(script), "uherdr"] + arguments.map(Self.quote)
-        return try profile.sshArguments(control: controlPath.map { .client($0) } ?? .none) + ["--", profile.host] + words
+        return try profile.sshArguments(control: controlPath.map { .client($0) } ?? .none) + ["--", profile.host] + Self.remoteWords(script, arguments)
     }
 }
 
@@ -49,18 +60,19 @@ public struct RemoteShell: Sendable {
 /// space's folder, and distinct errors for the different failures.
 public enum RemoteFileListing {
     /// Args: space folder, folder to list. Prints kind, name, link target and
-    /// link flags (inside, directory) as NUL-separated fields.
+    /// link flags (inside, directory) as NUL-separated fields. Captured paths
+    /// end in "." so `$(…)` keeps a name's own trailing newlines.
     static let script = #"""
     canon() {
       if command -v realpath >/dev/null 2>&1; then realpath "$1" 2>/dev/null
       elif [ -d "$1" ]; then (cd -P "$1" 2>/dev/null && pwd -P)
-      else readlink -f "$1" 2>/dev/null; fi
+      else readlink -f "$1" 2>/dev/null; fi && echo .
     }
-    r=$(canon "$1"); d=$2
+    r=$(canon "$1"); r=${r%?.}; d=$2
     [ -n "$r" ] || exit 3
     [ -e "$d" ] || exit 3
     [ -d "$d" ] || exit 5
-    c=$(canon "$d")
+    c=$(canon "$d"); c=${c%?.}
     case "$c/" in "$r"/*) ;; *) exit 6 ;; esac
     { [ -r "$d" ] && [ -x "$d" ]; } || exit 4
     for f in "$d"/* "$d"/.*; do
@@ -68,7 +80,7 @@ public enum RemoteFileListing {
       case $n in .|..) continue ;; esac
       [ -e "$f" ] || [ -L "$f" ] || continue
       if [ -L "$f" ]; then
-        t=$(readlink "$f"); rc=$(canon "$f"); i=0; k=0
+        t=$(readlink "$f" && echo .); t=${t%?.}; rc=$(canon "$f"); rc=${rc%?.}; i=0; k=0
         if [ -n "$rc" ]; then
           case "$rc/" in "$r"/*) i=1 ;; esac
           [ -d "$rc" ] && k=1

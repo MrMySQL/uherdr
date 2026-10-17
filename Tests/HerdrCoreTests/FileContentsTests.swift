@@ -39,6 +39,9 @@ enum FileContentsTests {
         fm.createFile(atPath: base + "/outside/env", contents: Data("TOKEN".utf8))
         try fm.createSymbolicLink(atPath: root + "/link-out", withDestinationPath: "../outside/env")
         try fm.createSymbolicLink(atPath: root + "/link-in", withDestinationPath: "it's ünï.swift")
+        // "evil\n" is a plain file; "evil" leads outside. Reading the first must never serve the second.
+        fm.createFile(atPath: root + "/evil\n", contents: Data("inside".utf8))
+        try fm.createSymbolicLink(atPath: root + "/evil", withDestinationPath: "../outside/env")
         let boundary = try PathBoundary(root: root)
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("../Fixtures/ssh-shell-fixture.py").standardized.path
@@ -63,11 +66,12 @@ enum FileContentsTests {
         expectLocal(root + "/gone", .missing(root + "/gone"))
         expectLocal(root + "/secret.txt", .denied(root + "/secret.txt"))
 
-        for shellPath in ["/bin/sh", "/bin/dash"] where fm.isExecutableFile(atPath: shellPath) {
+        for shellPath in RemoteFileListingTests.loginShells where fm.isExecutableFile(atPath: shellPath) {
             let shell = RemoteShell(profile: profile, ssh: fixture,
                                     environment: ProcessInfo.processInfo.environment.merging(["UHERDR_FIXTURE_SHELL": shellPath]) { $1 })
             XCTAssertEqual(try await FileReader.readRemote(root + "/it's ünï.swift", root: root, shell: shell), local)
             XCTAssertEqual(try await FileReader.readRemote(root + "/link-in", root: root, shell: shell), local)
+            XCTAssertEqual(try await FileReader.readRemote(root + "/evil\n", root: root, shell: shell).kind, .text("inside"))
             XCTAssertEqual(try await FileReader.readRemote(root + "/big.log", root: root, shell: shell, limit: 10).kind, .tooLarge(bytes: 64, limit: 10))
             XCTAssertEqual(try await FileReader.readRemote(root + "/link-out", root: root, shell: shell, allowingLinkOutside: true).kind, .text("TOKEN"))
             do {

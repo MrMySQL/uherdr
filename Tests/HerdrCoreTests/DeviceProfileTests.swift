@@ -48,8 +48,19 @@ enum DeviceProfileTests {
         defer { try? fm.removeItem(atPath: tmp) }
         for name in ["uh-0a1b2c3d", "uh-deadbeef", "uh-nothex!!", "uh-12345", "other"] { try fm.createDirectory(atPath: tmp + "/" + name, withIntermediateDirectories: true) }
         fm.createFile(atPath: tmp + "/uh-deadbeef/c", contents: Data()) // a live master's socket
-        XCTAssertEqual(SSHMaster.removeStaleFolders(in: tmp), [tmp + "/uh-0a1b2c3d"])
+        // A folder made a moment ago may be another uHerdr's master still connecting.
+        XCTAssertEqual(SSHMaster.removeStaleFolders(in: tmp), [])
+        XCTAssertEqual(SSHMaster.removeStaleFolders(in: tmp, olderThan: 0), [tmp + "/uh-0a1b2c3d"])
         XCTAssertEqual(Set(try fm.contentsOfDirectory(atPath: tmp)), ["uh-deadbeef", "uh-nothex!!", "uh-12345", "other"])
+        // The socket folder is private and really a folder: an existing one is
+        // accepted only if it is ours, closed to others, and not a link.
+        let owned = tmp + "/uh-00000001"
+        XCTAssertTrue(SSHMaster.makePrivateFolder(owned) && SSHMaster.makePrivateFolder(owned))
+        chmod(owned, 0o755)
+        XCTAssertTrue(!SSHMaster.makePrivateFolder(owned))
+        try fm.createSymbolicLink(atPath: tmp + "/uh-00000002", withDestinationPath: owned)
+        chmod(owned, 0o700)
+        XCTAssertTrue(!SSHMaster.makePrivateFolder(tmp + "/uh-00000002"))
         configured.port = "65536"; XCTAssertTrue(configured.validationError != nil)
         configured.port = "0"; XCTAssertTrue(configured.validationError != nil)
         let suiteName = "dev.herdr.profile-tests.\(UUID().uuidString)"

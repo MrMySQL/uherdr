@@ -26,7 +26,7 @@ enum FileStampTests {
         XCTAssertEqual(after[a]?.size, 3)
 
         let profile = DeviceProfile(name: "Fixture box", kind: .ssh, host: "dev-box", executable: "/tmp/herdr")
-        for shellPath in ["/bin/sh", "/bin/dash"] where fm.isExecutableFile(atPath: shellPath) {
+        for shellPath in RemoteFileListingTests.loginShells where fm.isExecutableFile(atPath: shellPath) {
             let shell = RemoteShell(profile: profile, ssh: fixture,
                                     environment: ProcessInfo.processInfo.environment.merging(["UHERDR_FIXTURE_SHELL": shellPath]) { $1 })
             let remote = try await FileStamps.remote([a, odd, gone, a], shell: shell)
