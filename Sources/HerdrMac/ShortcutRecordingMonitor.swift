@@ -23,6 +23,7 @@ struct ShortcutRecordingMonitor: NSViewRepresentable {
 final class ShortcutRecordingView: NSView {
     var handler: ((NSEvent) -> NSEvent?)?
     private var monitor: Any?
+    var isMonitoring: Bool { monitor != nil }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()

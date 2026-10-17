@@ -25,6 +25,7 @@ struct KeyboardShortcutsSheet: View {
     @State private var pending: Pending?
 
     private var bindings: ShortcutBindings { settings.bindings }
+    private var editing: Bool { recording != nil || pending != nil }
     private var groups: [ShortcutGroup] { ShortcutGroup.filtered(search) { bindings.chord(for: $0) } }
 
     var body: some View {
@@ -64,6 +65,8 @@ struct KeyboardShortcutsSheet: View {
         .frame(width: 860, height: 680)
         .background(ShortcutRecordingMonitor(handler: record).frame(width: 0, height: 0))
         .onAppear { searchFocused = true }
+        // Recording takes the keys from Search; give them back however it ends.
+        .onChange(of: editing) { _, editing in if !editing { searchFocused = true } }
         .onDisappear(perform: cancelEditing)
     }
 
