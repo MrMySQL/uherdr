@@ -6,3 +6,5 @@ swiftc -parse-as-library Sources/HerdrMac/ShortcutHintMonitor.swift Tests/HerdrM
 .build/ShortcutHintMonitorTests
 swiftc -parse-as-library Sources/HerdrMac/AppHotkeys.swift Tests/HerdrMacTests/AppHotkeyTests.swift -o .build/AppHotkeyTests
 .build/AppHotkeyTests
+swiftc -parse-as-library Sources/HerdrMac/ShortcutRecordingMonitor.swift Tests/HerdrMacTests/ShortcutRecordingTests.swift -o .build/ShortcutRecordingTests
+.build/ShortcutRecordingTests
