@@ -27,6 +27,7 @@ bash scripts/test-device-power.sh
 ./scripts/test-hotkeys.sh
 bash scripts/test-pane-search.sh
 bash scripts/test-agent-worktree.sh
+bash scripts/test-workspace-roots.sh
 bash scripts/test-tab-drag.sh
 bash scripts/test-pane-drag.sh --live "$TEST_SOCKET"
 bash scripts/test-terminal-keyboard.sh --live "$TEST_SOCKET" "$HERDR_TEST_BIN"

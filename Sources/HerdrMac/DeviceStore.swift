@@ -234,6 +234,7 @@ final class DeviceStore: ObservableObject {
             }
         }
         session.disconnect()
+        defaults.removeObject(forKey: WorkspaceRoots.preferencesKey(profile: id))
         sessions.removeAll { $0.profile.id == id }
         if selectedDeviceID == id { selectedDeviceID = sessions[0].profile.id }
         observeSessions()

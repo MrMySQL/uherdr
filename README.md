@@ -92,7 +92,10 @@ bash scripts/test-performance.sh # Polling and terminal publication regressions
 ./scripts/test.sh         # Also starts and cleans up an isolated herdr server
 bash scripts/test-agent-icons.sh # Agent marks: coverage of herdr's agents, sources, sizes, safe lookup
 bash scripts/test-devices.sh # Two isolated servers, overlapping IDs, forwarded terminal control, session discovery, and machine grouping
+bash scripts/test-workspace-roots.sh # Space folders: remembered, pruned, safe from stale snapshots
 ```
+
+File-access tests run the SSH side through `Tests/Fixtures/ssh-shell-fixture.py`, a stand-in for `ssh` that re-parses each command with `sh` or `dash` the way a login shell does, so quoting and hostile file names are exercised without a remote host.
 
 The standalone Swift test runner works with Command Line Tools; XCTest is not required. Live tests cover workspace/tab/pane lifecycle, nested right/down splits, divider ratios, shell input/output, agent status fixtures, terminal ANSI streaming, resize, scrolling, and detach preservation. They accept only an explicitly disposable socket under `/tmp`.
 

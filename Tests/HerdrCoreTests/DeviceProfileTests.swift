@@ -26,6 +26,30 @@ enum DeviceProfileTests {
         XCTAssertTrue(args.contains("BatchMode=yes"))
         XCTAssertTrue(args.contains("ForkAfterAuthentication=no"))
         XCTAssertEqual(Array(args.suffix(6)), ["-l", "alex", "-p", "2222", "-i", "/tmp/key with spaces"])
+        // Control modes: exactly one ControlMaster and one ControlPath each (ssh keeps the first).
+        func values(_ args: [String], _ option: String) -> [String] { args.filter { $0.hasPrefix(option + "=") } }
+        XCTAssertEqual(values(args, "ControlMaster"), ["ControlMaster=no"])
+        XCTAssertEqual(values(args, "ControlPath"), ["ControlPath=none"])
+        let master = try configured.sshArguments(control: .master("/tmp/uh-x/c"))
+        XCTAssertEqual(values(master, "ControlMaster"), ["ControlMaster=yes"])
+        XCTAssertEqual(values(master, "ControlPath"), ["ControlPath=/tmp/uh-x/c"])
+        XCTAssertEqual(values(master, "ControlPersist"), ["ControlPersist=no"])
+        let client = try configured.sshArguments(control: .client("/tmp/uh-x/c"))
+        XCTAssertEqual(values(client, "ControlMaster"), ["ControlMaster=no"])
+        XCTAssertEqual(values(client, "ControlPath"), ["ControlPath=/tmp/uh-x/c"])
+        XCTAssertTrue(client.contains("BatchMode=yes") && client.contains("StrictHostKeyChecking=yes"))
+        let shellWords = RemoteShell(profile: configured, ssh: "/bin/echo", controlPath: "/tmp/uh-x/c")
+        let echoed = try await shellWords.run("true", [])
+        XCTAssertTrue(String(decoding: echoed.stdout, as: UTF8.self).contains("ControlPath=/tmp/uh-x/c"))
+        XCTAssertTrue(SSHMaster(profile: configured).controlPath.utf8.count < 40)
+        // Leftover socket folders: only empty uh-xxxxxxxx folders of this user go.
+        let tmp = NSTemporaryDirectory() + "uherdr-stale-\(UUID().uuidString)"
+        let fm = FileManager.default
+        defer { try? fm.removeItem(atPath: tmp) }
+        for name in ["uh-0a1b2c3d", "uh-deadbeef", "uh-nothex!!", "uh-12345", "other"] { try fm.createDirectory(atPath: tmp + "/" + name, withIntermediateDirectories: true) }
+        fm.createFile(atPath: tmp + "/uh-deadbeef/c", contents: Data()) // a live master's socket
+        XCTAssertEqual(SSHMaster.removeStaleFolders(in: tmp), [tmp + "/uh-0a1b2c3d"])
+        XCTAssertEqual(Set(try fm.contentsOfDirectory(atPath: tmp)), ["uh-deadbeef", "uh-nothex!!", "uh-12345", "other"])
         configured.port = "65536"; XCTAssertTrue(configured.validationError != nil)
         configured.port = "0"; XCTAssertTrue(configured.validationError != nil)
         let suiteName = "dev.herdr.profile-tests.\(UUID().uuidString)"

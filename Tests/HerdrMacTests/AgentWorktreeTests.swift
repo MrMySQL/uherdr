@@ -36,6 +36,7 @@ import HerdrCore
                 precondition(store.selectedTab == "new-tab")
                 precondition(store.selectedPane == "new-pane")
                 precondition(store.workspaces.contains { $0.id == "new-space" }, "Refresh the created space even if agent launch fails")
+                precondition(store.workspaceRoots.root(for: "new-space") == "/tmp/worktree", "The new space's folder is the worktree")
             }
             precondition((store.operationError != nil) == !failure.isEmpty)
             precondition(!store.busy)

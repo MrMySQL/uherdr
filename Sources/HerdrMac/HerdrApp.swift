@@ -11,8 +11,11 @@ struct HerdrApp: App {
     var body: some Scene {
         Window("uHerdr", id: "main") {
             WorkspaceView(store: store, devices: devices)
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in devices.stop() }
-                .task { appDelegate.attention.attach(devices) }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in devices.stop(); SSHMasters.shared.stopAll() }
+                .task {
+                    appDelegate.attention.attach(devices)
+                    SessionStore.remoteDisconnected = { SSHMasters.shared.stop($0) }
+                }
         }
         .defaultSize(width: 1280, height: 820)
         .windowToolbarStyle(.unifiedCompact)
