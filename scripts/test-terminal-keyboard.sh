@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-swift build --product Herdr
-KEYBOARD_BUILD_DIR="$(swift build --show-bin-path)"
+swift build --build-system native --product Herdr
+KEYBOARD_BUILD_DIR="$(swift build --build-system native --show-bin-path)"
 # Link the actual app implementation without its @main entry point.
 KEYBOARD_OBJECTS=()
 while IFS= read -r object; do

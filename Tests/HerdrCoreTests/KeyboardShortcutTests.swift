@@ -86,6 +86,20 @@ enum KeyboardShortcutTests {
         XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("w", [.command, .shift]), for: .closePane))
         XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("x", .control), for: .selectTab))
         XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("tab", .control), for: .nextTab))
+        // Option is Meta in the terminal; warn before a menu consumes these letters.
+        for key in ["c", "d", "r"] {
+            for modifiers: KeyChord.Modifiers in [.option, [.option, .shift], [.option, .control]] {
+                let chord = KeyChord(key, modifiers)
+                XCTAssertTrue(ShortcutBindings.isTerminalReserved(chord, for: .closePane))
+                XCTAssertEqual(ShortcutChangeStep.next(for: chord, action: .closePane, in: ShortcutBindings()), .terminalReserved)
+                XCTAssertEqual(ShortcutChangeStep.next(for: chord, action: .closePane, in: ShortcutBindings(), terminalAccepted: true), .apply)
+            }
+        }
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("c", [.option, .command]), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("1", .option), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("é", .option), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("tab", .option), for: .closePane))
+        XCTAssertTrue(!ShortcutBindings.isTerminalReserved(KeyChord("x", .option), for: .selectTab))
         // A shortcut needs ⌘, ⌃ or ⌥; ⇧ alone only with Return or Tab.
         XCTAssertTrue(ShortcutBindings.isValid(KeyChord("return", .shift)) && ShortcutBindings.isValid(KeyChord("k", .option)))
         XCTAssertTrue(!ShortcutBindings.isValid(KeyChord("k", .shift)) && !ShortcutBindings.isValid(KeyChord("k", [])))
@@ -102,20 +116,22 @@ enum KeyboardShortcutTests {
         bindings.resetAll()
         XCTAssertEqual(bindings, ShortcutBindings())
         // The terminal's own keys become Ghostty bindings.
-        XCTAssertEqual(ShortcutBindings().ghosttyKeybinds, ["super+a=select_all", "super+c=copy_to_clipboard", "super+v=paste_from_clipboard",
+        XCTAssertEqual(ShortcutBindings().ghosttyKeybinds, ["super+a=select_all", "super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05",
+                                                            "alt+arrow_left=esc:b", "alt+arrow_right=esc:f", "super+c=copy_to_clipboard", "super+v=paste_from_clipboard",
                                                             "shift+enter=text:\\x1b[13;2u", "shift+numpad_enter=text:\\x1b[13;2u"])
         var terminal = ShortcutBindings()
         terminal.assign(KeyChord("return", .option), to: .newLine)
         terminal.assign(KeyChord("c", [.control, .shift]), to: .copy)
         terminal.assign(KeyChord("v", .command), to: .closePane)
-        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=select_all", "ctrl+shift+c=copy_to_clipboard",
+        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=select_all", "super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05",
+                                                  "alt+arrow_left=esc:b", "alt+arrow_right=esc:f", "ctrl+shift+c=copy_to_clipboard",
                                                   "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
         // Giving ⌘A to an action is a clash with Select All, which Replace clears from the terminal.
         XCTAssertEqual(terminal.clashes(for: KeyChord("a", .command), assigningTo: .showAgents), [.selectAll])
         terminal.assign(KeyChord("a", .command), to: .showAgents)
-        XCTAssertEqual(terminal.ghosttyKeybinds, ["ctrl+shift+c=copy_to_clipboard", "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
+        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05", "alt+arrow_left=esc:b", "alt+arrow_right=esc:f", "ctrl+shift+c=copy_to_clipboard", "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
         terminal.assign(KeyChord("a", .command), to: .copy)
-        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+a=copy_to_clipboard", "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
+        XCTAssertEqual(terminal.ghosttyKeybinds, ["super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05", "alt+arrow_left=esc:b", "alt+arrow_right=esc:f", "super+a=copy_to_clipboard", "alt+enter=text:\\x1b[13;2u", "alt+numpad_enter=text:\\x1b[13;2u"])
         // Select All follows its own shortcut, and Reset gives ⌘A back.
         terminal.assign(KeyChord("c", .command), to: .copy)
         terminal.assign(KeyChord("a", [.command, .control]), to: .selectAll)

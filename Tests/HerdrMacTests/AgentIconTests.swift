@@ -47,6 +47,10 @@ import AppKit
             return cells[0]
         })
         precondition(listed == icons, "SOURCES.md must list exactly the bundled marks: \(listed.symmetricDifference(icons))")
+        let notice = try! String(contentsOf: folder.appendingPathComponent("NOTICE.md"), encoding: .utf8)
+        precondition(notice.contains("[SOURCES.md](SOURCES.md)"), "The attribution notice must link the per-file credits")
+        precondition(notice.contains("not covered by uHerdr's MIT license"), "Third-party marks must retain their own rights")
+        precondition(notice.contains("No asset-specific redistribution license or permission grant was recorded"), "Do not invent blanket artwork permission")
         // Lookup ignores case, and odd ids never reach the file system.
         precondition(AgentIcon.image(for: "Claude", in: folder) != nil)
         for id: String? in [nil, "", "../claude", "claude/../codex", "cla ude", String(repeating: "a", count: 40)] {
