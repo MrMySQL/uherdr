@@ -26,6 +26,52 @@ enum DeviceProfileTests {
         XCTAssertTrue(args.contains("BatchMode=yes"))
         XCTAssertTrue(args.contains("ForkAfterAuthentication=no"))
         XCTAssertEqual(Array(args.suffix(6)), ["-l", "alex", "-p", "2222", "-i", "/tmp/key with spaces"])
+        // Control modes: exactly one ControlMaster and one ControlPath each (ssh keeps the first).
+        func values(_ args: [String], _ option: String) -> [String] { args.filter { $0.hasPrefix(option + "=") } }
+        XCTAssertEqual(values(args, "ControlMaster"), ["ControlMaster=no"])
+        XCTAssertEqual(values(args, "ControlPath"), ["ControlPath=none"])
+        let master = try configured.sshArguments(control: .master("/tmp/uh-x/c"))
+        XCTAssertEqual(values(master, "ControlMaster"), ["ControlMaster=yes"])
+        XCTAssertEqual(values(master, "ControlPath"), ["ControlPath=/tmp/uh-x/c"])
+        XCTAssertEqual(values(master, "ControlPersist"), ["ControlPersist=no"])
+        let client = try configured.sshArguments(control: .client("/tmp/uh-x/c"))
+        XCTAssertEqual(values(client, "ControlMaster"), ["ControlMaster=no"])
+        XCTAssertEqual(values(client, "ControlPath"), ["ControlPath=/tmp/uh-x/c"])
+        XCTAssertTrue(client.contains("BatchMode=yes") && client.contains("StrictHostKeyChecking=yes"))
+        let shellWords = RemoteShell(profile: configured, ssh: "/bin/echo", controlPath: "/tmp/uh-x/c")
+        let echoed = try await shellWords.run("true", [])
+        XCTAssertTrue(String(decoding: echoed.stdout, as: UTF8.self).contains("ControlPath=/tmp/uh-x/c"))
+        XCTAssertTrue(SSHMaster(profile: configured).controlPath.utf8.count < 40)
+        // Leftover socket folders: only empty uh-xxxxxxxx folders of this user go.
+        let tmp = NSTemporaryDirectory() + "uherdr-stale-\(UUID().uuidString)"
+        let fm = FileManager.default
+        defer { try? fm.removeItem(atPath: tmp) }
+        for name in ["uh-0a1b2c3d", "uh-deadbeef", "uh-nothex!!", "uh-12345", "other"] { try fm.createDirectory(atPath: tmp + "/" + name, withIntermediateDirectories: true) }
+        fm.createFile(atPath: tmp + "/uh-deadbeef/c", contents: Data()) // a live master's socket
+        // A folder made a moment ago may be another uHerdr's master still connecting.
+        XCTAssertEqual(SSHMaster.removeStaleFolders(in: tmp), [])
+        XCTAssertEqual(SSHMaster.removeStaleFolders(in: tmp, olderThan: 0), [tmp + "/uh-0a1b2c3d"])
+        XCTAssertEqual(Set(try fm.contentsOfDirectory(atPath: tmp)), ["uh-deadbeef", "uh-nothex!!", "uh-12345", "other"])
+        // The socket folder is private and really a folder: an existing one is
+        // accepted only if it is ours, closed to others, and not a link.
+        let owned = tmp + "/uh-00000001"
+        XCTAssertTrue(SSHMaster.makePrivateFolder(owned) && SSHMaster.makePrivateFolder(owned))
+        chmod(owned, 0o755)
+        XCTAssertTrue(!SSHMaster.makePrivateFolder(owned))
+        try fm.createSymbolicLink(atPath: tmp + "/uh-00000002", withDestinationPath: owned)
+        chmod(owned, 0o700)
+        XCTAssertTrue(!SSHMaster.makePrivateFolder(tmp + "/uh-00000002"))
+        // A master that never comes up is ended, so the next use starts a fresh
+        // one; a closed master never starts again.
+        let hang = tmp + "/hanging-ssh"
+        try Data("#!/bin/sh\nexec sleep 30\n".utf8).write(to: URL(fileURLWithPath: hang))
+        chmod(hang, 0o755)
+        let hanging = SSHMaster(profile: configured, ssh: hang)
+        XCTAssertTrue(!(await hanging.start(timeout: .milliseconds(300))))
+        XCTAssertTrue(!hanging.isRunning && !fm.fileExists(atPath: (hanging.controlPath as NSString).deletingLastPathComponent))
+        hanging.close()
+        XCTAssertTrue(!(await hanging.start(timeout: .milliseconds(300))))
+        XCTAssertTrue(!hanging.isRunning && !fm.fileExists(atPath: (hanging.controlPath as NSString).deletingLastPathComponent))
         configured.port = "65536"; XCTAssertTrue(configured.validationError != nil)
         configured.port = "0"; XCTAssertTrue(configured.validationError != nil)
         let suiteName = "dev.herdr.profile-tests.\(UUID().uuidString)"

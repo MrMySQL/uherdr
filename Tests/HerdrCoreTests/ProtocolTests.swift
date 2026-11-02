@@ -28,6 +28,13 @@ import HerdrCore
         TerminalStartSizeTests.run()
         await TerminalStartSizeTests.runGate()
         KeyboardShortcutTests.run()
+        WorkspaceRootsTests.run()
+        try WorkspaceFilesTests.run()
+        try await StreamingProcessTests.run()
+        try await RemoteFileListingTests.run()
+        try await FileContentsTests.run()
+        try await FileStampTests.run()
+        try await FolderGuessTests.run()
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--live" { try await LiveTests.run(socket: CommandLine.arguments[2]) }
     }
     func testNestedLayoutPreservesDirectionRatiosAndPaneOrder() throws {

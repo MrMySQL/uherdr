@@ -82,6 +82,11 @@ final class SessionStore: ObservableObject {
     @Published private var tabOrder: [String: [String]]
     /// The sidebar's workspace order; herdr's own order is left unchanged.
     private var workspaceOrder: [String]
+    /// Each space's folder for the right sidebar; herdr keeps none.
+    @Published private(set) var workspaceRoots: WorkspaceRoots
+    /// Bumped when a folder is remembered, so a snapshot read before a new
+    /// space existed can't prune that space's folder.
+    private var rootsRevision = 0
     private let defaults: UserDefaults
     private let tunnel: SSHTunnel
     private let fileTransfer: RemoteFileTransfer
@@ -106,6 +111,7 @@ final class SessionStore: ObservableObject {
         self.defaults = defaults
         self.powerReader = powerReader
         tabOrder = defaults.dictionary(forKey: "tabOrder:\(profile.id.uuidString)") as? [String: [String]] ?? [:]
+        workspaceRoots = WorkspaceRoots.load(profile: profile.id, from: defaults)
         workspaceOrder = defaults.stringArray(forKey: "workspaceOrder:\(profile.id.uuidString)") ?? []
         self.tunnel = tunnel ?? SSHTunnel()
         self.fileTransfer = fileTransfer ?? RemoteFileTransfer()
@@ -124,6 +130,41 @@ final class SessionStore: ObservableObject {
     }
 
     var currentSpace: Workspace? { workspaces.first { $0.id == selectedSpace } }
+    var currentRoot: String? { selectedSpace.flatMap { workspaceRoots.root(for: $0) } }
+
+    /// Spaces whose folder was already guessed this session (also failed
+    /// guesses, so they aren't retried on every poll).
+    private var guessedRoots: Set<String> = []
+
+    /// A space with no folder yet takes the Git repository around its first
+    /// terminal's starting folder (or that folder), once. A space whose
+    /// terminal starts in the home folder keeps asking (`FolderGuess`).
+    private func guessMissingRoots() {
+        let home = isRemote ? remoteHome : NSHomeDirectory()
+        guard let home else { return } // the device's home arrives with the tunnel
+        for space in workspaces where workspaceRoots.root(for: space.id) == nil && !guessedRoots.contains(space.id) {
+            guard let tab = tabs.first(where: { $0.workspaceID == space.id }),
+                  let pane = panes.first(where: { $0.tabID == tab.id }),
+                  let folder = pane.cwd ?? pane.foregroundCwd, folder.hasPrefix("/") else { continue }
+            guessedRoots.insert(space.id)
+            let runner: ScriptRunner = isRemote ? .remote(Self.sharedShell?(profile) ?? RemoteShell(profile: profile)) : .local
+            let id = space.id, generation = connectionGeneration
+            Task { [weak self] in
+                guard let guess = await FolderGuess.folder(for: folder, home: home, runner: runner), let self else { return }
+                // Only for the same connection (herdr reuses space ids across sessions),
+                // if nobody chose a folder meanwhile, and the space still exists.
+                guard generation == self.connectionGeneration, self.workspaceRoots.root(for: id) == nil,
+                      self.workspaces.contains(where: { $0.id == id }) else { return }
+                self.setRoot(guess, for: id)
+            }
+        }
+    }
+
+    func setRoot(_ path: String, for workspaceID: String) {
+        workspaceRoots.remember(path, for: workspaceID)
+        rootsRevision += 1
+        workspaceRoots.save(profile: profile.id, to: defaults)
+    }
     var currentTab: HerdrCore.Tab? { tabs.first { $0.id == selectedTab } }
     var currentPane: Pane? { panes.first { $0.id == selectedPane } }
     var visibleTabs: [HerdrCore.Tab] {
@@ -262,6 +303,13 @@ final class SessionStore: ObservableObject {
         start()
     }
 
+    /// Called when an SSH device disconnects (the app closes its shared
+    /// connection). A hook, so this file still compiles on its own in tests.
+    static var remoteDisconnected: ((UUID) -> Void)?
+    /// The device's shell over its shared SSH connection (`SSHMasters`); the
+    /// same kind of hook. Without it, commands connect on their own.
+    static var sharedShell: (@MainActor (DeviceProfile) -> RemoteShell)?
+
     func disconnect() {
         pollTask?.cancel(); pollTask = nil
         clearPowerStatus()
@@ -273,17 +321,33 @@ final class SessionStore: ObservableObject {
         pendingSplitResizes = 0
         tunnel.stop()
         suspended = true; connected = false; connecting = false; busy = false
-        if isRemote { effectiveSocketPath = "" }
+        // The session may come back re-created; its spaces get guessed again.
+        guessedRoots = []
+        if isRemote {
+            effectiveSocketPath = ""
+            Self.remoteDisconnected?(profile.id)
+        }
     }
 
     func updateProfile(_ value: DeviceProfile) {
         disconnect()
+        // Another machine or session reuses herdr's space ids (w1, w2…), so
+        // folders remembered for the old one would land on unrelated spaces.
+        if Self.connectionTarget(value) != Self.connectionTarget(profile) {
+            defaults.removeObject(forKey: WorkspaceRoots.preferencesKey(profile: value.id))
+        }
         profile = value
         tabOrder = defaults.dictionary(forKey: "tabOrder:\(value.id.uuidString)") as? [String: [String]] ?? [:]
         workspaceOrder = defaults.stringArray(forKey: "workspaceOrder:\(value.id.uuidString)") ?? []
         workspaces = []; tabs = []; panes = []; agents = []; layouts = [:]
         selectedSpace = nil; selectedTab = nil; selectedPane = nil
+        workspaceRoots = WorkspaceRoots.load(profile: value.id, from: defaults)
+        rootsRevision = 0
         reconnect()
+    }
+
+    private static func connectionTarget(_ profile: DeviceProfile) -> [String] {
+        [profile.kind.rawValue, profile.host, profile.user, profile.port, profile.socketPath]
     }
 
     func refresh() async {
@@ -298,6 +362,7 @@ final class SessionStore: ObservableObject {
         }
         let revision = selectionRevision
         let expectedLayoutRevision = layoutRevision
+        let expectedRootsRevision = rootsRevision
         do {
             let path: String
             if isRemote {
@@ -318,8 +383,16 @@ final class SessionStore: ObservableObject {
             if protocolVersion != snapshot.protocolVersion { protocolVersion = snapshot.protocolVersion }
             let orderedWorkspaces = ordered(snapshot.workspaces)
             if workspaces != orderedWorkspaces { workspaces = orderedWorkspaces }
+            // Prune a copy: mutating the published value would notify on every
+            // poll, even when nothing was dropped.
+            var roots = workspaceRoots
+            if expectedRootsRevision == rootsRevision, roots.prune(keeping: Set(snapshot.workspaces.map(\.id))) {
+                workspaceRoots = roots
+                roots.save(profile: profile.id, to: defaults)
+            }
             if tabs != snapshot.tabs { tabs = snapshot.tabs }
             if panes != snapshot.panes { panes = snapshot.panes }
+            guessMissingRoots()
             if agents != snapshot.agents { agents = snapshot.agents }
             if revision == selectionRevision {
                 if !workspaces.contains(where: { $0.id == selectedSpace }) {
@@ -449,6 +522,12 @@ final class SessionStore: ObservableObject {
         perform("workspace.create", params: ["label": .string(label), "cwd": .string(cwd), "focus": .bool(true)]) { [weak self] result in
             self?.selectionRevision += 1
             self?.selectedSpace = result["workspace"]["workspace_id"].string
+            // The new pane's folder is the one herdr resolved (`~/…` included);
+            // the typed one only if herdr didn't report it.
+            if let space = result["workspace"]["workspace_id"].string,
+               let folder = [result["root_pane"]["cwd"].string, cwd].compactMap({ $0 }).first(where: { $0.hasPrefix("/") }) {
+                self?.setRoot(folder, for: space)
+            }
             self?.selectedTab = result["tab"]["tab_id"].string
             self?.selectedPane = result["root_pane"]["pane_id"].string
         }
@@ -669,6 +748,8 @@ final class SessionStore: ObservableObject {
                 guard generation == connectionGeneration else { return }
                 createdWorktree = true
                 let rootPane = try created["root_pane"].decode(Pane.self)
+                // A new pane has not run `cd` yet, so its cwd is the worktree.
+                if let worktree = rootPane.cwd, worktree.hasPrefix("/") { setRoot(worktree, for: rootPane.workspaceID) }
                 selectionRevision += 1
                 selectedSpace = rootPane.workspaceID
                 selectedTab = rootPane.tabID
